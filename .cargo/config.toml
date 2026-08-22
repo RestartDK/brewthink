@@ -1,5 +1,12 @@
 [target.riscv32imc-unknown-none-elf]
-runner = "espflash flash --monitor --chip esp32c3 --log-format defmt"
+# Intentionally no Cargo runner yet.
+#
+# The generated template used:
+# runner = "espflash flash --monitor --chip esp32c3 --log-format defmt"
+#
+# That would make `cargo run` write a generic ESP32-C3 image to the X4.
+# Re-enable a runner only after Brewthink has an X4-safe flashing script that
+# checks the chip, flash size, image size, partition offset, and recovery plan.
 
 [env]
 DEFMT_LOG="info"

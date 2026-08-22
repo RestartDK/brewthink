@@ -1,0 +1,28 @@
+Chip type:         esp32c3 (revision v0.4)
+Crystal frequency: 40 MHz
+Flash size:        16MB
+Features:          WiFi, BLE
+MAC address:       <redacted>
+
+Security Information:
+=====================
+Flags: 0x00000000 (0)
+Key Purposes: [0, 0, 0, 0, 0, 0, 12]
+Chip ID: 5
+API Version: 3
+Secure Boot: Disabled
+Flash Encryption: Disabled
+SPI Boot Crypt Count (SPI_BOOT_CRYPT_CNT): 0x0
+
+External SPI NOR Flash:
+=======================
+Manufacturer:      0x85 (Puya Semiconductor)
+Device:            0x2018
+Full JEDEC ID:     85 20 18
+Detected size:     16MB
+SFDP[0..3]:        53 46 44 50 (ASCII "SFDP")
+Likely family:     PY25Q128HA-compatible 128-Mbit / 16-MiB SPI NOR
+
+Notes:
+======
+This file is redacted and safe to commit. Do not commit raw board-info output containing the physical MAC address or raw eFuse dumps containing unique device identity/calibration details.
