@@ -293,7 +293,58 @@ Verified stock contents:
 - NVS contains data and must remain private because it can hold settings, credentials, calibration, and unique values.
 - The coredump partition is erased; no crash dump was present in this backup.
 
-`otadata` tells the bootloader which OTA application slot to boot. The two application slots allow a new image to be placed in one slot while retaining another image as a recovery option. An application must fit inside its slot (`0x640000` bytes in this layout). Although `app1` is empty, do not write it until the compatible image format and the exact, recoverable OTA-selection procedure are understood.
+`otadata` tells the bootloader which OTA application slot to boot. The two application slots allow a new image to be placed in one slot while retaining another image as a recovery option. An application must fit inside its slot (`0x640000` bytes in this layout).
+
+#### OTA boot selection (`otadata`)
+
+The `otadata` partition is a small boot-selection metadata area:
+
+```text
+otadata offset: 0x00E000
+otadata size:   0x002000 = 8192 bytes
+sector 0:       0x00E000..0x00EFFF
+sector 1:       0x00F000..0x00FFFF
+```
+
+Each 4 KiB sector can hold one ESP-IDF OTA select entry near the start of the sector. The useful entry is 32 bytes; the rest of the sector is normally erased-looking `0xFF` padding.
+
+Simplified entry layout:
+
+```text
++0x0000..+0x0003  ota_seq, little-endian u32
++0x0004..+0x001B  unused/reserved bytes; observed as 0xFF on this X4
++0x001C..+0x001F  CRC32 of ota_seq, little-endian u32
++0x0020..+0x0FFF  erased/padding bytes, 0xFF
+```
+
+The bootloader reads the partition table, finds the OTA app slots, reads both `otadata` sectors, ignores invalid/corrupt entries, and chooses the highest valid OTA sequence number. With two OTA app partitions, the sequence maps to slots like this:
+
+| OTA sequence | Selected slot |
+| -----------: | ------------- |
+| `1`          | `app0`        |
+| `2`          | `app1`        |
+| `3`          | `app0`        |
+| `4`          | `app1`        |
+
+This physical unit's stock `otadata` backup decoded as:
+
+```text
+sector 0: valid seq=1 -> app0
+sector 1: empty/unselected
+```
+
+Therefore the bootloader currently selects stock `app0`.
+
+To test Brewthink in `app1` after writing and verifying an app image there, write a valid `seq=2` OTA select sector at `0x00F000` only. For this bootloader format, the first 32 bytes of the sector are:
+
+```text
+02 00 00 00  ff ff ff ff  ff ff ff ff  ff ff ff ff
+ff ff ff ff  ff ff ff ff  ff ff ff ff  74 37 f6 55
+```
+
+That is `ota_seq = 2` plus CRC `0x55F63774`, followed by `0xFF` padding to fill the 4 KiB sector. After that write, the bootloader sees `seq=1` in sector 0 and `seq=2` in sector 1, picks the higher valid sequence, and boots `app1` at `0x650000`.
+
+Always back up `otadata` before changing it. The original state can be restored by writing the backed-up 8 KiB `otadata` file back to `0x00E000`. A normal OTA updater can also switch back to `app0` by writing a newer valid odd sequence such as `seq=3`.
 
 Do not assume a generic `esp-generate` project uses this table. A normal `cargo run` may generate or flash a different bootloader/partition arrangement.
 

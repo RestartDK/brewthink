@@ -31,32 +31,32 @@ Goal: build custom Rust firmware for the Xteink X4 e-reader, learning the hardwa
 
 ## Milestone 2 — Safe app1 build/flash workflow
 
-- [ ] Build firmware image locally without flashing.
-- [ ] Inspect local image with `esptool image-info`.
-- [ ] Confirm image is ESP32-C3-compatible.
-- [ ] Confirm image uses compatible DIO/flash settings.
-- [ ] Confirm image contains required ESP app descriptor.
-- [ ] Confirm image size is below `0x640000` bytes.
-- [ ] Create a guarded script/tool that writes only `app1` at `0x650000`.
-- [ ] Script must refuse unexpected chip/flash size.
-- [ ] Script must print offset and size before writing.
-- [ ] Script must not alter bootloader, partition table, NVS, filesystem, `app0`, or `otadata`.
-- [ ] Add readback verification for the written `app1` bytes.
+- [x] Build firmware image locally without flashing.
+- [x] Inspect local image with `esptool image-info`.
+- [x] Confirm image is ESP32-C3-compatible.
+- [x] Confirm image uses compatible DIO/flash settings.
+- [x] Confirm image contains required ESP app descriptor.
+- [x] Confirm image size is below `0x640000` bytes.
+- [x] Create a guarded script/tool that writes only `app1` at `0x650000`.
+- [x] Script must refuse unexpected chip/flash size.
+- [x] Script must print offset and size before writing.
+- [x] Script must not alter bootloader, partition table, NVS, filesystem, `app0`, or `otadata`.
+- [x] Add readback verification for the written `app1` bytes.
 
 ## Milestone 3 — First custom boot and logging
 
 Goal: Brewthink boots and logs reliably, with no display/SD/radio yet.
 
-- [ ] Create minimal firmware branch.
-- [ ] Remove/defer Wi-Fi initialization.
-- [ ] Remove/defer BLE/Trouble initialization.
-- [ ] Initialize logging immediately.
-- [ ] Print firmware name and version.
+- [x] Create minimal firmware branch.
+- [x] Remove/defer Wi-Fi initialization.
+- [x] Remove/defer BLE/Trouble initialization.
+- [x] Initialize logging immediately.
+- [x] Print firmware name and version.
 - [ ] Print reset/wakeup reason if available.
-- [ ] Print heartbeat counter.
-- [ ] Preserve flash pins GPIO11/GPIO14/GPIO15/GPIO16/GPIO17.
-- [ ] Preserve USB pins GPIO18/GPIO19.
-- [ ] Keep stock `app0` bootable.
+- [x] Print heartbeat counter.
+- [x] Preserve flash pins GPIO11/GPIO14/GPIO15/GPIO16/GPIO17.
+- [x] Preserve USB pins GPIO18/GPIO19.
+- [x] Keep stock `app0` bootable.
 
 ## Milestone 4 — X4 board abstraction
 

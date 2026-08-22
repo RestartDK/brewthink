@@ -1,6 +1,7 @@
 # will have compiled files and executables
 debug/
 target/
+/artifacts/
 /.direnv/
 
 # Private X4 flash backups and extracted contents (keep locally, never commit)

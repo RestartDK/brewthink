@@ -101,6 +101,88 @@ Important files:
 - `docs/x4-stock-partition-table.csv` — verified partition table.
 - `docs/plan.md` — initial high-level safety plan.
 
+## Safe app1 workflow status
+
+Completed on 2026-08-22:
+
+- Added guarded app1 build/check/probe/write-readback scripts under `scripts/`.
+- Built a logging-only Brewthink app image locally.
+- Wrote that image only to `app1` at `0x650000`.
+- Read back the same `95,616` bytes and verified SHA-256 matched:
+
+  ```text
+  45c97d1090721837af57603a0a72252295157537418a0168d1db61c24bee9630
+  ```
+
+- Verified written byte range:
+
+  ```text
+  0x650000..0x66757F
+  ```
+
+- `otadata` was not modified; stock `app0` should remain selected.
+- Bootloader, partition table, NVS, stock `app0`, filesystem, and coredump were not written by the script.
+- Raw probe/write logs are under ignored `artifacts/` and may include private identifiers; do not commit them.
+- Backed up current `otadata` read-only to ignored private path:
+
+  ```text
+  backup/otadata/otadata-20260822-170811.bin
+  ```
+
+  SHA-256:
+
+  ```text
+  f94c5d786a7a8fab06ac5d10e33bf37711a6697636dc037559ea19cc410a17f0
+  ```
+
+  Decoded summary: sector 0 has valid `seq=1 -> app0`; sector 1 is empty/unselected.
+- Wrote `otadata` sector 1 only (`0xF000..0xFFFF`) with valid `seq=2 -> app1`, then read back and verified SHA-256:
+
+  ```text
+  f5ab818d800af4e3e1efd4c91587ff9019dfc243adb0bc2ef0c7eb4a0c9df16d
+  ```
+
+- Reset/monitored app1 with `espflash monitor --log-format defmt --elf target/riscv32imc-unknown-none-elf/release/brewthink` and confirmed logs:
+
+  ```text
+  Brewthink logging-only firmware booted: version=0.1.0
+  No Wi-Fi, BLE, display, SD, GPIO13, or flash-writing path initialized
+  Brewthink heartbeat 0
+  Brewthink heartbeat 1
+  Brewthink heartbeat 2
+  ```
+
+- Current boot selection after this test is `app1`. To restore exact previous stock `app0` selection:
+
+  ```bash
+  ESPFLASH_PORT=/dev/cu.usbmodem3101 scripts/restore-otadata.sh
+  ```
+
+- Added and hardware-verified guarded restore/cleanup scripts:
+
+  ```text
+  scripts/restore-otadata.sh      # verified: wrote/read back only 0xE000..0xFFFF from otadata backup
+  scripts/restore-stock-app0.sh   # verified: wrote/read back only stock app0 from private full-flash backup slice
+  scripts/erase-app1.sh           # verified: erased only app1 and read back all 0xFF
+  scripts/restore-stock-state.sh  # verified: restored app0, erased app1, restored otadata; no whole-flash write
+  ```
+
+- Restore drill results:
+
+  ```text
+  stock app0 restored sha256: 2b922b52891da078ab7dbe06b5686231c02be7a689ea80a7fd35b17ae389a9f6
+  app1 erased verification:   all bytes read back as 0xFF
+  otadata restored sha256:    f94c5d786a7a8fab06ac5d10e33bf37711a6697636dc037559ea19cc410a17f0
+  ```
+
+- After restore verification, Brewthink was written back to app1 and `otadata` was switched back to `seq=2 -> app1`:
+
+  ```text
+  app1 Brewthink sha256:       45c97d1090721837af57603a0a72252295157537418a0168d1db61c24bee9630
+  otadata sector 1 sha256:     f5ab818d800af4e3e1efd4c91587ff9019dfc243adb0bc2ef0c7eb4a0c9df16d
+  final boot logs confirmed:   Brewthink heartbeat from app1
+  ```
+
 ## Current uncommitted work
 
 At the time this checkpoint was created, these files were expected to be uncommitted:
