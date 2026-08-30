@@ -105,8 +105,9 @@ Supported stages are cumulative:
 | `black` | Full black refresh |
 | `checkerboard` | Full 40 × 40-pixel checkerboard refresh |
 | `orientation` | Border, axes, and corner labels using `BREWTHINK_DISPLAY_ROTATION` |
+| `image` | Build-time decoded, scaled, and dithered 1-bit image |
 
-Each diagnostic runs once, reports completion or failure, then holds without retry. Generated patterns use a 256-byte transfer buffer rather than a 48 KB framebuffer.
+Each diagnostic runs once, reports completion or failure, then holds without retry. Generated patterns and compiled images use a 256-byte transfer buffer rather than a 48 KB RAM framebuffer. See `docs/image-pipeline.md` for image preparation.
 
 Building does not touch hardware. A reviewed image can be written and read back with the guarded app1-only workflow:
 
@@ -130,13 +131,13 @@ On 2026-08-30, the guarded workflow wrote and read back each stage only in `app1
 6. Checkerboard full refresh complete.
 7. Native landscape orientation full refresh complete.
 8. 90° logical portrait refresh complete; human inspection found it upside down.
-9. Corrected 270° portrait refresh complete.
+9. Corrected 270° portrait refresh complete and visually confirmed upright.
 
 The corrected image was `100,128` bytes with SHA-256 `cb81a48ed2ffe96e379d3c70d339083b46c6b65db5b2d22f41ca8a1ef2bac890`. Its write range was `0x650000..0x66871F`, wholly inside `app1`.
 
 `otadata` was not changed during display bring-up. This unit was already configured to boot `app1`; verified stock firmware remains in `app0`.
 
-Controller completion and flash readback are machine-verified. The transformed portrait label placement and visual quality still require human inspection of the panel. Results from one X4 do not establish compatibility across all panel revisions, units, temperatures, or battery voltages.
+Controller completion and flash readback are machine-verified. Human inspection confirmed the 270° portrait labels are upright and correctly placed on this unit. Results from one X4 do not establish compatibility across all panel revisions, units, temperatures, or battery voltages.
 
 ## References
 

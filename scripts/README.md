@@ -20,7 +20,15 @@ BREWTHINK_DISPLAY_ROTATION=270 \
   scripts/build-app1-image.sh artifacts/brewthink-display-rotation-270-app1.bin
 ```
 
-Valid stages are `reset`, `initialize`, `write`, `refresh`, `black`, `checkerboard`, and `orientation`. Rotation accepts `0`, `90`, `180`, or `270`; it defaults to Brewthink's corrected portrait value of `270`. The 0°/180° frames are 800 × 480 and the 90°/270° frames are 480 × 800. Each stage runs once and holds without retry. See `docs/display-bringup.md` for the command transcript and staged procedure.
+Valid stages are `reset`, `initialize`, `write`, `refresh`, `black`, `checkerboard`, `orientation`, and `image`. Rotation accepts `0`, `90`, `180`, or `270`; it defaults to Brewthink's corrected portrait value of `270`. The 0°/180° frames are 800 × 480 and the 90°/270° frames are 480 × 800. Each stage runs once and holds without retry. See `docs/display-bringup.md` for the command transcript and staged procedure.
+
+Build a JPEG, PNG, BMP, or PNM into an app1 image with:
+
+```bash
+scripts/build-image-app1.sh input.jpeg artifacts/image-app1.bin
+```
+
+This decodes, scales, converts to grayscale, dithers, and packs the image on the host. It also writes an ignored PBM preview. See `docs/image-pipeline.md` for options and memory constraints.
 
 Building a diagnostic image does not touch hardware. Use the guarded app1 write/readback command below only after reviewing its exact offset, image size, and sector erase range. Do not use `cargo run`.
 

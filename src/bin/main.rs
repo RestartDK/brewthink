@@ -10,7 +10,7 @@
 use brewthink::{
     display::{
         diagnostic::{fill_checkerboard, fill_rotated_orientation},
-        framebuffer::Rotation,
+        framebuffer::{FRAME_BYTES, Frame, Rotation},
         ssd1677::{DisplayBus, InitializedSsd1677, Ssd1677},
     },
     x4::{SharedSpiChipSelects, X4DisplayHardware},
@@ -33,6 +33,8 @@ const DISPLAY_ROTATION: &str = match option_env!("BREWTHINK_DISPLAY_ROTATION") {
     Some(rotation) => rotation,
     None => "270",
 };
+const BUILT_IMAGE: &[u8; FRAME_BYTES] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/brewthink-image.bin"));
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
@@ -67,12 +69,19 @@ async fn main(spawner: Spawner) -> ! {
 
     if !matches!(
         DISPLAY_STAGE,
-        "reset" | "initialize" | "write" | "refresh" | "black" | "checkerboard" | "orientation"
+        "reset"
+            | "initialize"
+            | "write"
+            | "refresh"
+            | "black"
+            | "checkerboard"
+            | "orientation"
+            | "image"
     ) {
         hold(chip_selects, "unknown display diagnostic stage");
     }
 
-    let rotation = if DISPLAY_STAGE == "orientation" {
+    let rotation = if matches!(DISPLAY_STAGE, "orientation" | "image") {
         match parse_rotation(DISPLAY_ROTATION) {
             Some(rotation) => rotation,
             None => hold(chip_selects, "unknown display rotation"),
@@ -165,6 +174,10 @@ fn run_display_diagnostic(hardware: X4DisplayHardware<'_>, stage: &str, rotation
         run_orientation(display, sd_chip_select, rotation);
     }
 
+    if stage == "image" {
+        run_image(display, sd_chip_select, rotation);
+    }
+
     if display.refresh_white().is_err() {
         hold((display, sd_chip_select), "white full refresh failed");
     }
@@ -193,6 +206,26 @@ where
         rotation.degrees()
     );
     hold((display, retained), "orientation display stage complete");
+}
+
+fn run_image<B, S>(mut display: InitializedSsd1677<'_, B>, retained: S, rotation: Rotation) -> !
+where
+    B: DisplayBus,
+{
+    let frame = match Frame::new(BUILT_IMAGE, rotation) {
+        Ok(frame) => frame,
+        Err(_) => hold((display, retained), "built image frame is invalid"),
+    };
+    if display.refresh_logical_frame(frame).is_err() {
+        hold((display, retained), "image refresh failed");
+    }
+    info!(
+        "Image full refresh complete: width={} height={} rotation={}",
+        frame.width(),
+        frame.height(),
+        frame.rotation().degrees()
+    );
+    hold((display, retained), "image display stage complete");
 }
 
 fn parse_rotation(value: &str) -> Option<Rotation> {

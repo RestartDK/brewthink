@@ -88,7 +88,7 @@ Goal: show controlled raw output on the e-paper display.
 - [x] Render all-white frame.
 - [x] Render all-black frame.
 - [x] Render checkerboard/test pattern.
-- [ ] Render a compile-time raw bitmap.
+- [x] Render a compile-time raw bitmap.
 - [ ] Put build/version text or marker in test image if feasible.
 - [x] Document full-refresh sequence and any unexplained command bytes.
 
@@ -99,14 +99,15 @@ Goal: display a real picture after raw rendering works.
 - [x] Define rotation-aware framebuffer views for 0°/90°/180°/270°.
 - [x] Default to a 480 × 800 portrait framebuffer at the corrective 270° rotation.
 - [x] Render a simple raw 1-bit image.
-- [ ] Visually confirm the corrected 270° corner labels are upright and correctly placed.
-- [ ] Add scaling/cropping strategy.
-- [ ] Add grayscale conversion.
-- [ ] Add thresholding or dithering.
-- [ ] Add simple uncompressed image support first, e.g. PBM/BMP if useful.
-- [ ] Add PNG decode after raw/uncompressed rendering is reliable.
-- [ ] Add JPEG decode after PNG or only if memory allows.
-- [ ] Measure RAM usage; remember the X4 has no PSRAM.
+- [x] Visually confirm the corrected 270° corner labels are upright and correctly placed.
+- [x] Add `contain` and `cover` scaling with bilinear resampling.
+- [x] Add integer RGB-to-luma conversion.
+- [x] Add fixed threshold and ordered 4 × 4 dithering.
+- [x] Add build-time PNM and BMP decoding.
+- [x] Add build-time PNG decoding.
+- [x] Add build-time baseline and progressive JPEG decoding.
+- [x] Keep decoded RGB data on the host; embed only the 48,000-byte packed frame in firmware flash.
+- [ ] Design bounded-memory runtime decoding for files read from microSD.
 
 ## Milestone 6.5 — WASM/web simulator
 
@@ -124,7 +125,7 @@ shared app-core/render-core
 
 Timing:
 
-- [ ] Add this after raw framebuffer/display rendering works on the real X4.
+- [x] Start this after raw framebuffer/display rendering works on the real X4.
 - [ ] Add it before the library app becomes large, so UI/state/rendering boundaries stay clean.
 
 Core tasks:
@@ -150,7 +151,7 @@ Shared concepts to define:
 - [ ] `ButtonEvent` enum shared by firmware and web.
 - [ ] `BatteryState` shared by firmware and web.
 - [x] Read-only `Frame` view and `Rotation` domain types shared by host, WASM, and firmware.
-- [ ] Mutable 480 × 800 `FrameBuffer` or equivalent render target.
+- [x] Mutable packed `MonochromeImage` render target for host, WASM, and build-time conversion.
 - [ ] A display target/backend interface so firmware flushes to SSD1677 while WASM draws to canvas.
 - [ ] A storage abstraction so firmware can later use SD while web can use fake files, browser files, or IndexedDB.
 
@@ -265,9 +266,7 @@ Goal: sync useful content while staying offline-first.
 
 ## Current immediate next steps
 
-- [ ] Restart Neovim from inside the Brewthink direnv shell.
-- [ ] Read `AGENTS.md`, `docs/notes.md`, and this file before making code changes.
-- [ ] Create a branch for reference study / minimal bring-up.
-- [ ] Study MarigoldOS and OpenX4 references without flashing.
-- [ ] Plan the minimal logging-only firmware.
-- [ ] Do not flash until the `app1`-only write/readback workflow exists.
+- [x] Visually confirm the corrected 270° orientation and record the result.
+- [ ] Display the build-time decoded sample image from guarded `app1`.
+- [ ] Add a host/WASM display backend around the shared packed image type.
+- [ ] Design bounded-memory runtime image decoding before adding SD image browsing.

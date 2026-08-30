@@ -238,7 +238,7 @@ The physical X4 completed these guarded stages without SPI errors, BUSY timeouts
 6. 40 × 40-pixel checkerboard full refresh.
 7. Native border/crosshair and `TL`/`TR`/`BL`/`BR` orientation full refresh.
 8. 90° portrait full refresh; human inspection found it upside down.
-9. Corrected 270° portrait full refresh.
+9. Corrected 270° portrait full refresh, visually confirmed upright.
 
 The corrected orientation image was written and read back only in `app1`:
 
@@ -254,7 +254,7 @@ Current device state:
 - `app1` contains the orientation diagnostic.
 - `otadata` remains at its pre-bring-up `seq=2 -> app1` state.
 - The controller reported orientation-refresh completion and is holding without retry.
-- Human confirmation of the corrected 270° label placement and visual quality is still required.
+- Human inspection confirmed the corrected 270° labels are upright and correctly placed.
 
 ## Current uncommitted work
 
@@ -282,12 +282,11 @@ Do not commit anything under `backup/`, `.direnv/`, `target/`, or `artifacts/`.
 
 ## Next steps
 
-1. Confirm the corrected 270° physical pattern has upright labels in their named corners.
-2. Add an app-facing mutable framebuffer/render-target API above the validated `Frame` rotation view.
-3. Add a simple real 1-bit image or build/version page.
-4. Keep partial refresh, custom LUTs, grayscale, display sleep, SD, GPIO13, and radio out of scope until full-refresh rendering is stable.
-5. Review the complete uncommitted diff and decide whether to commit board abstraction and display work separately.
+1. Display the build-time decoded JPEG sample from guarded `app1`.
+2. Add a host/WASM display backend around the shared packed image type.
+3. Design bounded-memory runtime decoding before reading images from microSD.
+4. Keep partial refresh, custom LUTs, display sleep, SD, GPIO13, and radio out of scope until full-refresh image rendering is stable.
 
 ## Definition of the next successful checkpoint
 
-The next checkpoint is complete when the corrected 270° orientation is visually confirmed and an app-facing framebuffer renders the same portrait page to host/WASM code and the X4 full-refresh backend.
+The next checkpoint is complete when a decoded source image renders through the same 1-bit pipeline on the build host and the X4 full-refresh backend.

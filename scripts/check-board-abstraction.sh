@@ -10,8 +10,19 @@ cd "$ROOT_DIR"
 printf '== Formatting ==\n'
 cargo fmt --all -- --check
 
-printf '\n== Host board-spec tests (%s) ==\n' "$HOST_TARGET"
-cargo test --lib --target "$HOST_TARGET"
+printf '\n== Host library tests (%s) ==\n' "$HOST_TARGET"
+cargo test \
+  --config 'unstable.build-std=["std","panic_abort"]' \
+  --workspace \
+  --lib \
+  --target "$HOST_TARGET"
+
+printf '\n== Host image library clippy ==\n'
+cargo clippy \
+  --config 'unstable.build-std=["std","panic_abort"]' \
+  --manifest-path crates/brewthink-image/Cargo.toml \
+  --target "$HOST_TARGET" \
+  -- -D warnings
 
 printf '\n== WASM-compatible library check ==\n'
 cargo check --lib --target wasm32-unknown-unknown
