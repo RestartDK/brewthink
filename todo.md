@@ -151,7 +151,7 @@ Shared concepts to define:
 - [ ] `ButtonEvent` enum shared by firmware and web.
 - [ ] `BatteryState` shared by firmware and web.
 - [x] Read-only `Frame` view and `Rotation` domain types shared by host, WASM, and firmware.
-- [x] Mutable packed `MonochromeImage` render target for host, WASM, and build-time conversion.
+- [x] Mutable packed `MonochromeImage` render target in `src/image/` for host, WASM, and firmware.
 - [ ] A display target/backend interface so firmware flushes to SSD1677 while WASM draws to canvas.
 - [ ] A storage abstraction so firmware can later use SD while web can use fake files, browser files, or IndexedDB.
 

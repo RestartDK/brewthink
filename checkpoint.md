@@ -252,10 +252,10 @@ SHA-256:      cb81a48ed2ffe96e379d3c70d339083b46c6b65db5b2d22f41ca8a1ef2bac890
 
 Completed on 2026-08-30:
 
-- Added a `no_std` image-rendering crate shared by host, WASM, and firmware builds.
+- Added the `no_std` `src/image/` module shared by host, WASM, and firmware builds.
 - Added `contain` and `cover` scaling, bilinear sampling, integer luma conversion, fixed thresholding, and 4 × 4 ordered dithering.
-- Added host-side JPEG, PNG, BMP, and PNM decoding. Full RGB decode data never enters X4 RAM.
-- Added an `image` firmware stage that embeds a packed 48,000-byte frame in mapped flash and streams it through the existing 256-byte transfer buffer.
+- Added the host-only `prepare-image` binary for JPEG, PNG, BMP, and PNM decoding. Full RGB decode data never enters X4 RAM.
+- Added an `image` firmware stage that validates and embeds a prepared 48,000-byte frame in mapped flash, then streams it through the existing 256-byte transfer buffer.
 - Decoded the progressive 720 × 720 `anime-girl.jpeg` sample and generated a 480 × 800 PBM preview.
 - Built, wrote, and read back the sample image only in `app1`:
 

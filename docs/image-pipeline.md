@@ -1,6 +1,6 @@
 # Image pipeline
 
-Brewthink converts source images into the SSD1677's packed 1-bit format at build time. The decoder never runs on the ESP32-C3.
+Brewthink's host preparation command converts source images into the SSD1677's packed 1-bit format before the firmware build. The decoder never runs on the ESP32-C3. Shared rendering lives in `src/image/`, not in `build.rs`.
 
 ## Build an image
 
@@ -10,26 +10,28 @@ scripts/build-image-app1.sh \
   artifacts/anime-girl-app1.bin
 ```
 
-The command creates two ignored artifacts:
+The command creates three ignored artifacts:
 
+- `artifacts/anime-girl-app1.frame.bin` is the exact 48,000-byte firmware frame.
+- `artifacts/anime-girl-app1.pbm` is the same logical frame using PBM bit semantics for previewing.
 - `artifacts/anime-girl-app1.bin` is an ESP-IDF app image for `app1`.
-- `artifacts/anime-girl-app1.pbm` is the exact logical 1-bit frame for previewing.
 
 It does not write hardware. Flashing still uses the guarded app1 write/readback script after its ranges have been reviewed.
 
 ## Supported input and rendering
 
-The host decoder accepts JPEG, PNG, BMP, and PNM. It detects the format from the file contents.
+The host-only `prepare-image` binary accepts JPEG, PNG, BMP, and PNM. It detects the format from the file contents. The portable `brewthink::image` module performs scaling and monochrome conversion for host, WASM, and firmware callers.
 
-The renderer performs these steps:
+The preparation and firmware build perform these steps:
 
 1. Decode to RGB8 on the build host.
 2. Preserve aspect ratio with `contain` or `cover` scaling.
 3. Resample with bilinear interpolation.
 4. Convert RGB to integer BT.601 luma.
 5. Convert luma to one bit with a 4 × 4 ordered dither or a fixed threshold.
-6. Embed the exact 48,000-byte logical frame in firmware flash.
-7. Apply the selected display rotation while streaming to the SSD1677.
+6. Write the exact 48,000-byte logical frame as a local artifact.
+7. Validate and embed that packed frame in firmware flash.
+8. Apply the selected display rotation while streaming to the SSD1677.
 
 Defaults:
 
@@ -49,6 +51,8 @@ BREWTHINK_IMAGE_DITHER=threshold \
 ```
 
 Rotation accepts `0`, `90`, `180`, or `270`. Scale accepts `contain` or `cover`. Dither accepts `ordered` or `threshold`.
+
+`src/bin/prepare-image.rs` owns host file decoding. `src/image/` owns portable rendering. `build.rs` retains ESP linker setup and validates that the prepared frame is exactly 48,000 bytes before copying it into Cargo's generated output directory.
 
 ## Memory boundary
 

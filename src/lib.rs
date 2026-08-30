@@ -1,6 +1,5 @@
 #![no_std]
 
-pub use brewthink_image as image;
-
 pub mod display;
+pub mod image;
 pub mod x4;

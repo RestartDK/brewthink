@@ -68,7 +68,6 @@ dependencies = [
 name = "brewthink"
 version = "0.1.0"
 dependencies = [
- "brewthink-image",
  "defmt 1.1.1",
  "embassy-executor",
  "embassy-time",
@@ -80,10 +79,6 @@ dependencies = [
  "esp-rtos",
  "image",
 ]
-
-[[package]]
-name = "brewthink-image"
-version = "0.1.0"
 
 [[package]]
 name = "bytemuck"

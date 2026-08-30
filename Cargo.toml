@@ -4,21 +4,24 @@ name         = "brewthink"
 rust-version = "1.88"
 version      = "0.1.0"
 
-[workspace]
-members  = ["crates/brewthink-image"]
-resolver = "3"
+[features]
+default          = []
+host-image-tools = ["dep:image"]
 
 [[bin]]
 name = "brewthink"
 path = "./src/bin/main.rs"
 
-[dependencies]
-brewthink-image = { path = "crates/brewthink-image" }
-embedded-hal     = "1.0.0"
+[[bin]]
+name              = "prepare-image"
+path              = "./src/bin/prepare-image.rs"
+required-features = ["host-image-tools"]
 
-[build-dependencies]
-brewthink-image = { path = "crates/brewthink-image" }
-image            = { version = "0.25.10", default-features = false, features = ["bmp", "jpeg", "png", "pnm"] }
+[dependencies]
+embedded-hal = "1.0.0"
+
+[target.'cfg(not(target_arch = "riscv32"))'.dependencies]
+image = { version = "0.25.10", optional = true, default-features = false, features = ["bmp", "jpeg", "png", "pnm"] }
 
 [target.'cfg(target_arch = "riscv32")'.dependencies]
 defmt                  = "1.0.1"
