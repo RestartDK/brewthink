@@ -32,9 +32,16 @@ RUSTFLAGS="${RUSTFLAGS:-} -C panic=abort" cargo build \
   --bin web-sim \
   "${CARGO_PROFILE[@]}"
 
-rm -rf web/src/generated
+GENERATED_DIR="$ROOT_DIR/web/src/generated"
+TEMP_DIR="$(mktemp -d "$ROOT_DIR/target/web-wasm-bindgen.XXXXXX")"
+trap 'rm -rf "$TEMP_DIR"' EXIT
+
 wasm-bindgen \
   --target web \
-  --out-dir web/src/generated \
+  --out-dir "$TEMP_DIR" \
   --out-name brewthink_web \
   "target/wasm32-unknown-unknown/$PROFILE/web-sim.wasm"
+
+rm -rf "$GENERATED_DIR"
+mv "$TEMP_DIR" "$GENERATED_DIR"
+trap - EXIT

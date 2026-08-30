@@ -12,7 +12,7 @@ bun run dev
 
 Open the Vite URL, then choose or drop a JPEG, PNG, BMP, or PNM image. The download button writes the raw 48,000-byte `480 × 800` packed frame used by the current firmware image stage.
 
-`bun run dev` rebuilds the WebAssembly module when it starts. Restart it after changing Rust code.
+`bun run dev` watches both sides of the simulator. Vite hot-reloads TypeScript and CSS. Changes to Rust source, Cargo inputs, or the WASM build script trigger an incremental WASM rebuild and a full browser reload. A failed Rust build leaves the last good generated module in place and reports the error in the terminal.
 
 ## Verify
 
