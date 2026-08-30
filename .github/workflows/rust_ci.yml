@@ -45,3 +45,36 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: Run command
         run: cargo ${{ matrix.action.command }} ${{ matrix.action.args }}
+
+  web-simulator:
+    name: Web simulator
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          target: wasm32-unknown-unknown
+          toolchain: stable
+          components: rust-src
+      - name: Enable Rust caching
+        uses: Swatinem/rust-cache@v2
+      - name: Install wasm-bindgen CLI
+        run: cargo install wasm-bindgen-cli --version 0.2.121 --locked
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - name: Install web dependencies
+        working-directory: web
+        run: bun install --frozen-lockfile
+      - name: Build simulator
+        working-directory: web
+        run: bun run build
+      - name: Install Chromium
+        working-directory: web
+        run: bunx playwright install --with-deps chromium
+      - name: Test simulator
+        working-directory: web
+        run: bun run test:e2e
