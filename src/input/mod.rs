@@ -15,8 +15,8 @@ impl Millivolts {
 pub struct BatteryVoltage(Millivolts);
 
 impl BatteryVoltage {
-    pub const fn from_x4_divided_pin(pin_voltage: Millivolts) -> Self {
-        Self(Millivolts::new(pin_voltage.get().saturating_mul(2)))
+    pub const fn from_millivolts(voltage: Millivolts) -> Self {
+        Self(voltage)
     }
 
     pub const fn millivolts(self) -> Millivolts {
@@ -58,12 +58,6 @@ pub struct RawInputSample {
     pub page_voltage: Millivolts,
     pub power_pressed: bool,
     pub usb_state: UsbState,
-}
-
-impl RawInputSample {
-    pub const fn battery_voltage(self) -> BatteryVoltage {
-        BatteryVoltage::from_x4_divided_pin(self.battery_pin_voltage)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -249,38 +243,12 @@ impl ButtonDebouncer {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        BatteryVoltage, Button, ButtonDebouncer, ButtonEvent, ButtonTransition, Millivolts,
-        PressedButtons, RawInputSample, UsbState,
-    };
+    use super::{Button, ButtonDebouncer, ButtonEvent, ButtonTransition, PressedButtons};
 
     fn pressed(button: Button) -> PressedButtons {
         let mut buttons = PressedButtons::none();
         buttons.insert(button);
         buttons
-    }
-
-    #[test]
-    fn battery_voltage_applies_the_x4_divider_ratio() {
-        let sample = RawInputSample {
-            battery_pin_voltage: Millivolts::new(1_950),
-            navigation_voltage: Millivolts::new(0),
-            page_voltage: Millivolts::new(0),
-            power_pressed: false,
-            usb_state: UsbState::Disconnected,
-        };
-
-        assert_eq!(
-            sample.battery_voltage(),
-            BatteryVoltage::from_x4_divided_pin(Millivolts::new(1_950))
-        );
-        assert_eq!(sample.battery_voltage().millivolts().get(), 3_900);
-    }
-
-    #[test]
-    fn battery_voltage_saturates_instead_of_wrapping() {
-        let voltage = BatteryVoltage::from_x4_divided_pin(Millivolts::new(u16::MAX));
-        assert_eq!(voltage.millivolts().get(), u16::MAX);
     }
 
     #[test]

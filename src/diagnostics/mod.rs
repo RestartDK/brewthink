@@ -1,28 +1,45 @@
+pub mod stage_names;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DiagnosticStage {
     Heartbeat,
-    InputsRaw,
-    InputsEvents,
-    PowerUsb,
+    Input(InputDiagnosticStage),
     StorageReadOnly,
     StorageWriteTest,
     IntegratedDevice,
     SleepWake,
+    DisplayReset,
     Display(DisplayDiagnosticStage),
 }
 
 impl DiagnosticStage {
     pub const fn name(self) -> &'static str {
         match self {
-            Self::Heartbeat => "heartbeat",
-            Self::InputsRaw => "inputs-raw",
-            Self::InputsEvents => "inputs-events",
-            Self::PowerUsb => "power-usb",
-            Self::StorageReadOnly => "storage-readonly",
-            Self::StorageWriteTest => "storage-write-test",
-            Self::IntegratedDevice => "integrated-device",
-            Self::SleepWake => "sleep-wake",
+            Self::Heartbeat => stage_names::HEARTBEAT,
+            Self::Input(stage) => stage.name(),
+            Self::StorageReadOnly => stage_names::STORAGE_READONLY,
+            Self::StorageWriteTest => stage_names::STORAGE_WRITE_TEST,
+            Self::IntegratedDevice => stage_names::INTEGRATED_DEVICE,
+            Self::SleepWake => stage_names::SLEEP_WAKE,
+            Self::DisplayReset => stage_names::DISPLAY_RESET,
             Self::Display(stage) => stage.name(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InputDiagnosticStage {
+    Raw,
+    Events,
+    PowerUsb,
+}
+
+impl InputDiagnosticStage {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Raw => stage_names::INPUTS_RAW,
+            Self::Events => stage_names::INPUTS_EVENTS,
+            Self::PowerUsb => stage_names::POWER_USB,
         }
     }
 }
@@ -35,22 +52,28 @@ impl core::str::FromStr for DiagnosticStage {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
-            "heartbeat" => Ok(Self::Heartbeat),
-            "inputs-raw" => Ok(Self::InputsRaw),
-            "inputs-events" => Ok(Self::InputsEvents),
-            "power-usb" => Ok(Self::PowerUsb),
-            "storage-readonly" => Ok(Self::StorageReadOnly),
-            "storage-write-test" => Ok(Self::StorageWriteTest),
-            "integrated-device" => Ok(Self::IntegratedDevice),
-            "sleep-wake" => Ok(Self::SleepWake),
-            "display-reset" => Ok(Self::Display(DisplayDiagnosticStage::Reset)),
-            "display-initialize" => Ok(Self::Display(DisplayDiagnosticStage::Initialize)),
-            "display-write" => Ok(Self::Display(DisplayDiagnosticStage::Write)),
-            "display-refresh" => Ok(Self::Display(DisplayDiagnosticStage::Refresh)),
-            "display-black" => Ok(Self::Display(DisplayDiagnosticStage::Black)),
-            "display-checkerboard" => Ok(Self::Display(DisplayDiagnosticStage::Checkerboard)),
-            "display-orientation" => Ok(Self::Display(DisplayDiagnosticStage::Orientation)),
-            "display-image" => Ok(Self::Display(DisplayDiagnosticStage::Image)),
+            stage_names::HEARTBEAT => Ok(Self::Heartbeat),
+            stage_names::INPUTS_RAW => Ok(Self::Input(InputDiagnosticStage::Raw)),
+            stage_names::INPUTS_EVENTS => Ok(Self::Input(InputDiagnosticStage::Events)),
+            stage_names::POWER_USB => Ok(Self::Input(InputDiagnosticStage::PowerUsb)),
+            stage_names::STORAGE_READONLY => Ok(Self::StorageReadOnly),
+            stage_names::STORAGE_WRITE_TEST => Ok(Self::StorageWriteTest),
+            stage_names::INTEGRATED_DEVICE => Ok(Self::IntegratedDevice),
+            stage_names::SLEEP_WAKE => Ok(Self::SleepWake),
+            stage_names::DISPLAY_RESET => Ok(Self::DisplayReset),
+            stage_names::DISPLAY_INITIALIZE => {
+                Ok(Self::Display(DisplayDiagnosticStage::Initialize))
+            }
+            stage_names::DISPLAY_WRITE => Ok(Self::Display(DisplayDiagnosticStage::Write)),
+            stage_names::DISPLAY_REFRESH => Ok(Self::Display(DisplayDiagnosticStage::Refresh)),
+            stage_names::DISPLAY_BLACK => Ok(Self::Display(DisplayDiagnosticStage::Black)),
+            stage_names::DISPLAY_CHECKERBOARD => {
+                Ok(Self::Display(DisplayDiagnosticStage::Checkerboard))
+            }
+            stage_names::DISPLAY_ORIENTATION => {
+                Ok(Self::Display(DisplayDiagnosticStage::Orientation))
+            }
+            stage_names::DISPLAY_IMAGE => Ok(Self::Display(DisplayDiagnosticStage::Image)),
             _ => Err(UnknownDiagnosticStage),
         }
     }
@@ -58,7 +81,6 @@ impl core::str::FromStr for DiagnosticStage {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DisplayDiagnosticStage {
-    Reset,
     Initialize,
     Write,
     Refresh,
@@ -71,14 +93,13 @@ pub enum DisplayDiagnosticStage {
 impl DisplayDiagnosticStage {
     pub const fn name(self) -> &'static str {
         match self {
-            Self::Reset => "display-reset",
-            Self::Initialize => "display-initialize",
-            Self::Write => "display-write",
-            Self::Refresh => "display-refresh",
-            Self::Black => "display-black",
-            Self::Checkerboard => "display-checkerboard",
-            Self::Orientation => "display-orientation",
-            Self::Image => "display-image",
+            Self::Initialize => stage_names::DISPLAY_INITIALIZE,
+            Self::Write => stage_names::DISPLAY_WRITE,
+            Self::Refresh => stage_names::DISPLAY_REFRESH,
+            Self::Black => stage_names::DISPLAY_BLACK,
+            Self::Checkerboard => stage_names::DISPLAY_CHECKERBOARD,
+            Self::Orientation => stage_names::DISPLAY_ORIENTATION,
+            Self::Image => stage_names::DISPLAY_IMAGE,
         }
     }
 
@@ -89,23 +110,29 @@ impl DisplayDiagnosticStage {
 
 #[cfg(test)]
 mod tests {
-    use super::{DiagnosticStage, DisplayDiagnosticStage};
+    use super::{DiagnosticStage, DisplayDiagnosticStage, InputDiagnosticStage, stage_names};
 
     #[test]
     fn parses_every_supported_stage() {
         let cases = [
             ("heartbeat", DiagnosticStage::Heartbeat),
-            ("inputs-raw", DiagnosticStage::InputsRaw),
-            ("inputs-events", DiagnosticStage::InputsEvents),
-            ("power-usb", DiagnosticStage::PowerUsb),
+            (
+                "inputs-raw",
+                DiagnosticStage::Input(InputDiagnosticStage::Raw),
+            ),
+            (
+                "inputs-events",
+                DiagnosticStage::Input(InputDiagnosticStage::Events),
+            ),
+            (
+                "power-usb",
+                DiagnosticStage::Input(InputDiagnosticStage::PowerUsb),
+            ),
             ("storage-readonly", DiagnosticStage::StorageReadOnly),
             ("storage-write-test", DiagnosticStage::StorageWriteTest),
             ("integrated-device", DiagnosticStage::IntegratedDevice),
             ("sleep-wake", DiagnosticStage::SleepWake),
-            (
-                "display-reset",
-                DiagnosticStage::Display(DisplayDiagnosticStage::Reset),
-            ),
+            ("display-reset", DiagnosticStage::DisplayReset),
             (
                 "display-initialize",
                 DiagnosticStage::Display(DisplayDiagnosticStage::Initialize),
@@ -151,9 +178,17 @@ mod tests {
     }
 
     #[test]
+    fn stage_name_list_matches_the_parser() {
+        assert_eq!(stage_names::ALL_STAGES.len(), 16);
+        for name in stage_names::ALL_STAGES {
+            let parsed: DiagnosticStage = name.parse().unwrap();
+            assert_eq!(parsed.name(), *name);
+        }
+    }
+
+    #[test]
     fn rotation_is_limited_to_orientation_and_image() {
         for stage in [
-            DisplayDiagnosticStage::Reset,
             DisplayDiagnosticStage::Initialize,
             DisplayDiagnosticStage::Write,
             DisplayDiagnosticStage::Refresh,

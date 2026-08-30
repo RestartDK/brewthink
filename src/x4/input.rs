@@ -1,4 +1,16 @@
-use crate::input::{Button, Millivolts, PressedButtons, RawInputSample};
+use crate::input::{BatteryVoltage, Button, Millivolts, PressedButtons, RawInputSample};
+
+impl BatteryVoltage {
+    pub const fn from_x4_divided_pin(pin_voltage: Millivolts) -> Self {
+        Self::from_millivolts(Millivolts::new(pin_voltage.get().saturating_mul(2)))
+    }
+}
+
+impl RawInputSample {
+    pub const fn battery_voltage(self) -> BatteryVoltage {
+        BatteryVoltage::from_x4_divided_pin(self.battery_pin_voltage)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum X4ButtonDecodeError {
@@ -266,7 +278,30 @@ pub use hardware::{InputReadError, X4InputHardware, X4InputPeripherals};
 #[cfg(test)]
 mod tests {
     use super::{X4ButtonDecodeError, decode_buttons};
-    use crate::input::{Button, Millivolts, RawInputSample, UsbState};
+    use crate::input::{BatteryVoltage, Button, Millivolts, RawInputSample, UsbState};
+
+    #[test]
+    fn battery_voltage_applies_the_x4_divider_ratio() {
+        let sample = RawInputSample {
+            battery_pin_voltage: Millivolts::new(1_950),
+            navigation_voltage: Millivolts::new(0),
+            page_voltage: Millivolts::new(0),
+            power_pressed: false,
+            usb_state: UsbState::Disconnected,
+        };
+
+        assert_eq!(
+            sample.battery_voltage(),
+            BatteryVoltage::from_x4_divided_pin(Millivolts::new(1_950))
+        );
+        assert_eq!(sample.battery_voltage().millivolts().get(), 3_900);
+    }
+
+    #[test]
+    fn battery_voltage_saturates_instead_of_wrapping() {
+        let voltage = BatteryVoltage::from_x4_divided_pin(Millivolts::new(u16::MAX));
+        assert_eq!(voltage.millivolts().get(), u16::MAX);
+    }
 
     fn sample(navigation_mv: u16, page_mv: u16, power_pressed: bool) -> RawInputSample {
         RawInputSample {

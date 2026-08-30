@@ -1,3 +1,5 @@
+use core::marker::PhantomData;
+
 use super::framebuffer::Frame;
 
 pub const WIDTH: usize = 800;
@@ -109,95 +111,136 @@ pub enum Error<E> {
     InvalidFrameLength { expected: usize, actual: usize },
 }
 
-pub struct Ssd1677<B> {
-    bus: B,
+pub struct Uninitialized;
+
+pub struct Ready;
+
+pub struct Ssd1677<S> {
+    state: PhantomData<S>,
 }
 
-pub struct InitializedSsd1677<'a, B> {
-    bus: &'a mut B,
-}
-
-impl<B> Ssd1677<B>
-where
-    B: DisplayBus,
-{
-    pub fn new(bus: B) -> Self {
-        Self { bus }
+impl Ssd1677<Uninitialized> {
+    pub const fn new() -> Self {
+        Self { state: PhantomData }
     }
 
-    pub fn initialize(&mut self) -> Result<InitializedSsd1677<'_, B>, Error<B::Error>> {
+    pub fn initialize<B>(self, bus: &mut B) -> Result<Ssd1677<Ready>, Error<B::Error>>
+    where
+        B: DisplayBus,
+    {
         for operation in INIT_SEQUENCE {
             match operation {
-                InitOperation::Reset => self.bus.reset(),
-                InitOperation::WaitReady => self.bus.wait_ready().map_err(Error::Bus)?,
+                InitOperation::Reset => bus.reset(),
+                InitOperation::WaitReady => bus.wait_ready().map_err(Error::Bus)?,
                 InitOperation::Command { command, data } => {
-                    self.bus.command(*command, data).map_err(Error::Bus)?
+                    bus.command(*command, data).map_err(Error::Bus)?
                 }
             }
         }
 
-        Ok(InitializedSsd1677 { bus: &mut self.bus })
-    }
-
-    pub fn into_bus(self) -> B {
-        self.bus
+        Ok(Ssd1677 { state: PhantomData })
     }
 }
 
-impl<B> InitializedSsd1677<'_, B>
-where
-    B: DisplayBus,
-{
-    pub fn write_solid_frame(&mut self, value: u8) -> Result<(), Error<B::Error>> {
-        self.prepare_full_window()?;
-        self.write_solid_plane(CMD_WRITE_RAM_BW, value)?;
-        self.write_solid_plane(CMD_WRITE_RAM_RED, value)
+impl Default for Ssd1677<Uninitialized> {
+    fn default() -> Self {
+        Self::new()
     }
+}
 
-    pub fn refresh_solid(&mut self, value: u8) -> Result<(), Error<B::Error>> {
-        self.write_solid_frame(value)?;
-        self.activate_full_refresh()
-    }
-
-    pub fn write_white_frame(&mut self) -> Result<(), Error<B::Error>> {
-        self.write_solid_frame(0xFF)
-    }
-
-    pub fn refresh_white(&mut self) -> Result<(), Error<B::Error>> {
-        self.refresh_solid(0xFF)
-    }
-
-    pub fn write_generated_frame<F>(&mut self, mut fill: F) -> Result<(), Error<B::Error>>
+impl Ssd1677<Ready> {
+    pub fn write_solid_frame<B>(&mut self, bus: &mut B, value: u8) -> Result<(), Error<B::Error>>
     where
+        B: DisplayBus,
+    {
+        self.prepare_full_window(bus)?;
+        self.write_solid_plane(bus, CMD_WRITE_RAM_BW, value)?;
+        self.write_solid_plane(bus, CMD_WRITE_RAM_RED, value)
+    }
+
+    pub fn refresh_solid<B>(&mut self, bus: &mut B, value: u8) -> Result<(), Error<B::Error>>
+    where
+        B: DisplayBus,
+    {
+        self.write_solid_frame(bus, value)?;
+        self.activate_full_refresh(bus)
+    }
+
+    pub fn write_white_frame<B>(&mut self, bus: &mut B) -> Result<(), Error<B::Error>>
+    where
+        B: DisplayBus,
+    {
+        self.write_solid_frame(bus, 0xFF)
+    }
+
+    pub fn refresh_white<B>(&mut self, bus: &mut B) -> Result<(), Error<B::Error>>
+    where
+        B: DisplayBus,
+    {
+        self.refresh_solid(bus, 0xFF)
+    }
+
+    pub fn write_generated_frame<B, F>(
+        &mut self,
+        bus: &mut B,
+        mut fill: F,
+    ) -> Result<(), Error<B::Error>>
+    where
+        B: DisplayBus,
         F: FnMut(usize, &mut [u8]),
     {
-        self.prepare_full_window()?;
-        self.write_generated_plane(CMD_WRITE_RAM_BW, &mut fill)?;
-        self.write_generated_plane(CMD_WRITE_RAM_RED, &mut fill)
+        self.prepare_full_window(bus)?;
+        self.write_generated_plane(bus, CMD_WRITE_RAM_BW, &mut fill)?;
+        self.write_generated_plane(bus, CMD_WRITE_RAM_RED, &mut fill)
     }
 
-    pub fn refresh_generated_frame<F>(&mut self, fill: F) -> Result<(), Error<B::Error>>
+    pub fn refresh_generated_frame<B, F>(
+        &mut self,
+        bus: &mut B,
+        fill: F,
+    ) -> Result<(), Error<B::Error>>
     where
+        B: DisplayBus,
         F: FnMut(usize, &mut [u8]),
     {
-        self.write_generated_frame(fill)?;
-        self.activate_full_refresh()
+        self.write_generated_frame(bus, fill)?;
+        self.activate_full_refresh(bus)
     }
 
-    pub fn write_logical_frame(&mut self, frame: Frame<'_>) -> Result<(), Error<B::Error>> {
-        self.write_generated_frame(|offset, output| frame.fill_panel_chunk(offset, output))
+    pub fn write_logical_frame<B>(
+        &mut self,
+        bus: &mut B,
+        frame: Frame<'_>,
+    ) -> Result<(), Error<B::Error>>
+    where
+        B: DisplayBus,
+    {
+        self.write_generated_frame(bus, |offset, output| frame.fill_panel_chunk(offset, output))
     }
 
-    pub fn refresh_logical_frame(&mut self, frame: Frame<'_>) -> Result<(), Error<B::Error>> {
-        self.write_logical_frame(frame)?;
-        self.activate_full_refresh()
+    pub fn refresh_logical_frame<B>(
+        &mut self,
+        bus: &mut B,
+        frame: Frame<'_>,
+    ) -> Result<(), Error<B::Error>>
+    where
+        B: DisplayBus,
+    {
+        self.write_logical_frame(bus, frame)?;
+        self.activate_full_refresh(bus)
     }
 
-    pub fn enter_deep_sleep(mut self) -> Result<(), Error<B::Error>> {
-        self.command(CMD_DEEP_SLEEP, &[0x03])
+    pub fn enter_deep_sleep<B>(self, bus: &mut B) -> Result<(), Error<B::Error>>
+    where
+        B: DisplayBus,
+    {
+        bus.command(CMD_DEEP_SLEEP, &[0x03]).map_err(Error::Bus)
     }
 
-    pub fn write_frame(&mut self, frame: &[u8]) -> Result<(), Error<B::Error>> {
+    pub fn write_frame<B>(&mut self, bus: &mut B, frame: &[u8]) -> Result<(), Error<B::Error>>
+    where
+        B: DisplayBus,
+    {
         if frame.len() != FRAME_BYTES {
             return Err(Error::InvalidFrameLength {
                 expected: FRAME_BYTES,
@@ -205,83 +248,117 @@ where
             });
         }
 
-        self.prepare_full_window()?;
-        self.write_frame_plane(CMD_WRITE_RAM_BW, frame)?;
-        self.write_frame_plane(CMD_WRITE_RAM_RED, frame)
+        self.prepare_full_window(bus)?;
+        self.write_frame_plane(bus, CMD_WRITE_RAM_BW, frame)?;
+        self.write_frame_plane(bus, CMD_WRITE_RAM_RED, frame)
     }
 
-    pub fn refresh_frame(&mut self, frame: &[u8]) -> Result<(), Error<B::Error>> {
-        self.write_frame(frame)?;
-        self.activate_full_refresh()
+    pub fn refresh_frame<B>(&mut self, bus: &mut B, frame: &[u8]) -> Result<(), Error<B::Error>>
+    where
+        B: DisplayBus,
+    {
+        self.write_frame(bus, frame)?;
+        self.activate_full_refresh(bus)
     }
 
-    pub fn activate_full_refresh(&mut self) -> Result<(), Error<B::Error>> {
-        self.command(CMD_DISPLAY_UPDATE_CTRL1, &[0x40, 0x00])?;
-        self.command(CMD_DISPLAY_UPDATE_CTRL2, &[0xF4])?;
-        self.command(CMD_MASTER_ACTIVATION, &[])?;
-        self.bus.wait_ready().map_err(Error::Bus)
+    pub fn activate_full_refresh<B>(&mut self, bus: &mut B) -> Result<(), Error<B::Error>>
+    where
+        B: DisplayBus,
+    {
+        self.command(bus, CMD_DISPLAY_UPDATE_CTRL1, &[0x40, 0x00])?;
+        self.command(bus, CMD_DISPLAY_UPDATE_CTRL2, &[0xF4])?;
+        self.command(bus, CMD_MASTER_ACTIVATION, &[])?;
+        bus.wait_ready().map_err(Error::Bus)
     }
 
-    fn prepare_full_window(&mut self) -> Result<(), Error<B::Error>> {
-        self.command(CMD_SET_RAM_X_RANGE, &RAM_X_RANGE)?;
-        self.command(CMD_SET_RAM_Y_RANGE, &RAM_Y_RANGE)?;
-        self.command(CMD_SET_RAM_X_COUNTER, &RAM_X_COUNTER)?;
-        self.command(CMD_SET_RAM_Y_COUNTER, &RAM_Y_COUNTER)
+    fn prepare_full_window<B>(&mut self, bus: &mut B) -> Result<(), Error<B::Error>>
+    where
+        B: DisplayBus,
+    {
+        self.command(bus, CMD_SET_RAM_X_RANGE, &RAM_X_RANGE)?;
+        self.command(bus, CMD_SET_RAM_Y_RANGE, &RAM_Y_RANGE)?;
+        self.command(bus, CMD_SET_RAM_X_COUNTER, &RAM_X_COUNTER)?;
+        self.command(bus, CMD_SET_RAM_Y_COUNTER, &RAM_Y_COUNTER)
     }
 
-    fn write_solid_plane(&mut self, command: u8, value: u8) -> Result<(), Error<B::Error>> {
+    fn write_solid_plane<B>(
+        &mut self,
+        bus: &mut B,
+        command: u8,
+        value: u8,
+    ) -> Result<(), Error<B::Error>>
+    where
+        B: DisplayBus,
+    {
         let chunk = [value; SOLID_CHUNK];
-        self.bus.begin_ram_write(command).map_err(Error::Bus)?;
+        bus.begin_ram_write(command).map_err(Error::Bus)?;
 
         let mut remaining = FRAME_BYTES;
         while remaining > 0 {
             let length = remaining.min(SOLID_CHUNK);
-            if let Err(error) = self.bus.write_ram(&chunk[..length]) {
-                let _ = self.bus.end_ram_write();
+            if let Err(error) = bus.write_ram(&chunk[..length]) {
+                let _ = bus.end_ram_write();
                 return Err(Error::Bus(error));
             }
             remaining -= length;
         }
 
-        self.bus.end_ram_write().map_err(Error::Bus)
+        bus.end_ram_write().map_err(Error::Bus)
     }
 
-    fn write_generated_plane<F>(&mut self, command: u8, fill: &mut F) -> Result<(), Error<B::Error>>
+    fn write_generated_plane<B, F>(
+        &mut self,
+        bus: &mut B,
+        command: u8,
+        fill: &mut F,
+    ) -> Result<(), Error<B::Error>>
     where
+        B: DisplayBus,
         F: FnMut(usize, &mut [u8]),
     {
         let mut chunk = [0; SOLID_CHUNK];
-        self.bus.begin_ram_write(command).map_err(Error::Bus)?;
+        bus.begin_ram_write(command).map_err(Error::Bus)?;
 
         let mut offset = 0;
         while offset < FRAME_BYTES {
             let length = (FRAME_BYTES - offset).min(SOLID_CHUNK);
             fill(offset, &mut chunk[..length]);
-            if let Err(error) = self.bus.write_ram(&chunk[..length]) {
-                let _ = self.bus.end_ram_write();
+            if let Err(error) = bus.write_ram(&chunk[..length]) {
+                let _ = bus.end_ram_write();
                 return Err(Error::Bus(error));
             }
             offset += length;
         }
 
-        self.bus.end_ram_write().map_err(Error::Bus)
+        bus.end_ram_write().map_err(Error::Bus)
     }
 
-    fn write_frame_plane(&mut self, command: u8, frame: &[u8]) -> Result<(), Error<B::Error>> {
-        self.bus.begin_ram_write(command).map_err(Error::Bus)?;
+    fn write_frame_plane<B>(
+        &mut self,
+        bus: &mut B,
+        command: u8,
+        frame: &[u8],
+    ) -> Result<(), Error<B::Error>>
+    where
+        B: DisplayBus,
+    {
+        bus.begin_ram_write(command).map_err(Error::Bus)?;
 
         for chunk in frame.chunks(SOLID_CHUNK) {
-            if let Err(error) = self.bus.write_ram(chunk) {
-                let _ = self.bus.end_ram_write();
+            if let Err(error) = bus.write_ram(chunk) {
+                let _ = bus.end_ram_write();
                 return Err(Error::Bus(error));
             }
         }
 
-        self.bus.end_ram_write().map_err(Error::Bus)
+        bus.end_ram_write().map_err(Error::Bus)
     }
 
-    fn command(&mut self, command: u8, data: &[u8]) -> Result<(), Error<B::Error>> {
-        self.bus.command(command, data).map_err(Error::Bus)
+    fn command<B>(&mut self, bus: &mut B, command: u8, data: &[u8]) -> Result<(), Error<B::Error>>
+    where
+        B: DisplayBus,
+    {
+        bus.command(command, data).map_err(Error::Bus)
     }
 }
 
@@ -357,11 +434,8 @@ mod tests {
 
     #[test]
     fn initialization_matches_x4_golden_transcript() {
-        let mut controller = Ssd1677::new(FakeBus::default());
-        {
-            let _display = controller.initialize().unwrap();
-        }
-        let bus = controller.into_bus();
+        let mut bus = FakeBus::default();
+        let _display = Ssd1677::new().initialize(&mut bus).unwrap();
 
         assert_eq!(
             bus.events,
@@ -388,48 +462,46 @@ mod tests {
 
     #[test]
     fn initialization_stops_on_busy_failure() {
-        let bus = FakeBus {
+        let mut bus = FakeBus {
             fail_next_wait: true,
             ..FakeBus::default()
         };
 
-        let mut controller = Ssd1677::new(bus);
-        let result = controller.initialize();
+        let result = Ssd1677::new().initialize(&mut bus);
 
         assert!(matches!(result, Err(Error::Bus(FakeError::Wait))));
         assert_eq!(
-            controller.into_bus().events,
+            bus.events,
             [Event::Reset, Event::Command(0x12, vec![]), Event::WaitReady]
         );
     }
 
     #[test]
     fn white_ram_stage_does_not_activate_the_panel() {
-        let mut controller = Ssd1677::new(FakeBus::default());
-        let mut display = controller.initialize().unwrap();
-        display.bus.events.clear();
+        let mut bus = FakeBus::default();
+        let mut display = Ssd1677::new().initialize(&mut bus).unwrap();
+        bus.events.clear();
 
-        display.write_white_frame().unwrap();
+        display.write_white_frame(&mut bus).unwrap();
 
-        assert!(!display.bus.events.iter().any(|event| matches!(
+        assert!(!bus.events.iter().any(|event| matches!(
             event,
             Event::Command(CMD_MASTER_ACTIVATION, _)
                 | Event::Command(CMD_DISPLAY_UPDATE_CTRL2, _)
                 | Event::WaitReady
         )));
-        assert_eq!(display.bus.events.last(), Some(&Event::EndRam));
+        assert_eq!(bus.events.last(), Some(&Event::EndRam));
     }
 
     #[test]
     fn white_refresh_writes_both_planes_and_activates() {
-        let mut controller = Ssd1677::new(FakeBus::default());
-        let mut display = controller.initialize().unwrap();
-        display.bus.events.clear();
+        let mut bus = FakeBus::default();
+        let mut display = Ssd1677::new().initialize(&mut bus).unwrap();
+        bus.events.clear();
 
-        display.refresh_white().unwrap();
+        display.refresh_white(&mut bus).unwrap();
 
-        let begin_commands: Vec<u8> = display
-            .bus
+        let begin_commands: Vec<u8> = bus
             .events
             .iter()
             .filter_map(|event| match event {
@@ -437,8 +509,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        let ram: Vec<&[u8]> = display
-            .bus
+        let ram: Vec<&[u8]> = bus
             .events
             .iter()
             .filter_map(|event| match event {
@@ -454,7 +525,7 @@ mod tests {
             ram.iter()
                 .all(|chunk| chunk.iter().all(|byte| *byte == 0xFF))
         );
-        assert!(display.bus.events.ends_with(&[
+        assert!(bus.events.ends_with(&[
             Event::Command(CMD_DISPLAY_UPDATE_CTRL1, vec![0x40, 0x00]),
             Event::Command(CMD_DISPLAY_UPDATE_CTRL2, vec![0xF4]),
             Event::Command(CMD_MASTER_ACTIVATION, vec![]),
@@ -464,15 +535,14 @@ mod tests {
 
     #[test]
     fn frame_refresh_transfers_exactly_two_full_planes() {
-        let mut controller = Ssd1677::new(FakeBus::default());
-        let mut display = controller.initialize().unwrap();
-        display.bus.events.clear();
+        let mut bus = FakeBus::default();
+        let mut display = Ssd1677::new().initialize(&mut bus).unwrap();
+        bus.events.clear();
         let frame = vec![0xA5; FRAME_BYTES];
 
-        display.refresh_frame(&frame).unwrap();
+        display.refresh_frame(&mut bus, &frame).unwrap();
 
-        let ram: Vec<&[u8]> = display
-            .bus
+        let ram: Vec<&[u8]> = bus
             .events
             .iter()
             .filter_map(|event| match event {
@@ -492,20 +562,19 @@ mod tests {
 
     #[test]
     fn generated_frame_restarts_at_zero_for_each_plane() {
-        let mut controller = Ssd1677::new(FakeBus::default());
-        let mut display = controller.initialize().unwrap();
-        display.bus.events.clear();
+        let mut bus = FakeBus::default();
+        let mut display = Ssd1677::new().initialize(&mut bus).unwrap();
+        bus.events.clear();
 
         display
-            .write_generated_frame(|offset, output| {
+            .write_generated_frame(&mut bus, |offset, output| {
                 for (index, byte) in output.iter_mut().enumerate() {
                     *byte = ((offset + index) % 251) as u8;
                 }
             })
             .unwrap();
 
-        let ram: Vec<u8> = display
-            .bus
+        let ram: Vec<u8> = bus
             .events
             .iter()
             .filter_map(|event| match event {
@@ -524,25 +593,22 @@ mod tests {
 
     #[test]
     fn deep_sleep_uses_the_ssd1677_check_code_without_waiting() {
-        let mut controller = Ssd1677::new(FakeBus::default());
-        let mut display = controller.initialize().unwrap();
-        display.bus.events.clear();
+        let mut bus = FakeBus::default();
+        let display = Ssd1677::new().initialize(&mut bus).unwrap();
+        bus.events.clear();
 
-        display.enter_deep_sleep().unwrap();
+        display.enter_deep_sleep(&mut bus).unwrap();
 
-        assert_eq!(
-            controller.into_bus().events,
-            [Event::Command(CMD_DEEP_SLEEP, vec![0x03])]
-        );
+        assert_eq!(bus.events, [Event::Command(CMD_DEEP_SLEEP, vec![0x03])]);
     }
 
     #[test]
     fn invalid_frame_length_does_not_touch_the_bus() {
-        let mut controller = Ssd1677::new(FakeBus::default());
-        let mut display = controller.initialize().unwrap();
-        display.bus.events.clear();
+        let mut bus = FakeBus::default();
+        let mut display = Ssd1677::new().initialize(&mut bus).unwrap();
+        bus.events.clear();
 
-        let result = display.refresh_frame(&[0xFF; 32]);
+        let result = display.refresh_frame(&mut bus, &[0xFF; 32]);
 
         assert_eq!(
             result,
@@ -551,6 +617,25 @@ mod tests {
                 actual: 32,
             })
         );
-        assert!(display.bus.events.is_empty());
+        assert!(bus.events.is_empty());
+    }
+
+    #[test]
+    fn ready_panel_refreshes_across_bus_sessions_without_reinitialization() {
+        let mut bus = FakeBus::default();
+        let mut display = Ssd1677::new().initialize(&mut bus).unwrap();
+        bus.events.clear();
+
+        display.refresh_white(&mut bus).unwrap();
+        let first_session_events = bus.events.len();
+        display.refresh_solid(&mut bus, 0x00).unwrap();
+
+        assert!(
+            !bus.events
+                .iter()
+                .any(|event| matches!(event, Event::Reset | Event::Command(0x12, _))),
+            "a ready panel never re-runs the reset or software-reset sequence"
+        );
+        assert!(bus.events.len() > first_session_events);
     }
 }
