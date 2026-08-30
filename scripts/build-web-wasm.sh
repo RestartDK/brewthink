@@ -4,14 +4,15 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILE=debug
-CARGO_PROFILE=()
 
 if [[ "${1:-}" == "--release" ]]; then
   PROFILE=release
-  CARGO_PROFILE=(--release)
+  set -- --release
 elif [[ $# -ne 0 ]]; then
   echo "usage: scripts/build-web-wasm.sh [--release]" >&2
   exit 1
+else
+  set --
 fi
 
 command -v cargo >/dev/null || {
@@ -30,7 +31,7 @@ RUSTFLAGS="${RUSTFLAGS:-} -C panic=abort" cargo build \
   --target wasm32-unknown-unknown \
   --features web-sim \
   --bin web-sim \
-  "${CARGO_PROFILE[@]}"
+  "$@"
 
 GENERATED_DIR="$ROOT_DIR/web/src/generated"
 TEMP_DIR="$(mktemp -d "$ROOT_DIR/target/web-wasm-bindgen.XXXXXX")"

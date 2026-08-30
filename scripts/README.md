@@ -12,15 +12,79 @@ This runs formatting, host pin-map/display tests, a WASM library check, embedded
 
 ## Display diagnostic images
 
-The default build uses display stage `none`. Select a hardware diagnostic explicitly when building:
+The default build uses diagnostic stage `heartbeat`. Select a display diagnostic explicitly when building:
 
 ```bash
-BREWTHINK_DISPLAY_STAGE=orientation \
+BREWTHINK_DIAGNOSTIC_STAGE=display-orientation \
 BREWTHINK_DISPLAY_ROTATION=270 \
   scripts/build-app1-image.sh artifacts/brewthink-display-rotation-270-app1.bin
 ```
 
-Valid stages are `reset`, `initialize`, `write`, `refresh`, `black`, `checkerboard`, `orientation`, and `image`. Rotation accepts `0`, `90`, `180`, or `270`; it defaults to Brewthink's corrected portrait value of `270`. The 0°/180° frames are 800 × 480 and the 90°/270° frames are 480 × 800. Each stage runs once and holds without retry. See `docs/display-bringup.md` for the command transcript and staged procedure.
+Valid stages are `display-reset`, `display-initialize`, `display-write`, `display-refresh`, `display-black`, `display-checkerboard`, `display-orientation`, and `display-image`. Rotation accepts `0`, `90`, `180`, or `270`; it defaults to Brewthink's corrected portrait value of `270`. The 0°/180° frames are 800 × 480 and the 90°/270° frames are 480 × 800. Each stage runs once and holds without retry. See `docs/display-bringup.md` for the command transcript and staged procedure.
+
+## Raw input diagnostic image
+
+```bash
+scripts/build-inputs-raw-app1.sh
+```
+
+This stage samples calibrated GPIO0/GPIO1/GPIO2 ADC voltages plus GPIO3 power-button and GPIO20 USB-detect levels every 100 ms. It keeps display and SD chip selects high and does not initialize SPI, the display, SD protocol, GPIO13, or radio hardware.
+
+Build the debounced button-event stage from this unit's measured voltage bands with:
+
+```bash
+scripts/build-inputs-events-app1.sh
+```
+
+It samples every 20 ms, requires three consecutive readings, emits one structured press and release event per transition, and rejects voltages outside the measured bands instead of assigning them to the nearest button.
+
+Build the battery and USB transition stage with:
+
+```bash
+scripts/build-power-usb-app1.sh
+```
+
+After booting that image once, stop `espflash monitor` and use the reconnecting, read-only serial collector:
+
+```bash
+ESPFLASH_PORT=/dev/cu.usbmodemXXXX tools/device-bench.py
+```
+
+The collector sends no serial data and requests neither reset nor download mode. The firmware records the number and battery-voltage range of samples taken while USB is disconnected, then reports that retained in-RAM summary after USB reconnects. A reset or loss of battery power during disconnection intentionally loses the summary and fails the test.
+
+## Read-only microSD diagnostic image
+
+```bash
+scripts/build-storage-readonly-app1.sh
+```
+
+This stage owns SPI2 exclusively, keeps display CS GPIO21 high during every SD session, initializes the card at 400 kHz, enables command/data CRC, then switches to 10 MHz. Its storage API exposes initialization and single-sector reads only: it has no block-write operation and sends no SD write command. It reads the CSD, sector zero, and—when present—the first MBR partition's boot sector to report capacity, partition metadata, and FAT/exFAT identification. The completion record explicitly reports `sectors_written=0` and both chip selects high.
+
+## Disposable microSD write-test image
+
+Build only after confirming the inserted card is disposable or backed up:
+
+```bash
+scripts/build-storage-write-test-app1.sh
+```
+
+The write path is excluded from normal firmware and exists only behind the `sd-write-diagnostic` feature. It refuses to run if `BWTST001.TMP` already exists. Otherwise it creates that root-directory file with a fixed 52-byte payload, flushes and closes it, reopens and verifies the exact bytes, deletes it, and confirms it is absent. If creation or verification fails after the target was known to be absent, it still attempts cleanup and reports if the file remains. The diagnostic may update the FAT, directory, free-space metadata, and one allocated data cluster. Do not flash or boot it until the exact app1 range and removable-media operation receive separate approval.
+
+## Integrated device diagnostic image
+
+```bash
+scripts/build-integrated-device-app1.sh
+```
+
+This read-only stage uses one SPI2 owner to initialize and fingerprint microSD sector zero, switch the bus to the SSD1677 for a checkerboard full refresh, then reinitialize the card and verify that sector zero is unchanged. After both chip selects return high, it samples buttons, battery voltage, and USB state every 20 ms. The stage contains no SD write capability because it is built without `sd-write-diagnostic`.
+
+## Display and ESP32-C3 sleep/wake image
+
+```bash
+scripts/build-sleep-wake-app1.sh
+```
+
+On an ordinary boot, this stage refreshes the orientation pattern, sends the SSD1677 deep-sleep command and check code, verifies both shared-SPI chip selects high, then enters ESP32-C3 deep sleep with active-low GPIO3 as the only wake source. Waking with the power button causes a fresh boot, hardware-resets the display out of deep sleep, refreshes it white, and holds without sleeping again. GPIO13 is not initialized. The stage has no SD write capability.
 
 Build a JPEG, PNG, BMP, or PNM into an app1 image with:
 

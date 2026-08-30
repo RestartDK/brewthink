@@ -5,9 +5,10 @@ rust-version = "1.88"
 version      = "0.1.0"
 
 [features]
-default          = []
-host-image-tools = ["dep:image"]
-web-sim          = ["dep:image", "dep:wasm-bindgen"]
+default             = []
+host-image-tools    = ["dep:image"]
+sd-write-diagnostic = ["dep:embedded-sdmmc"]
+web-sim             = ["dep:image", "dep:wasm-bindgen"]
 
 [[bin]]
 name = "brewthink"
@@ -24,7 +25,8 @@ path              = "./src/bin/web-sim.rs"
 required-features = ["web-sim"]
 
 [dependencies]
-embedded-hal = "1.0.0"
+embedded-hal   = "1.0.0"
+embedded-sdmmc = { version = "=0.10.0", optional = true }
 
 [target.'cfg(not(target_arch = "riscv32"))'.dependencies]
 image = { version = "0.25.10", optional = true, default-features = false, features = ["bmp", "jpeg", "png", "pnm"] }
@@ -41,6 +43,8 @@ esp-bootloader-esp-idf = { version = "0.5.0", features = ["defmt", "esp32c3"] }
 esp-hal                = { version = "~1.1.0", features = ["defmt", "esp32c3", "unstable"] }
 esp-println            = { version = "0.17.0", features = ["defmt-espflash", "esp32c3"] }
 esp-rtos               = { version = "0.3.0", features = ["defmt", "embassy", "esp32c3"] }
+nb                     = "1.1.0"
+static_cell            = "2.1.1"
 
 
 # For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html

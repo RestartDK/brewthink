@@ -1,0 +1,407 @@
+#[cfg(feature = "sd-write-diagnostic")]
+use core::{
+    cell::{Cell, RefCell},
+    fmt,
+};
+
+#[cfg(feature = "sd-write-diagnostic")]
+use embedded_sdmmc::{Block, BlockCount, BlockDevice, BlockIdx};
+use esp_hal::{
+    Blocking,
+    delay::Delay,
+    gpio::{Input, InputConfig, Level, Output, OutputConfig},
+    peripherals::{GPIO4, GPIO5, GPIO6, GPIO7, GPIO8, GPIO10, SPI2},
+    spi::{
+        Error as SpiError, Mode,
+        master::{Config, ConfigError, Spi},
+    },
+    time::Rate,
+};
+
+use crate::display::ssd1677::DisplayBus;
+#[cfg(feature = "sd-write-diagnostic")]
+use crate::storage::ExplicitWriteSdCard;
+use crate::storage::{ReadOnlySdSpi, SdSpiClock};
+
+use super::{
+    SharedSpiChipSelects,
+    shared_spi::{SharedSpi, SharedSpiDevice, SharedSpiError},
+};
+
+const INITIALIZATION_FREQUENCY: Rate = Rate::from_khz(400);
+const TRANSFER_FREQUENCY: Rate = Rate::from_mhz(10);
+const DISPLAY_FREQUENCY: Rate = Rate::from_mhz(20);
+const DISPLAY_BUSY_TIMEOUT_POLLS: usize = 15_000;
+
+pub type X4SharedSpi<'d> = SharedSpi<Spi<'d, Blocking>, Output<'d>, Output<'d>>;
+
+#[derive(Clone, Copy, Debug, defmt::Format)]
+pub enum X4StorageError {
+    Configuration(ConfigError),
+    Spi(SharedSpiError<SpiError>),
+    DisplayBusyTimeout,
+}
+
+#[cfg(feature = "sd-write-diagnostic")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum X4FatBlockDeviceError {
+    Card,
+    BlockIndexOverflow,
+    CapacityOverflow,
+}
+
+#[cfg(feature = "sd-write-diagnostic")]
+impl fmt::Display for X4FatBlockDeviceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Card => "SD card operation failed",
+            Self::BlockIndexOverflow => "block index overflowed",
+            Self::CapacityOverflow => "card capacity exceeds the FAT block-device limit",
+        })
+    }
+}
+
+#[cfg(feature = "sd-write-diagnostic")]
+impl core::error::Error for X4FatBlockDeviceError {}
+
+#[cfg(feature = "sd-write-diagnostic")]
+pub struct X4FatBlockDevice<'d> {
+    card: RefCell<ExplicitWriteSdCard<X4StorageHardware<'d>>>,
+    sectors_read: Cell<u32>,
+    sectors_written: Cell<u32>,
+}
+
+pub struct X4SharedSpiPeripherals<'d> {
+    spi: SPI2<'d>,
+    clock: GPIO8<'d>,
+    mosi: GPIO10<'d>,
+    miso: GPIO7<'d>,
+    display_data_command: GPIO4<'d>,
+    display_reset: GPIO5<'d>,
+    display_busy: GPIO6<'d>,
+}
+
+pub struct X4StorageHardware<'d> {
+    shared: X4SharedSpi<'d>,
+    display_data_command: Output<'d>,
+    display_reset: Output<'d>,
+    display_busy: Input<'d>,
+    delay: Delay,
+}
+
+pub struct X4SharedDisplayBus<'a, 'd> {
+    shared: &'a mut X4SharedSpi<'d>,
+    data_command: &'a mut Output<'d>,
+    reset: &'a mut Output<'d>,
+    busy: &'a mut Input<'d>,
+    delay: &'a mut Delay,
+}
+
+impl<'d> X4SharedSpiPeripherals<'d> {
+    pub fn new(
+        spi: SPI2<'d>,
+        clock: GPIO8<'d>,
+        mosi: GPIO10<'d>,
+        miso: GPIO7<'d>,
+        display_data_command: GPIO4<'d>,
+        display_reset: GPIO5<'d>,
+        display_busy: GPIO6<'d>,
+    ) -> Self {
+        Self {
+            spi,
+            clock,
+            mosi,
+            miso,
+            display_data_command,
+            display_reset,
+            display_busy,
+        }
+    }
+}
+
+impl<'d> X4StorageHardware<'d> {
+    pub fn new(
+        peripherals: X4SharedSpiPeripherals<'d>,
+        chip_selects: SharedSpiChipSelects<'d>,
+    ) -> Result<Self, ConfigError> {
+        let (display_chip_select, sd_chip_select) = chip_selects.into_parts();
+        let spi = Spi::new(
+            peripherals.spi,
+            Config::default()
+                .with_frequency(INITIALIZATION_FREQUENCY)
+                .with_mode(Mode::_0),
+        )?
+        .with_sck(peripherals.clock)
+        .with_mosi(peripherals.mosi)
+        .with_miso(peripherals.miso);
+
+        Ok(Self {
+            shared: SharedSpi::new(spi, display_chip_select, sd_chip_select),
+            display_data_command: Output::new(
+                peripherals.display_data_command,
+                Level::High,
+                OutputConfig::default(),
+            ),
+            display_reset: Output::new(
+                peripherals.display_reset,
+                Level::High,
+                OutputConfig::default(),
+            ),
+            display_busy: Input::new(peripherals.display_busy, InputConfig::default()),
+            delay: Delay::new(),
+        })
+    }
+
+    pub fn display_bus(&mut self) -> Result<X4SharedDisplayBus<'_, 'd>, X4StorageError> {
+        self.shared
+            .spi_mut()
+            .map_err(X4StorageError::Spi)?
+            .apply_config(
+                &Config::default()
+                    .with_frequency(DISPLAY_FREQUENCY)
+                    .with_mode(Mode::_0),
+            )
+            .map_err(X4StorageError::Configuration)?;
+        Ok(X4SharedDisplayBus {
+            shared: &mut self.shared,
+            data_command: &mut self.display_data_command,
+            reset: &mut self.display_reset,
+            busy: &mut self.display_busy,
+            delay: &mut self.delay,
+        })
+    }
+
+    pub fn display_is_deselected(&mut self) -> bool {
+        self.shared.display_is_deselected()
+    }
+
+    pub fn sd_is_deselected(&mut self) -> bool {
+        self.shared.sd_is_deselected()
+    }
+
+    pub fn both_are_deselected(&mut self) -> bool {
+        self.shared.both_are_deselected()
+    }
+}
+
+impl X4SharedDisplayBus<'_, '_> {
+    fn finish<T>(&mut self, operation: Result<T, X4StorageError>) -> Result<T, X4StorageError> {
+        let end = self
+            .shared
+            .end(SharedSpiDevice::Display)
+            .map_err(X4StorageError::Spi);
+        match (operation, end) {
+            (Err(error), _) | (Ok(_), Err(error)) => Err(error),
+            (Ok(value), Ok(())) => Ok(value),
+        }
+    }
+}
+
+impl DisplayBus for X4SharedDisplayBus<'_, '_> {
+    type Error = X4StorageError;
+
+    fn reset(&mut self) {
+        self.reset.set_high();
+        embedded_hal::delay::DelayNs::delay_ms(self.delay, 20);
+        self.reset.set_low();
+        embedded_hal::delay::DelayNs::delay_ms(self.delay, 2);
+        self.reset.set_high();
+        embedded_hal::delay::DelayNs::delay_ms(self.delay, 20);
+    }
+
+    fn command(&mut self, command: u8, data: &[u8]) -> Result<(), Self::Error> {
+        self.shared
+            .begin(SharedSpiDevice::Display)
+            .map_err(X4StorageError::Spi)?;
+        self.data_command.set_low();
+        let operation = (|| {
+            self.shared
+                .write(SharedSpiDevice::Display, &[command])
+                .map_err(X4StorageError::Spi)?;
+            self.shared
+                .flush(SharedSpiDevice::Display)
+                .map_err(X4StorageError::Spi)?;
+            if !data.is_empty() {
+                self.data_command.set_high();
+                self.shared
+                    .write(SharedSpiDevice::Display, data)
+                    .map_err(X4StorageError::Spi)?;
+            }
+            Ok(())
+        })();
+        self.finish(operation)
+    }
+
+    fn begin_ram_write(&mut self, command: u8) -> Result<(), Self::Error> {
+        self.shared
+            .begin(SharedSpiDevice::Display)
+            .map_err(X4StorageError::Spi)?;
+        self.data_command.set_low();
+        let command_result = self
+            .shared
+            .write(SharedSpiDevice::Display, &[command])
+            .and_then(|()| self.shared.flush(SharedSpiDevice::Display))
+            .map_err(X4StorageError::Spi);
+        if let Err(error) = command_result {
+            let _ = self.finish::<()>(Err(error));
+            return Err(error);
+        }
+        self.data_command.set_high();
+        Ok(())
+    }
+
+    fn write_ram(&mut self, data: &[u8]) -> Result<(), Self::Error> {
+        self.shared
+            .write(SharedSpiDevice::Display, data)
+            .map_err(X4StorageError::Spi)
+    }
+
+    fn end_ram_write(&mut self) -> Result<(), Self::Error> {
+        self.finish(Ok(()))
+    }
+
+    fn wait_ready(&mut self) -> Result<(), Self::Error> {
+        embedded_hal::delay::DelayNs::delay_ms(self.delay, 1);
+        for _ in 0..DISPLAY_BUSY_TIMEOUT_POLLS {
+            if self.busy.is_low() {
+                return Ok(());
+            }
+            embedded_hal::delay::DelayNs::delay_ms(self.delay, 1);
+        }
+        Err(X4StorageError::DisplayBusyTimeout)
+    }
+}
+
+#[cfg(feature = "sd-write-diagnostic")]
+impl<'d> X4FatBlockDevice<'d> {
+    pub fn new(card: ExplicitWriteSdCard<X4StorageHardware<'d>>) -> Self {
+        Self {
+            card: RefCell::new(card),
+            sectors_read: Cell::new(0),
+            sectors_written: Cell::new(0),
+        }
+    }
+
+    pub fn sectors_read(&self) -> u32 {
+        self.sectors_read.get()
+    }
+
+    pub fn sectors_written(&self) -> u32 {
+        self.sectors_written.get()
+    }
+
+    pub fn chip_select_states(&self) -> (bool, bool, bool) {
+        let mut card = self.card.borrow_mut();
+        let hardware = card.bus_mut();
+        let display_high = hardware.display_is_deselected();
+        let sd_high = hardware.sd_is_deselected();
+        let both_high = hardware.both_are_deselected();
+        (display_high, sd_high, both_high)
+    }
+
+    pub fn into_card(self) -> ExplicitWriteSdCard<X4StorageHardware<'d>> {
+        self.card.into_inner()
+    }
+
+    fn block_index(start: u32, offset: usize) -> Result<u32, X4FatBlockDeviceError> {
+        let offset =
+            u32::try_from(offset).map_err(|_| X4FatBlockDeviceError::BlockIndexOverflow)?;
+        start
+            .checked_add(offset)
+            .ok_or(X4FatBlockDeviceError::BlockIndexOverflow)
+    }
+}
+
+#[cfg(feature = "sd-write-diagnostic")]
+impl BlockDevice for X4FatBlockDevice<'_> {
+    type Error = X4FatBlockDeviceError;
+
+    fn read(&self, blocks: &mut [Block], start_block_idx: BlockIdx) -> Result<(), Self::Error> {
+        let mut card = self.card.borrow_mut();
+        for (offset, block) in blocks.iter_mut().enumerate() {
+            let index = Self::block_index(start_block_idx.0, offset)?;
+            card.read_block(index, &mut block.contents)
+                .map_err(|_| X4FatBlockDeviceError::Card)?;
+            self.sectors_read
+                .set(self.sectors_read.get().saturating_add(1));
+        }
+        Ok(())
+    }
+
+    fn write(&self, blocks: &[Block], start_block_idx: BlockIdx) -> Result<(), Self::Error> {
+        let mut card = self.card.borrow_mut();
+        for (offset, block) in blocks.iter().enumerate() {
+            let index = Self::block_index(start_block_idx.0, offset)?;
+            card.write_block(index, &block.contents)
+                .map_err(|_| X4FatBlockDeviceError::Card)?;
+            self.sectors_written
+                .set(self.sectors_written.get().saturating_add(1));
+        }
+        Ok(())
+    }
+
+    fn num_blocks(&self) -> Result<BlockCount, Self::Error> {
+        let count = self
+            .card
+            .borrow()
+            .card_info()
+            .ok_or(X4FatBlockDeviceError::Card)?
+            .block_count;
+        let count = u32::try_from(count).map_err(|_| X4FatBlockDeviceError::CapacityOverflow)?;
+        Ok(BlockCount(count))
+    }
+}
+
+impl ReadOnlySdSpi for X4StorageHardware<'_> {
+    type Error = X4StorageError;
+
+    fn set_clock(&mut self, clock: SdSpiClock) -> Result<(), Self::Error> {
+        let frequency = match clock {
+            SdSpiClock::Initialization => INITIALIZATION_FREQUENCY,
+            SdSpiClock::Transfer => TRANSFER_FREQUENCY,
+        };
+        self.shared
+            .spi_mut()
+            .map_err(X4StorageError::Spi)?
+            .apply_config(
+                &Config::default()
+                    .with_frequency(frequency)
+                    .with_mode(Mode::_0),
+            )
+            .map_err(X4StorageError::Configuration)
+    }
+
+    fn idle_clocks(&mut self, byte_count: usize) -> Result<(), Self::Error> {
+        self.shared
+            .idle_clocks(byte_count)
+            .map_err(X4StorageError::Spi)
+    }
+
+    fn begin_sd(&mut self) -> Result<(), Self::Error> {
+        self.shared
+            .begin(SharedSpiDevice::SdCard)
+            .map_err(X4StorageError::Spi)
+    }
+
+    fn write(&mut self, bytes: &[u8]) -> Result<(), Self::Error> {
+        self.shared
+            .write(SharedSpiDevice::SdCard, bytes)
+            .map_err(X4StorageError::Spi)
+    }
+
+    fn transfer_in_place(&mut self, bytes: &mut [u8]) -> Result<(), Self::Error> {
+        self.shared
+            .transfer_in_place(SharedSpiDevice::SdCard, bytes)
+            .map_err(X4StorageError::Spi)
+    }
+
+    fn end_sd(&mut self) -> Result<(), Self::Error> {
+        self.shared
+            .end(SharedSpiDevice::SdCard)
+            .map_err(X4StorageError::Spi)
+    }
+
+    fn delay_us(&mut self, microseconds: u32) {
+        embedded_hal::delay::DelayNs::delay_us(&mut self.delay, microseconds);
+    }
+}

@@ -5,7 +5,7 @@ const GENERATED_IMAGE_NAME: &str = "brewthink-image.bin";
 
 fn main() {
     linker_be_nice();
-    for variable in ["BREWTHINK_DISPLAY_STAGE", "BREWTHINK_IMAGE_FRAME"] {
+    for variable in ["BREWTHINK_DIAGNOSTIC_STAGE", "BREWTHINK_IMAGE_FRAME"] {
         println!("cargo:rerun-if-env-changed={variable}");
     }
 
@@ -26,7 +26,7 @@ fn prepare_image() -> Result<(), Box<dyn Error>> {
     let output = PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR is missing")?)
         .join(GENERATED_IMAGE_NAME);
 
-    if env::var("BREWTHINK_DISPLAY_STAGE").as_deref() != Ok("image") {
+    if env::var("BREWTHINK_DIAGNOSTIC_STAGE").as_deref() != Ok("display-image") {
         fs::write(output, [0xFF; DISPLAY_FRAME_BYTES as usize])?;
         return Ok(());
     }

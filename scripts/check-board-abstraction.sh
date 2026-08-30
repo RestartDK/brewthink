@@ -16,6 +16,13 @@ cargo test \
   --lib \
   --target "$HOST_TARGET"
 
+printf '\n== Host SD write diagnostic tests (%s) ==\n' "$HOST_TARGET"
+cargo test \
+  --config 'unstable.build-std=["std","panic_abort"]' \
+  --features sd-write-diagnostic \
+  --lib \
+  --target "$HOST_TARGET"
+
 printf '\n== Host image tool clippy ==\n'
 cargo clippy \
   --config 'unstable.build-std=["std","panic_abort"]' \
@@ -32,6 +39,9 @@ cargo check
 
 printf '\n== Embedded target clippy ==\n'
 cargo clippy --lib --bin brewthink -- -D warnings
+
+printf '\n== Embedded SD write diagnostic Clippy ==\n'
+cargo clippy --lib --bin brewthink --features sd-write-diagnostic -- -D warnings
 
 printf '\n== ESP32-C3 app1 image ==\n'
 scripts/build-app1-image.sh

@@ -126,16 +126,16 @@ shared app-core/render-core
 Timing:
 
 - [x] Start this after raw framebuffer/display rendering works on the real X4.
-- [ ] Add it before the library app becomes large, so UI/state/rendering boundaries stay clean.
+- [x] Add it before the library app becomes large, so UI/state/rendering boundaries stay clean.
 
 Core tasks:
 
 - [x] Add `wasm32-unknown-unknown` to `rust-toolchain.toml`.
-- [ ] Add web tooling to `flake.nix`, likely `trunk`, `wasm-bindgen-cli`, and `binaryen`.
-- [ ] Create a `web-sim` crate/app.
+- [x] Add Bun and `wasm-bindgen-cli` to `flake.nix`.
+- [x] Create the `web-sim` WASM app and Vite frontend.
 - [ ] Create or extract shared `app-core` for state transitions.
-- [ ] Create or extract shared rendering code that outputs the default 480 × 800 portrait framebuffer.
-- [ ] Render the shared framebuffer to an HTML canvas.
+- [x] Create shared rendering code that outputs the default 480 × 800 portrait framebuffer.
+- [x] Render the shared framebuffer to an HTML canvas.
 - [ ] Map keyboard input to the same button events used by firmware:
   - [ ] Arrow keys → Up/Down/Left/Right.
   - [ ] Enter → Confirm.
@@ -143,12 +143,12 @@ Core tasks:
   - [ ] P or Space → Power/action as appropriate.
 - [ ] Add fake battery state.
 - [ ] Add fake file list / fake SD storage.
-- [ ] Add browser file picker or drag-and-drop for image testing later.
+- [x] Add browser file picker and drag-and-drop for image testing.
 - [ ] Keep app logic host-testable with normal Rust tests.
 
 Shared concepts to define:
 
-- [ ] `ButtonEvent` enum shared by firmware and web.
+- [x] Define typed `ButtonEvent` and `ButtonTransition` values in the shared library.
 - [ ] `BatteryState` shared by firmware and web.
 - [x] Read-only `Frame` view and `Rotation` domain types shared by host, WASM, and firmware.
 - [x] Mutable packed `MonochromeImage` render target in `src/image/` for host, WASM, and firmware.
@@ -167,26 +167,27 @@ Useful simulator features later:
 
 Goal: collect user input and power state.
 
-- [ ] Create controller/input module.
-- [ ] Read GPIO1 ADC ladder for Back/Confirm/Left/Right.
-- [ ] Read GPIO2 ADC ladder for Up/Down.
-- [ ] Log raw ADC values from this physical unit.
-- [ ] Derive button ranges from measurements.
-- [ ] Add debounce and event generation.
-- [ ] Read GPIO3 power button as active-low digital input.
-- [ ] Create battery module.
-- [ ] Read GPIO0 battery ADC through 2 × 10 kΩ divider.
-- [ ] Convert ADC readings to millivolts.
+- [x] Create controller/input modules with typed samples, events, and errors.
+- [x] Read GPIO1 ADC ladder for Left/Right/Up/Down.
+- [x] Read GPIO2 ADC ladder for Back/Confirm.
+- [x] Log raw ADC values from this physical unit.
+- [x] Derive button ranges from physical measurements.
+- [x] Add three-sample, 20 ms debounce and press/release event generation.
+- [x] Read GPIO3 power button as active-low digital input.
+- [x] Create battery and USB power-state modules.
+- [x] Read GPIO0 battery ADC through the 2 × 10 kΩ divider.
+- [x] Convert ADC readings to battery millivolts without overflow.
+- [x] Verify battery-only execution and reset-free USB disconnect/reconnect reporting.
 - [ ] Estimate battery percentage conservatively.
-- [ ] Render diagnostic page showing last button event and battery percentage.
+- [ ] Render application UI showing the last button event and battery state.
 
 ## Milestone 8 — Local image browser
 
 Goal: scroll between selected images with buttons and show battery percentage.
 
-- [ ] Add shared SPI bus locking.
-- [ ] Add SD card initialization over SPI.
-- [ ] Verify display CS and SD CS never assert together.
+- [x] Add exclusive shared SPI2 display/SD sessions.
+- [x] Add CRC-protected read-only SD initialization and sector reads over SPI.
+- [x] Verify display CS and SD CS never assert together.
 - [ ] Mount/read filesystem from microSD.
 - [ ] List image files from a known directory.
 - [ ] Show first image.
@@ -200,14 +201,15 @@ Goal: scroll between selected images with buttons and show battery percentage.
 Goal: turn on/off safely and preserve battery.
 
 - [ ] Understand GPIO13 power-path role from reference firmware/schematic.
-- [ ] Implement display sleep.
-- [ ] Quiesce/deselect SD before sleep.
+- [x] Implement SSD1677 deep sleep with the required `0x03` check code.
+- [x] Quiesce SPI2 and deselect both display and SD before sleep.
 - [ ] Disable radios before sleep when added later.
-- [ ] Configure GPIO3 as wake source.
-- [ ] Enter ESP deep sleep.
-- [ ] Wake reliably with power button.
-- [ ] Render optional sleep screen before sleeping.
-- [ ] Allow user-selected sleep image eventually.
+- [x] Configure GPIO3 as the active-low RTC-IO wake source.
+- [x] Enter ESP32-C3 deep sleep.
+- [x] Wake reliably with the power button and reopen USB without host reset controls.
+- [x] Render and retain a diagnostic sleep screen before sleeping.
+- [x] Hardware-reset the SSD1677 out of deep sleep and refresh after wake.
+- [ ] Allow a user-selected sleep image.
 - [ ] Measure or estimate current draw if possible.
 
 ## Milestone 10 — Offline-first library app
@@ -249,6 +251,8 @@ Do this late; radios add RAM pressure, power cost, and async complexity.
 - [ ] Use BLE for setup/control/small metadata, not large transfer.
 - [ ] Test Wi-Fi and BLE separately before coexistence.
 
+- [ ] Add a mini tailscale client, see how to do this might be challenging fitting this in it ik https://tailscale.com/docs/how-to/set-up-small-tailscale talks about this problem but then how to reconnect etc.
+
 ## Milestone 13 — File transfer and Komga sync
 
 Goal: sync useful content while staying offline-first.
@@ -264,10 +268,17 @@ Goal: sync useful content while staying offline-first.
 - [ ] Add conflict/offline handling.
 - [ ] Add background sync policy only after manual sync is reliable.
 
+- [ ] Full theming with changing font, font size, spacing etc
+- [ ] OTA for device. should be made easy to help with actual dev of it with proper ci cd for this
+- [ ] Sleep screen
+- [ ] nearby file transfer on same network
+- [ ] Fully supported web app for interacting with it if wanted to tweak settings easily on local device
+
 ## Current immediate next steps
 
-- [x] Visually confirm the corrected 270° orientation and record the result.
-- [x] Display the build-time decoded sample image from guarded `app1`.
-- [ ] Record human inspection of the decoded sample's rotation and dither quality.
-- [ ] Add a host/WASM display backend around the shared packed image type.
-- [ ] Design bounded-memory runtime image decoding before adding SD image browsing.
+- [ ] Define host-testable `LibraryState`, `LibraryItem`, selection, and button transitions.
+- [ ] Render the first 480 × 800 library screen in the simulator with fixture items.
+- [ ] Add a normal-firmware, read-only FAT32 catalog for `/BREWTHINK`.
+- [ ] Show real SD files and explicit empty, missing-card, and unsupported-file states.
+- [ ] Open the first bounded-memory content format from the library.
+- [ ] Reuse the verified power-button sleep path from the library application.

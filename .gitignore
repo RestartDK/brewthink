@@ -8,6 +8,8 @@ target/
 /web/src/generated/
 /web/test-results/
 /web/playwright-report/
+**/__pycache__/
+*.py[cod]
 
 # Private X4 flash backups and extracted contents (keep locally, never commit)
 /backup/

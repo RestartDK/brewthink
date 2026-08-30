@@ -21,7 +21,11 @@ mkdir -p "$(dirname "$IMAGE")"
 cd "$ROOT_DIR"
 
 echo "Building release ELF for $CHIP..."
-cargo build --release
+if [[ -n "${BREWTHINK_CARGO_FEATURES:-}" ]]; then
+  cargo build --release --features "$BREWTHINK_CARGO_FEATURES"
+else
+  cargo build --release
+fi
 
 if [[ ! -f "$ELF" ]]; then
   echo "error: expected ELF not found after build: $ELF" >&2

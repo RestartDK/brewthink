@@ -2,7 +2,7 @@
 
 ## Scope
 
-Brewthink currently supports conservative monochrome full refreshes on the Xteink X4's 800 × 480 GDEQ0426T82 panel. The implementation deliberately excludes partial refresh, custom LUTs, grayscale, deep sleep, SD traffic, and radio initialization.
+Brewthink currently supports conservative monochrome full refreshes and explicit SSD1677 deep sleep on the Xteink X4's 800 × 480 GDEQ0426T82 panel. The implementation deliberately excludes partial refresh, custom LUTs, grayscale, and radio initialization. Integrated diagnostics serialize display and read-only SD traffic through one SPI2 owner.
 
 The portable code is under `src/display/`:
 
@@ -82,12 +82,18 @@ wait until BUSY is low
 
 The first `SpiBus::write` and every command/data phase are flushed before D/C or CS changes. A transport error deselects the display. A BUSY timeout is returned as an error; diagnostics stop and retain the GPIO/SPI objects without retrying.
 
+## Display deep sleep
+
+After a completed refresh and BUSY-low wait, `InitializedSsd1677::enter_deep_sleep` sends command `0x10` with check code `0x03`. The SSD1677 Rev 1.0 command table defines `A[1:0] = 11` as deep-sleep entry. BUSY remains high in this state, so the driver does not wait afterward. Only a hardware reset exits controller deep sleep; normal initialization already begins with that reset.
+
+The `sleep-wake` diagnostic refreshes the orientation pattern, puts the SSD1677 to sleep, verifies both SPI chip selects high, and puts the ESP32-C3 into deep sleep with GPIO3 as an active-low RTC-IO wake source. A GPIO3 wake reboots the chip, hardware-resets the display, refreshes it white, and reports the wake before holding without another sleep cycle. GPIO13 remains untouched.
+
 ## Diagnostic stages
 
-The default build uses stage `none` and does not initialize SPI or the display control pins. A stage must be selected at compile time:
+The default build uses diagnostic stage `heartbeat` and does not initialize SPI or the display control pins. A display stage must be selected at compile time:
 
 ```bash
-BREWTHINK_DISPLAY_STAGE=orientation \
+BREWTHINK_DIAGNOSTIC_STAGE=display-orientation \
 BREWTHINK_DISPLAY_ROTATION=270 \
   scripts/build-app1-image.sh artifacts/brewthink-display-rotation-270-app1.bin
 ```
@@ -98,14 +104,14 @@ Supported stages are cumulative:
 
 | Stage | Last operation |
 | --- | --- |
-| `reset` | Hardware reset only; no SSD1677 command |
-| `initialize` | Golden initialization and BUSY waits; no explicit refresh |
-| `write` | Write two white 48,000-byte planes; no activation |
-| `refresh` | Full white refresh |
-| `black` | Full black refresh |
-| `checkerboard` | Full 40 × 40-pixel checkerboard refresh |
-| `orientation` | Border, axes, and corner labels using `BREWTHINK_DISPLAY_ROTATION` |
-| `image` | Build-time decoded, scaled, and dithered 1-bit image |
+| `display-reset` | Hardware reset only; no SSD1677 command |
+| `display-initialize` | Golden initialization and BUSY waits; no explicit refresh |
+| `display-write` | Write two white 48,000-byte planes; no activation |
+| `display-refresh` | Full white refresh |
+| `display-black` | Full black refresh |
+| `display-checkerboard` | Full 40 × 40-pixel checkerboard refresh |
+| `display-orientation` | Border, axes, and corner labels using `BREWTHINK_DISPLAY_ROTATION` |
+| `display-image` | Build-time decoded, scaled, and dithered 1-bit image |
 
 Each diagnostic runs once, reports completion or failure, then holds without retry. Generated patterns and compiled images use a 256-byte transfer buffer rather than a 48 KB RAM framebuffer. See `docs/image-pipeline.md` for image preparation.
 

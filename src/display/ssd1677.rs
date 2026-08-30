@@ -7,6 +7,7 @@ pub const FRAME_BYTES: usize = ROW_BYTES * HEIGHT;
 
 const CMD_DRIVER_OUTPUT_CONTROL: u8 = 0x01;
 const CMD_BOOSTER_SOFT_START: u8 = 0x0C;
+const CMD_DEEP_SLEEP: u8 = 0x10;
 const CMD_DATA_ENTRY_MODE: u8 = 0x11;
 const CMD_SW_RESET: u8 = 0x12;
 const CMD_TEMP_SENSOR: u8 = 0x18;
@@ -192,6 +193,10 @@ where
         self.activate_full_refresh()
     }
 
+    pub fn enter_deep_sleep(mut self) -> Result<(), Error<B::Error>> {
+        self.command(CMD_DEEP_SLEEP, &[0x03])
+    }
+
     pub fn write_frame(&mut self, frame: &[u8]) -> Result<(), Error<B::Error>> {
         if frame.len() != FRAME_BYTES {
             return Err(Error::InvalidFrameLength {
@@ -287,7 +292,7 @@ mod tests {
     use std::{vec, vec::Vec};
 
     use super::{
-        CMD_DISPLAY_UPDATE_CTRL1, CMD_DISPLAY_UPDATE_CTRL2, CMD_MASTER_ACTIVATION,
+        CMD_DEEP_SLEEP, CMD_DISPLAY_UPDATE_CTRL1, CMD_DISPLAY_UPDATE_CTRL2, CMD_MASTER_ACTIVATION,
         CMD_WRITE_RAM_BW, CMD_WRITE_RAM_RED, DisplayBus, Error, FRAME_BYTES, Ssd1677,
     };
 
@@ -515,6 +520,20 @@ mod tests {
         assert_eq!(ram[0], 0);
         assert_eq!(ram[250], 250);
         assert_eq!(ram[251], 0);
+    }
+
+    #[test]
+    fn deep_sleep_uses_the_ssd1677_check_code_without_waiting() {
+        let mut controller = Ssd1677::new(FakeBus::default());
+        let mut display = controller.initialize().unwrap();
+        display.bus.events.clear();
+
+        display.enter_deep_sleep().unwrap();
+
+        assert_eq!(
+            controller.into_bus().events,
+            [Event::Command(CMD_DEEP_SLEEP, vec![0x03])]
+        );
     }
 
     #[test]
