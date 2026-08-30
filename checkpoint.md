@@ -183,130 +183,111 @@ Completed on 2026-08-22:
   final boot logs confirmed:   Brewthink heartbeat from app1
   ```
 
-## Current uncommitted work
+## Board abstraction status
 
-At the time this checkpoint was created, these files were expected to be uncommitted:
+Completed on 2026-08-30:
+
+- Added a host-testable X4 pin model under `src/x4/spec.rs`.
+- Added the ESP-only `SharedSpiChipSelects` adapter under `src/x4/board.rs`.
+- The adapter accepts only `GPIO21` for display CS and `GPIO12` for SD CS, initializes both high, and retains ownership.
+- Removed unused radio/network dependencies and restricted ESP dependencies to the RISC-V target so host tests do not compile hardware adapters.
+- Added `scripts/check-board-abstraction.sh` and a host-test CI job.
+- Four host pin-map and safety-invariant tests pass.
+- Embedded check, Clippy, release image generation, and image validation pass.
+- Wrote the new image only to app1 and verified readback:
+
+  ```text
+  image size:   93,680 bytes
+  write range:  0x650000..0x666DEF
+  SHA-256:      311f7eb27aebc6f17e5c28d721161457661eba1f8bc2a639d0a77acb8e6ca8e8
+  ```
+
+- Hardware monitor confirmed:
+
+  ```text
+  X4 display CS GPIO21 high=true
+  X4 SD CS GPIO12 high=true
+  Brewthink heartbeat 0
+  Brewthink heartbeat 1
+  ```
+
+- The default build still leaves SPI, display reset, SD protocol, GPIO13, radio, and firmware flash-writing paths uninitialized.
+
+## Display driver and bring-up status
+
+Completed on 2026-08-30:
+
+- Added the portable `src/display/bus.rs` and `src/display/ssd1677.rs` modules on `embedded-hal` traits.
+- Added the typed ESP32-C3 adapter in `src/x4/display.rs` for SPI2, GPIO8/GPIO10, and GPIO4/GPIO5/GPIO6 while retaining GPIO12 high.
+- Reconciled the 800 × 480 initialization and full-refresh sequences against OpenX4, MarigoldOS, and the SSD1677 datasheet.
+- Added a byte-for-byte initialization transcript test, reset timing test, active-high BUSY timeout tests, SPI failure/deselect test, frame-size validation, exact two-plane transfer tests, and no-activation RAM-stage test.
+- Added heap-free white, black, checkerboard, and labeled orientation patterns using a 256-byte transfer buffer.
+- Added public `Frame` and `Rotation` types supporting 0°/90°/180°/270° with logical dimensions derived from rotation.
+- Set the default to 270° after physical inspection found the first 90° portrait result upside down.
+- Added `wasm32-unknown-unknown` to the toolchain and CI; the portable library checks successfully for WASM.
+- Documented the command contract and stages in `docs/display-bringup.md`.
+- Host tests, embedded check, WASM check, Clippy, image checks, and `nix flake check` pass.
+
+The physical X4 completed these guarded stages without SPI errors, BUSY timeouts, panics, or retries:
+
+1. Hardware reset only.
+2. Initialization and automatic RAM clears.
+3. Two explicit 48,000-byte white RAM-plane writes without activation.
+4. White full refresh.
+5. Black full refresh.
+6. 40 × 40-pixel checkerboard full refresh.
+7. Native border/crosshair and `TL`/`TR`/`BL`/`BR` orientation full refresh.
+8. 90° portrait full refresh; human inspection found it upside down.
+9. Corrected 270° portrait full refresh.
+
+The corrected orientation image was written and read back only in `app1`:
 
 ```text
-AGENTS.md
-checkpoint.md
-todo.md
+image size:   100,128 bytes
+write range:  0x650000..0x66871F
+SHA-256:      cb81a48ed2ffe96e379d3c70d339083b46c6b65db5b2d22f41ca8a1ef2bac890
 ```
+
+Current device state:
+
+- `app0` still contains verified stock firmware.
+- `app1` contains the orientation diagnostic.
+- `otadata` remains at its pre-bring-up `seq=2 -> app1` state.
+- The controller reported orientation-refresh completion and is holding without retry.
+- Human confirmation of the corrected 270° label placement and visual quality is still required.
+
+## Current uncommitted work
+
+The board abstraction and display-driver work remain uncommitted. Preserve the unrelated edits already present in `docs/notes.md` and the untracked `docs/thoughts.md` file.
 
 Before committing, run:
 
 ```bash
 git status --short
-git diff
+git diff --check
 rg --pcre2 -n '[0-9a-f]{2}(:[0-9a-f]{2}){5}' AGENTS.md checkpoint.md todo.md docs || true
 ```
 
-Do not commit anything under:
-
-```text
-backup/
-.direnv/
-target/
-```
+Do not commit anything under `backup/`, `.direnv/`, `target/`, or `artifacts/`.
 
 ## Safety rules to preserve
 
-- Do not erase flash.
+- Do not erase the full flash or any stock/recovery partition.
 - Do not write flash without explicit user approval and reviewed offset/size.
 - Do not burn eFuses.
 - Do not overwrite bootloader, partition table, NVS, filesystem, or stock `app0`.
-- Do not modify `otadata` until a tested `app1` image and recovery workflow exist.
 - Treat `app0` as the known-good stock recovery slot.
-- Treat `app1` as the future development slot, but only after safe write/readback tooling exists.
-- Keep `backup/` private and ignored.
+- Keep app1 writes and `otadata` changes as separate reviewed operations.
+- Keep `backup/` and hardware probe output private and ignored.
 
-## Next step: reference study before hardware writes
+## Next steps
 
-The next major work item is **reference study and planning**, not flashing.
-
-Study MarigoldOS/OpenX4 to define the minimum X4-safe first firmware:
-
-1. Firmware entry point and initialization.
-2. X4 pin ownership and GPIO setup.
-3. Power-hold behavior, especially GPIO13.
-4. Display CS GPIO21 and SD CS GPIO12 initialization.
-5. SSD1677 reset/init/BUSY/full-refresh flow.
-6. Shared SPI handling between display and SD.
-7. ESP-IDF-compatible app image creation.
-8. OTA slot/update strategy and recovery assumptions.
-
-Reference paths already identified:
-
-```text
-/tmp/pi-github-repos/Jon-Vii/marigold-os/fw/src/main.rs
-/tmp/pi-github-repos/Jon-Vii/marigold-os/fw/src/display_flush/ssd1677.rs
-/tmp/pi-github-repos/Jon-Vii/marigold-os/fw/src/sd_session.rs
-/tmp/pi-github-repos/Jon-Vii/marigold-os/fw/src/ota_update.rs
-/tmp/pi-github-repos/Jon-Vii/marigold-os/app-core/src/lib.rs
-/tmp/pi-github-repos/Jon-Vii/marigold-os/tools/emulator/README.md
-/tmp/pi-github-repos/open-x4-epaper/community-sdk/libs/display/EInkDisplay/doc/SSD1677_GUIDE.md
-```
-
-## Handoff for the next session/agent
-
-Start here:
-
-1. Read these local files first:
-
-   ```text
-   AGENTS.md
-   checkpoint.md
-   todo.md
-   docs/notes.md
-   docs/plan.md
-   ```
-
-2. Verify the development environment:
-
-   ```bash
-   cd /Users/danielkumlin/Projects/brewthink
-   direnv reload
-   nix flake check
-   cargo check
-   ```
-
-3. Confirm private files are still ignored:
-
-   ```bash
-   git status --short --ignored | head -80
-   ```
-
-4. If desired, commit the current documentation state:
-
-   ```bash
-   git add AGENTS.md checkpoint.md todo.md
-   git diff --cached --check
-   git commit -m "Add project checkpoint and agent roadmap"
-   ```
-
-5. Create a new branch for the next phase:
-
-   ```bash
-   git switch -c x4-reference-study
-   ```
-
-6. Study MarigoldOS/OpenX4 without flashing anything.
-
-7. Write a short plan in `docs/plan.md` for the **minimal logging-only X4 firmware**, including:
-
-   - Which modules to create first.
-   - Which pins must be initialized first.
-   - What not to initialize yet.
-   - How the first app image will eventually be built and inspected.
-   - How `app1` will eventually be written and verified without changing `otadata`.
-
-8. Do **not** flash the X4 yet.
+1. Confirm the corrected 270° physical pattern has upright labels in their named corners.
+2. Add an app-facing mutable framebuffer/render-target API above the validated `Frame` rotation view.
+3. Add a simple real 1-bit image or build/version page.
+4. Keep partial refresh, custom LUTs, grayscale, display sleep, SD, GPIO13, and radio out of scope until full-refresh rendering is stable.
+5. Review the complete uncommitted diff and decide whether to commit board abstraction and display work separately.
 
 ## Definition of the next successful checkpoint
 
-The next checkpoint is complete when:
-
-- MarigoldOS/OpenX4 reference behavior is summarized.
-- `docs/plan.md` explains the minimal logging-only firmware architecture.
-- The first Brewthink firmware branch is ready to implement logging and board initialization.
-- No hardware write has happened yet.
+The next checkpoint is complete when the corrected 270° orientation is visually confirmed and an app-facing framebuffer renders the same portrait page to host/WASM code and the X4 full-refresh backend.

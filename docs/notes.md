@@ -20,7 +20,7 @@ I want to get more into reading, and what better way to do that than with fully 
 | Crystal            | 40 MHz                                                                                        |
 | On-chip SRAM       | 400 KB total; less is available to the application after the runtime and radio reserve memory |
 | PSRAM              | None                                                                                          |
-| Flash              | Puya 128-Mbit / 16 MiB SPI NOR, JEDEC `85 20 18` (consistent with PY25Q128HA); DIO at 80 MHz   |
+| Flash              | Puya 128-Mbit / 16 MiB SPI NOR, JEDEC `85 20 18` (consistent with PY25Q128HA); DIO at 80 MHz  |
 | Wireless           | 2.4 GHz Wi-Fi 802.11 b/g/n and Bluetooth Low Energy 5                                         |
 | USB                | ESP32-C3 native USB Serial/JTAG                                                               |
 | Display            | 4.26-inch Good Display GDEQ0426T82 e-paper panel                                              |
@@ -273,16 +273,16 @@ These values are calibration starting points, not universal constants. Firmware 
 
 The following table was decoded from the partition-table sector at `0x8000` in this physical device's complete stock dump. Its stored partition-table MD5 exactly matches the calculated MD5. It also matches the previously documented community layout, so these values are now verified rather than provisional.
 
-| Region              | Type/subtype     |     Offset |            Size | Address range       |
-| ------------------- | ---------------- | ---------: | --------------: | ------------------- |
-| Bootloader/reserved | Boot metadata    | `0x000000` |  Up to `0x8000` | `0x000000–0x007FFF` |
-| Partition table     | ESP-IDF table    | `0x008000` | `0x1000` sector | `0x008000–0x008FFF` |
-| `nvs`               | Data / NVS       | `0x009000` |      `0x005000` | `0x009000–0x00DFFF` |
-| `otadata`           | Data / OTA       | `0x00E000` |      `0x002000` | `0x00E000–0x00FFFF` |
-| `app0`              | App / OTA slot 0 | `0x010000` |      `0x640000` | `0x010000–0x64FFFF` |
-| `app1`              | App / OTA slot 1 | `0x650000` |      `0x640000` | `0x650000–0xC8FFFF` |
-| `spiffs`            | Data / SPIFFS subtype | `0xC90000` |   `0x360000` | `0xC90000–0xFEFFFF` |
-| `coredump`          | Data / core dump | `0xFF0000` |      `0x010000` | `0xFF0000–0xFFFFFF` |
+| Region              | Type/subtype          |     Offset |            Size | Address range       |
+| ------------------- | --------------------- | ---------: | --------------: | ------------------- |
+| Bootloader/reserved | Boot metadata         | `0x000000` |  Up to `0x8000` | `0x000000–0x007FFF` |
+| Partition table     | ESP-IDF table         | `0x008000` | `0x1000` sector | `0x008000–0x008FFF` |
+| `nvs`               | Data / NVS            | `0x009000` |      `0x005000` | `0x009000–0x00DFFF` |
+| `otadata`           | Data / OTA            | `0x00E000` |      `0x002000` | `0x00E000–0x00FFFF` |
+| `app0`              | App / OTA slot 0      | `0x010000` |      `0x640000` | `0x010000–0x64FFFF` |
+| `app1`              | App / OTA slot 1      | `0x650000` |      `0x640000` | `0x650000–0xC8FFFF` |
+| `spiffs`            | Data / SPIFFS subtype | `0xC90000` |      `0x360000` | `0xC90000–0xFEFFFF` |
+| `coredump`          | Data / core dump      | `0xFF0000` |      `0x010000` | `0xFF0000–0xFFFFFF` |
 
 Verified stock contents:
 
@@ -321,10 +321,10 @@ The bootloader reads the partition table, finds the OTA app slots, reads both `o
 
 | OTA sequence | Selected slot |
 | -----------: | ------------- |
-| `1`          | `app0`        |
-| `2`          | `app1`        |
-| `3`          | `app0`        |
-| `4`          | `app1`        |
+|          `1` | `app0`        |
+|          `2` | `app1`        |
+|          `3` | `app0`        |
+|          `4` | `app1`        |
 
 This physical unit's stock `otadata` backup decoded as:
 
@@ -445,8 +445,8 @@ The decoded CSV from this physical device is authoritative. It matches the commu
 | `espflash read-flash`      | Reads a flash region into a local file                                                                                 |
 | `espflash checksum-md5`    | Computes the device-side checksum of a flash region                                                                    |
 | `espflash partition-table` | Prints or converts ESP-IDF partition tables                                                                            |
-| `esptool flash-id`         | Read-only query for the external SPI NOR manufacturer/device JEDEC ID                                                   |
-| `esptool image-info`       | Inspects a local ESP bootloader/application image header and validates its checksum/hash                                |
+| `esptool flash-id`         | Read-only query for the external SPI NOR manufacturer/device JEDEC ID                                                  |
+| `esptool image-info`       | Inspects a local ESP bootloader/application image header and validates its checksum/hash                               |
 | `espflash flash`           | Converts/flashes an ELF application and may involve bootloader/partition choices; use only with an understood X4 build |
 | `espflash write-bin`       | Writes a raw binary at an exact flash offset; inherently destructive                                                   |
 | `espefuse summary`         | Reads permanent chip configuration; commands containing `burn` are irreversible                                        |

@@ -22,11 +22,11 @@ Goal: build custom Rust firmware for the Xteink X4 e-reader, learning the hardwa
 ## Milestone 1 — Reference study before writing firmware
 
 - [ ] Study MarigoldOS firmware entry point.
-- [ ] Study MarigoldOS X4 pin definitions.
-- [ ] Study MarigoldOS SSD1677 display path.
+- [x] Study MarigoldOS X4 pin definitions.
+- [x] Study MarigoldOS SSD1677 display path.
 - [ ] Study MarigoldOS shared SPI/SD session handling.
 - [ ] Study MarigoldOS OTA/update flow.
-- [ ] Study OpenX4/community SSD1677 initialization sequence.
+- [x] Study OpenX4/community SSD1677 initialization sequence.
 - [ ] Record the minimum required X4 boot/display behavior in `docs/plan.md`.
 
 ## Milestone 2 — Safe app1 build/flash workflow
@@ -62,42 +62,44 @@ Goal: Brewthink boots and logs reliably, with no display/SD/radio yet.
 
 Goal: centralize hardware ownership so GPIO numbers are not scattered through the code.
 
-- [ ] Create an `x4_board` module.
-- [ ] Define named roles for every X4 GPIO used by firmware.
-- [ ] Represent display pins: GPIO4/GPIO5/GPIO6/GPIO21.
-- [ ] Represent shared SPI pins: GPIO8/GPIO10.
-- [ ] Represent SD pins: GPIO7/GPIO12.
-- [ ] Represent button ADC pins: GPIO1/GPIO2.
-- [ ] Represent battery ADC pin: GPIO0.
-- [ ] Represent power button GPIO3.
-- [ ] Treat GPIO13 as reserved/power-path until verified.
-- [ ] Initialize display CS GPIO21 high.
-- [ ] Initialize SD CS GPIO12 high.
-- [ ] Add logs for each board-init stage.
-- [ ] Make each subsystem independently constructible/testable where possible.
+- [x] Create an `x4` board module.
+- [x] Define named roles for every X4 GPIO used by firmware.
+- [x] Represent display pins: GPIO4/GPIO5/GPIO6/GPIO21.
+- [x] Represent shared SPI pins: GPIO8/GPIO10.
+- [x] Represent SD pins: GPIO7/GPIO12.
+- [x] Represent button ADC pins: GPIO1/GPIO2.
+- [x] Represent battery ADC pin: GPIO0.
+- [x] Represent power button GPIO3.
+- [x] Treat GPIO13 as reserved/power-path until verified.
+- [x] Initialize display CS GPIO21 high.
+- [x] Initialize SD CS GPIO12 high.
+- [x] Add logs for each board-init stage.
+- [x] Make each subsystem independently constructible/testable where possible.
 
 ## Milestone 5 — Display module and raw screen bring-up
 
 Goal: show controlled raw output on the e-paper display.
 
-- [ ] Create an SSD1677/display module.
-- [ ] Implement command/data write helpers.
-- [ ] Implement reset sequence.
-- [ ] Implement BUSY wait with timeout.
-- [ ] Use known-good SSD1677/GDEQ0426T82 init sequence from references.
-- [ ] Render all-white frame.
-- [ ] Render all-black frame.
-- [ ] Render checkerboard/test pattern.
+- [x] Create an SSD1677/display module.
+- [x] Implement command/data write helpers.
+- [x] Implement reset sequence.
+- [x] Implement BUSY wait with timeout.
+- [x] Use known-good SSD1677/GDEQ0426T82 init sequence from references.
+- [x] Render all-white frame.
+- [x] Render all-black frame.
+- [x] Render checkerboard/test pattern.
 - [ ] Render a compile-time raw bitmap.
 - [ ] Put build/version text or marker in test image if feasible.
-- [ ] Document full-refresh sequence and any unexplained command bytes.
+- [x] Document full-refresh sequence and any unexplained command bytes.
 
 ## Milestone 6 — First picture on the reader
 
 Goal: display a real picture after raw rendering works.
 
-- [ ] Define framebuffer format for the X4 display.
-- [ ] Render a simple raw 1-bit or grayscale image.
+- [x] Define rotation-aware framebuffer views for 0°/90°/180°/270°.
+- [x] Default to a 480 × 800 portrait framebuffer at the corrective 270° rotation.
+- [x] Render a simple raw 1-bit image.
+- [ ] Visually confirm the corrected 270° corner labels are upright and correctly placed.
 - [ ] Add scaling/cropping strategy.
 - [ ] Add grayscale conversion.
 - [ ] Add thresholding or dithering.
@@ -127,11 +129,11 @@ Timing:
 
 Core tasks:
 
-- [ ] Add `wasm32-unknown-unknown` to `rust-toolchain.toml` when ready.
+- [x] Add `wasm32-unknown-unknown` to `rust-toolchain.toml`.
 - [ ] Add web tooling to `flake.nix`, likely `trunk`, `wasm-bindgen-cli`, and `binaryen`.
 - [ ] Create a `web-sim` crate/app.
 - [ ] Create or extract shared `app-core` for state transitions.
-- [ ] Create or extract shared rendering code that outputs an 800 × 480 framebuffer.
+- [ ] Create or extract shared rendering code that outputs the default 480 × 800 portrait framebuffer.
 - [ ] Render the shared framebuffer to an HTML canvas.
 - [ ] Map keyboard input to the same button events used by firmware:
   - [ ] Arrow keys → Up/Down/Left/Right.
@@ -147,7 +149,8 @@ Shared concepts to define:
 
 - [ ] `ButtonEvent` enum shared by firmware and web.
 - [ ] `BatteryState` shared by firmware and web.
-- [ ] `FrameBuffer` or equivalent 800 × 480 display buffer.
+- [x] Read-only `Frame` view and `Rotation` domain types shared by host, WASM, and firmware.
+- [ ] Mutable 480 × 800 `FrameBuffer` or equivalent render target.
 - [ ] A display target/backend interface so firmware flushes to SSD1677 while WASM draws to canvas.
 - [ ] A storage abstraction so firmware can later use SD while web can use fake files, browser files, or IndexedDB.
 
