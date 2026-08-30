@@ -18,28 +18,37 @@ use esp_hal::{
     time::Rate,
 };
 
-use crate::display::ssd1677::DisplayBus;
 #[cfg(feature = "sd-write-diagnostic")]
 use crate::storage::ExplicitWriteSdCard;
 use crate::storage::{ReadOnlySdSpi, SdSpiClock};
 
 use super::{
     SharedSpiChipSelects,
+    shared_display::SharedDisplayBus,
     shared_spi::{SharedSpi, SharedSpiDevice, SharedSpiError},
 };
 
 const INITIALIZATION_FREQUENCY: Rate = Rate::from_khz(400);
 const TRANSFER_FREQUENCY: Rate = Rate::from_mhz(10);
 const DISPLAY_FREQUENCY: Rate = Rate::from_mhz(20);
-const DISPLAY_BUSY_TIMEOUT_POLLS: usize = 15_000;
 
 pub type X4SharedSpi<'d> = SharedSpi<Spi<'d, Blocking>, Output<'d>, Output<'d>>;
+
+pub type X4SharedDisplayBus<'a, 'd> = SharedDisplayBus<
+    'a,
+    Spi<'d, Blocking>,
+    Output<'d>,
+    Output<'d>,
+    Output<'d>,
+    Output<'d>,
+    Input<'d>,
+    Delay,
+>;
 
 #[derive(Clone, Copy, Debug, defmt::Format)]
 pub enum X4StorageError {
     Configuration(ConfigError),
     Spi(SharedSpiError<SpiError>),
-    DisplayBusyTimeout,
 }
 
 #[cfg(feature = "sd-write-diagnostic")]
@@ -87,14 +96,6 @@ pub struct X4StorageHardware<'d> {
     display_reset: Output<'d>,
     display_busy: Input<'d>,
     delay: Delay,
-}
-
-pub struct X4SharedDisplayBus<'a, 'd> {
-    shared: &'a mut X4SharedSpi<'d>,
-    data_command: &'a mut Output<'d>,
-    reset: &'a mut Output<'d>,
-    busy: &'a mut Input<'d>,
-    delay: &'a mut Delay,
 }
 
 impl<'d> X4SharedSpiPeripherals<'d> {
@@ -162,13 +163,13 @@ impl<'d> X4StorageHardware<'d> {
                     .with_mode(Mode::_0),
             )
             .map_err(X4StorageError::Configuration)?;
-        Ok(X4SharedDisplayBus {
-            shared: &mut self.shared,
-            data_command: &mut self.display_data_command,
-            reset: &mut self.display_reset,
-            busy: &mut self.display_busy,
-            delay: &mut self.delay,
-        })
+        Ok(SharedDisplayBus::new(
+            &mut self.shared,
+            &mut self.display_data_command,
+            &mut self.display_reset,
+            &mut self.display_busy,
+            &mut self.delay,
+        ))
     }
 
     pub fn display_is_deselected(&mut self) -> bool {
@@ -181,94 +182,6 @@ impl<'d> X4StorageHardware<'d> {
 
     pub fn both_are_deselected(&mut self) -> bool {
         self.shared.both_are_deselected()
-    }
-}
-
-impl X4SharedDisplayBus<'_, '_> {
-    fn finish<T>(&mut self, operation: Result<T, X4StorageError>) -> Result<T, X4StorageError> {
-        let end = self
-            .shared
-            .end(SharedSpiDevice::Display)
-            .map_err(X4StorageError::Spi);
-        match (operation, end) {
-            (Err(error), _) | (Ok(_), Err(error)) => Err(error),
-            (Ok(value), Ok(())) => Ok(value),
-        }
-    }
-}
-
-impl DisplayBus for X4SharedDisplayBus<'_, '_> {
-    type Error = X4StorageError;
-
-    fn reset(&mut self) {
-        self.reset.set_high();
-        embedded_hal::delay::DelayNs::delay_ms(self.delay, 20);
-        self.reset.set_low();
-        embedded_hal::delay::DelayNs::delay_ms(self.delay, 2);
-        self.reset.set_high();
-        embedded_hal::delay::DelayNs::delay_ms(self.delay, 20);
-    }
-
-    fn command(&mut self, command: u8, data: &[u8]) -> Result<(), Self::Error> {
-        self.shared
-            .begin(SharedSpiDevice::Display)
-            .map_err(X4StorageError::Spi)?;
-        self.data_command.set_low();
-        let operation = (|| {
-            self.shared
-                .write(SharedSpiDevice::Display, &[command])
-                .map_err(X4StorageError::Spi)?;
-            self.shared
-                .flush(SharedSpiDevice::Display)
-                .map_err(X4StorageError::Spi)?;
-            if !data.is_empty() {
-                self.data_command.set_high();
-                self.shared
-                    .write(SharedSpiDevice::Display, data)
-                    .map_err(X4StorageError::Spi)?;
-            }
-            Ok(())
-        })();
-        self.finish(operation)
-    }
-
-    fn begin_ram_write(&mut self, command: u8) -> Result<(), Self::Error> {
-        self.shared
-            .begin(SharedSpiDevice::Display)
-            .map_err(X4StorageError::Spi)?;
-        self.data_command.set_low();
-        let command_result = self
-            .shared
-            .write(SharedSpiDevice::Display, &[command])
-            .and_then(|()| self.shared.flush(SharedSpiDevice::Display))
-            .map_err(X4StorageError::Spi);
-        if let Err(error) = command_result {
-            let _ = self.finish::<()>(Err(error));
-            return Err(error);
-        }
-        self.data_command.set_high();
-        Ok(())
-    }
-
-    fn write_ram(&mut self, data: &[u8]) -> Result<(), Self::Error> {
-        self.shared
-            .write(SharedSpiDevice::Display, data)
-            .map_err(X4StorageError::Spi)
-    }
-
-    fn end_ram_write(&mut self) -> Result<(), Self::Error> {
-        self.finish(Ok(()))
-    }
-
-    fn wait_ready(&mut self) -> Result<(), Self::Error> {
-        embedded_hal::delay::DelayNs::delay_ms(self.delay, 1);
-        for _ in 0..DISPLAY_BUSY_TIMEOUT_POLLS {
-            if self.busy.is_low() {
-                return Ok(());
-            }
-            embedded_hal::delay::DelayNs::delay_ms(self.delay, 1);
-        }
-        Err(X4StorageError::DisplayBusyTimeout)
     }
 }
 

@@ -1,13 +1,22 @@
 use std::{env, error::Error, fs, path::PathBuf};
 
+mod stage_names {
+    include!("src/diagnostics/stage_names.rs");
+}
+
 const DISPLAY_FRAME_BYTES: u64 = 48_000;
 const GENERATED_IMAGE_NAME: &str = "brewthink-image.bin";
 
 fn main() {
     linker_be_nice();
-    for variable in ["BREWTHINK_DIAGNOSTIC_STAGE", "BREWTHINK_IMAGE_FRAME"] {
+    for variable in [
+        "BREWTHINK_DIAGNOSTIC_STAGE",
+        "BREWTHINK_DISPLAY_ROTATION",
+        "BREWTHINK_IMAGE_FRAME",
+    ] {
         println!("cargo:rerun-if-env-changed={variable}");
     }
+    validate_build_selection();
 
     if env::var("TARGET").as_deref() != Ok("riscv32imc-unknown-none-elf") {
         return;
@@ -22,11 +31,28 @@ fn main() {
     );
 }
 
+fn validate_build_selection() {
+    if let Ok(stage) = env::var("BREWTHINK_DIAGNOSTIC_STAGE") {
+        assert!(
+            stage_names::ALL_STAGES.contains(&stage.as_str()),
+            "unknown BREWTHINK_DIAGNOSTIC_STAGE={stage:?}; expected one of: {}",
+            stage_names::ALL_STAGES.join(", ")
+        );
+    }
+    if let Ok(rotation) = env::var("BREWTHINK_DISPLAY_ROTATION") {
+        assert!(
+            stage_names::DISPLAY_ROTATIONS.contains(&rotation.as_str()),
+            "unknown BREWTHINK_DISPLAY_ROTATION={rotation:?}; expected one of: {}",
+            stage_names::DISPLAY_ROTATIONS.join(", ")
+        );
+    }
+}
+
 fn prepare_image() -> Result<(), Box<dyn Error>> {
     let output = PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR is missing")?)
         .join(GENERATED_IMAGE_NAME);
 
-    if env::var("BREWTHINK_DIAGNOSTIC_STAGE").as_deref() != Ok("display-image") {
+    if env::var("BREWTHINK_DIAGNOSTIC_STAGE").as_deref() != Ok(stage_names::DISPLAY_IMAGE) {
         fs::write(output, [0xFF; DISPLAY_FRAME_BYTES as usize])?;
         return Ok(());
     }

@@ -8,11 +8,11 @@
 #![deny(clippy::large_stack_frames)]
 
 use brewthink::{
-    diagnostics::{DiagnosticStage, DisplayDiagnosticStage},
+    diagnostics::{DiagnosticStage, DisplayDiagnosticStage, InputDiagnosticStage},
     display::{
         diagnostic::{fill_checkerboard, fill_rotated_orientation},
         framebuffer::{FRAME_BYTES, Frame, Rotation},
-        ssd1677::{DisplayBus, InitializedSsd1677, Ssd1677},
+        ssd1677::{DisplayBus, Ready, Ssd1677},
     },
     input::{ButtonChanges, ButtonDebouncer, RawInputSample},
     power::{DisconnectedPowerCapture, PowerUsbEvent, PowerUsbTracker},
@@ -21,9 +21,8 @@ use brewthink::{
         inspect_sector_zero, sector_fingerprint,
     },
     x4::{
-        InputReadError, SharedSpiChipSelects, X4DisplayHardware, X4InputHardware,
-        X4InputPeripherals, X4SharedSpiPeripherals, X4StorageError, X4StorageHardware,
-        decode_buttons,
+        InputReadError, SharedSpiChipSelects, X4InputHardware, X4InputPeripherals,
+        X4SharedSpiPeripherals, X4StorageError, X4StorageHardware, decode_buttons,
     },
 };
 #[cfg(feature = "sd-write-diagnostic")]
@@ -111,23 +110,21 @@ fn initialize(spawner: Spawner) {
             };
             spawner.spawn(task);
         }
-        DiagnosticStage::InputsRaw | DiagnosticStage::InputsEvents | DiagnosticStage::PowerUsb => {
-            start_input_diagnostic(
-                spawner,
-                stage,
-                chip_selects,
-                X4InputPeripherals::new(
-                    peripherals.ADC1,
-                    peripherals.GPIO0,
-                    peripherals.GPIO1,
-                    peripherals.GPIO2,
-                    peripherals.GPIO3,
-                    peripherals.GPIO20,
-                ),
-            )
-        }
+        DiagnosticStage::Input(input_stage) => start_input_diagnostic(
+            spawner,
+            input_stage,
+            chip_selects,
+            X4InputPeripherals::new(
+                peripherals.ADC1,
+                peripherals.GPIO0,
+                peripherals.GPIO1,
+                peripherals.GPIO2,
+                peripherals.GPIO3,
+                peripherals.GPIO20,
+            ),
+        ),
         DiagnosticStage::StorageReadOnly => {
-            let hardware = match X4StorageHardware::new(
+            let hardware = storage_hardware_or_hold(
                 X4SharedSpiPeripherals::new(
                     peripherals.SPI2,
                     peripherals.GPIO8,
@@ -138,10 +135,8 @@ fn initialize(spawner: Spawner) {
                     peripherals.GPIO6,
                 ),
                 chip_selects,
-            ) {
-                Ok(hardware) => hardware,
-                Err(_) => hold((), "SPI2 storage configuration failed"),
-            };
+                "SPI2 storage configuration failed",
+            );
             run_storage_readonly_diagnostic(hardware);
         }
         DiagnosticStage::StorageWriteTest => {
@@ -150,7 +145,7 @@ fn initialize(spawner: Spawner) {
 
             #[cfg(feature = "sd-write-diagnostic")]
             {
-                let hardware = match X4StorageHardware::new(
+                let hardware = storage_hardware_or_hold(
                     X4SharedSpiPeripherals::new(
                         peripherals.SPI2,
                         peripherals.GPIO8,
@@ -161,15 +156,13 @@ fn initialize(spawner: Spawner) {
                         peripherals.GPIO6,
                     ),
                     chip_selects,
-                ) {
-                    Ok(hardware) => hardware,
-                    Err(_) => hold((), "SPI2 storage configuration failed"),
-                };
+                    "SPI2 storage configuration failed",
+                );
                 run_storage_write_diagnostic(hardware);
             }
         }
         DiagnosticStage::IntegratedDevice => {
-            let hardware = match X4StorageHardware::new(
+            let hardware = storage_hardware_or_hold(
                 X4SharedSpiPeripherals::new(
                     peripherals.SPI2,
                     peripherals.GPIO8,
@@ -180,10 +173,8 @@ fn initialize(spawner: Spawner) {
                     peripherals.GPIO6,
                 ),
                 chip_selects,
-            ) {
-                Ok(hardware) => hardware,
-                Err(_) => hold((), "SPI2 integrated configuration failed"),
-            };
+                "SPI2 integrated configuration failed",
+            );
             static INTEGRATED_HARDWARE: StaticCell<X4StorageHardware<'static>> = StaticCell::new();
             let hardware = INTEGRATED_HARDWARE.init(integrated_device_startup(hardware));
             static INTEGRATED_INPUTS: StaticCell<X4InputHardware> = StaticCell::new();
@@ -205,7 +196,7 @@ fn initialize(spawner: Spawner) {
             spawner.spawn(task);
         }
         DiagnosticStage::SleepWake => {
-            let hardware = match X4StorageHardware::new(
+            let hardware = storage_hardware_or_hold(
                 X4SharedSpiPeripherals::new(
                     peripherals.SPI2,
                     peripherals.GPIO8,
@@ -216,16 +207,30 @@ fn initialize(spawner: Spawner) {
                     peripherals.GPIO6,
                 ),
                 chip_selects,
-            ) {
-                Ok(hardware) => hardware,
-                Err(_) => hold((), "SPI2 sleep/wake configuration failed"),
-            };
+                "SPI2 sleep/wake configuration failed",
+            );
             run_sleep_wake_diagnostic(
                 hardware,
                 peripherals.GPIO3,
                 peripherals.LPWR,
                 esp_hal::system::wakeup_cause(),
             );
+        }
+        DiagnosticStage::DisplayReset => {
+            let hardware = storage_hardware_or_hold(
+                X4SharedSpiPeripherals::new(
+                    peripherals.SPI2,
+                    peripherals.GPIO8,
+                    peripherals.GPIO10,
+                    peripherals.GPIO7,
+                    peripherals.GPIO4,
+                    peripherals.GPIO5,
+                    peripherals.GPIO6,
+                ),
+                chip_selects,
+                "SPI2 display configuration failed",
+            );
+            run_display_reset(hardware);
         }
         DiagnosticStage::Display(display_stage) => {
             let rotation = if display_stage.uses_rotation() {
@@ -238,71 +243,73 @@ fn initialize(spawner: Spawner) {
             };
             info!("Display rotation degrees={}", rotation.degrees());
 
-            let hardware = match X4DisplayHardware::new(
-                peripherals.SPI2,
-                peripherals.GPIO8,
-                peripherals.GPIO10,
-                peripherals.GPIO4,
-                peripherals.GPIO5,
-                peripherals.GPIO6,
+            let hardware = storage_hardware_or_hold(
+                X4SharedSpiPeripherals::new(
+                    peripherals.SPI2,
+                    peripherals.GPIO8,
+                    peripherals.GPIO10,
+                    peripherals.GPIO7,
+                    peripherals.GPIO4,
+                    peripherals.GPIO5,
+                    peripherals.GPIO6,
+                ),
                 chip_selects,
-            ) {
-                Ok(hardware) => hardware,
-                Err(_) => hold((), "SPI2 configuration failed"),
-            };
+                "SPI2 display configuration failed",
+            );
             run_display_diagnostic(hardware, display_stage, rotation);
         }
     }
 }
 
+fn storage_hardware_or_hold(
+    peripherals: X4SharedSpiPeripherals<'static>,
+    chip_selects: SharedSpiChipSelects<'static>,
+    failure: &'static str,
+) -> X4StorageHardware<'static> {
+    match X4StorageHardware::new(peripherals, chip_selects) {
+        Ok(hardware) => hardware,
+        Err(_) => hold((), failure),
+    }
+}
+
 fn start_input_diagnostic(
     spawner: Spawner,
-    stage: DiagnosticStage,
+    stage: InputDiagnosticStage,
     chip_selects: SharedSpiChipSelects<'static>,
     input_peripherals: X4InputPeripherals,
 ) {
     let inputs = input_peripherals.initialize();
 
     match stage {
-        DiagnosticStage::InputsRaw | DiagnosticStage::InputsEvents => {
+        InputDiagnosticStage::Raw | InputDiagnosticStage::Events => {
             let heartbeat_task = match heartbeat(chip_selects) {
                 Ok(task) => task,
                 Err(_) => hold((), "heartbeat task allocation failed"),
             };
             spawner.spawn(heartbeat_task);
-
-            let spawned = match stage {
-                DiagnosticStage::InputsRaw => raw_input_task(inputs)
-                    .map(|task| spawner.spawn(task))
-                    .is_ok(),
-                DiagnosticStage::InputsEvents => input_event_task(inputs)
-                    .map(|task| spawner.spawn(task))
-                    .is_ok(),
-                _ => unreachable!(),
-            };
-            if !spawned {
-                hold((), "input task allocation failed");
-            }
         }
-        DiagnosticStage::PowerUsb => {
+        InputDiagnosticStage::PowerUsb => {
             let retained = match retain_chip_selects(chip_selects) {
                 Ok(task) => task,
                 Err(_) => hold((), "chip-select retention task allocation failed"),
             };
             spawner.spawn(retained);
-
-            let task = match power_usb_task(inputs) {
-                Ok(task) => task,
-                Err(_) => hold((), "power/USB task allocation failed"),
-            };
-            spawner.spawn(task);
         }
-        DiagnosticStage::Heartbeat
-        | DiagnosticStage::StorageReadOnly
-        | DiagnosticStage::StorageWriteTest
-        | DiagnosticStage::IntegratedDevice
-        | DiagnosticStage::SleepWake
-        | DiagnosticStage::Display(_) => unreachable!(),
+    }
+
+    let spawned = match stage {
+        InputDiagnosticStage::Raw => raw_input_task(inputs)
+            .map(|task| spawner.spawn(task))
+            .is_ok(),
+        InputDiagnosticStage::Events => input_event_task(inputs)
+            .map(|task| spawner.spawn(task))
+            .is_ok(),
+        InputDiagnosticStage::PowerUsb => power_usb_task(inputs)
+            .map(|task| spawner.spawn(task))
+            .is_ok(),
+    };
+    if !spawned {
+        hold((), "input task allocation failed");
     }
 }
 
@@ -589,21 +596,20 @@ fn integrated_sd_read<'d>(
 
 fn integrated_display_refresh<'d>(mut hardware: X4StorageHardware<'d>) -> X4StorageHardware<'d> {
     {
-        let display_bus = match hardware.display_bus() {
+        let mut bus = match hardware.display_bus() {
             Ok(bus) => bus,
-            Err(_) => hold((), "integrated display bus configuration failed"),
+            Err(_) => hold(hardware, "integrated display bus configuration failed"),
         };
-        let mut controller = Ssd1677::new(display_bus);
+        let mut display = match Ssd1677::new().initialize(&mut bus) {
+            Ok(display) => display,
+            Err(_) => hold(hardware, "integrated display initialization failed"),
+        };
+        if display
+            .refresh_generated_frame(&mut bus, fill_checkerboard)
+            .is_err()
         {
-            let mut display = match controller.initialize() {
-                Ok(display) => display,
-                Err(_) => hold(controller, "integrated display initialization failed"),
-            };
-            if display.refresh_generated_frame(fill_checkerboard).is_err() {
-                hold(display, "integrated checkerboard refresh failed");
-            }
+            hold(hardware, "integrated checkerboard refresh failed");
         }
-        let _released_bus = controller.into_bus();
     }
     hardware
 }
@@ -657,48 +663,42 @@ fn enter_power_button_sleep(
 
 fn prepare_display_for_sleep<'d>(mut hardware: X4StorageHardware<'d>) -> X4StorageHardware<'d> {
     {
-        let display_bus = match hardware.display_bus() {
+        let mut bus = match hardware.display_bus() {
             Ok(bus) => bus,
-            Err(_) => hold((), "sleep/wake display bus configuration failed"),
+            Err(_) => hold(hardware, "sleep/wake display bus configuration failed"),
         };
-        let mut controller = Ssd1677::new(display_bus);
-        let mut display = match controller.initialize() {
+        let mut display = match Ssd1677::new().initialize(&mut bus) {
             Ok(display) => display,
-            Err(_) => hold(controller, "sleep/wake display initialization failed"),
+            Err(_) => hold(hardware, "sleep/wake display initialization failed"),
         };
         if display
-            .refresh_generated_frame(|offset, output| {
+            .refresh_generated_frame(&mut bus, |offset, output| {
                 fill_rotated_orientation(Rotation::Degrees270, offset, output);
             })
             .is_err()
         {
-            hold(display, "sleep/wake orientation refresh failed");
+            hold(hardware, "sleep/wake orientation refresh failed");
         }
-        if display.enter_deep_sleep().is_err() {
-            hold(controller, "SSD1677 deep sleep command failed");
+        if display.enter_deep_sleep(&mut bus).is_err() {
+            hold(hardware, "SSD1677 deep sleep command failed");
         }
-        let _released_bus = controller.into_bus();
     }
     hardware
 }
 
 fn run_after_power_wake(mut hardware: X4StorageHardware<'static>) -> ! {
     {
-        let display_bus = match hardware.display_bus() {
+        let mut bus = match hardware.display_bus() {
             Ok(bus) => bus,
-            Err(_) => hold((), "wake display bus configuration failed"),
+            Err(_) => hold(hardware, "wake display bus configuration failed"),
         };
-        let mut controller = Ssd1677::new(display_bus);
-        {
-            let mut display = match controller.initialize() {
-                Ok(display) => display,
-                Err(_) => hold(controller, "wake display initialization failed"),
-            };
-            if display.refresh_white().is_err() {
-                hold(display, "wake white refresh failed");
-            }
+        let mut display = match Ssd1677::new().initialize(&mut bus) {
+            Ok(display) => display,
+            Err(_) => hold(hardware, "wake display initialization failed"),
+        };
+        if display.refresh_white(&mut bus).is_err() {
+            hold(hardware, "wake white refresh failed");
         }
-        let _released_bus = controller.into_bus();
     }
     if !hardware.both_are_deselected() {
         hold(hardware, "wake SPI chip selects remained active");
@@ -996,106 +996,115 @@ fn log_storage_partitions(partitions: [Option<brewthink::storage::Partition>; 4]
 }
 
 fn run_display_diagnostic(
-    hardware: X4DisplayHardware<'_>,
+    mut hardware: X4StorageHardware<'_>,
     stage: DisplayDiagnosticStage,
     rotation: Rotation,
 ) -> ! {
-    let (mut epd_bus, sd_chip_select) = hardware.into_parts();
+    let status = run_display_stage(&mut hardware, stage, rotation);
+    hold(hardware, status)
+}
+
+fn run_display_reset(mut hardware: X4StorageHardware<'_>) -> ! {
+    let status = match hardware.display_bus() {
+        Ok(mut bus) => {
+            bus.reset();
+            "display reset complete"
+        }
+        Err(_) => "display bus configuration failed",
+    };
+    hold(hardware, status)
+}
+
+fn run_display_stage(
+    hardware: &mut X4StorageHardware<'_>,
+    stage: DisplayDiagnosticStage,
+    rotation: Rotation,
+) -> &'static str {
+    let mut bus = match hardware.display_bus() {
+        Ok(bus) => bus,
+        Err(_) => return "display bus configuration failed",
+    };
     info!("SPI2 ready: mode=0 frequency_mhz=20 SD_CS_high=true");
 
-    if stage == DisplayDiagnosticStage::Reset {
-        epd_bus.reset();
-        hold((epd_bus, sd_chip_select), "display reset complete");
-    }
-
-    let mut controller = Ssd1677::new(epd_bus);
-    let mut display = match controller.initialize() {
+    let mut display = match Ssd1677::new().initialize(&mut bus) {
         Ok(display) => display,
-        Err(_) => hold(
-            (controller, sd_chip_select),
-            "display initialization failed",
-        ),
+        Err(_) => return "display initialization failed",
     };
     info!("SSD1677 initialization and BUSY waits complete");
 
     match stage {
-        DisplayDiagnosticStage::Reset => unreachable!(),
-        DisplayDiagnosticStage::Initialize => hold(
-            (display, sd_chip_select),
-            "display initialization stage complete",
-        ),
+        DisplayDiagnosticStage::Initialize => "display initialization stage complete",
         DisplayDiagnosticStage::Write => {
-            if display.write_white_frame().is_err() {
-                hold((display, sd_chip_select), "white RAM write failed");
+            if display.write_white_frame(&mut bus).is_err() {
+                return "white RAM write failed";
             }
             info!("White frame written to both RAM planes without refresh");
-            hold(
-                (display, sd_chip_select),
-                "display RAM write stage complete",
-            );
+            "display RAM write stage complete"
         }
         DisplayDiagnosticStage::Refresh => {
-            if display.refresh_white().is_err() {
-                hold((display, sd_chip_select), "white full refresh failed");
+            if display.refresh_white(&mut bus).is_err() {
+                return "white full refresh failed";
             }
             info!("White full refresh complete");
-            hold((display, sd_chip_select), "white display stage complete");
+            "white display stage complete"
         }
         DisplayDiagnosticStage::Black => {
-            if display.refresh_solid(0x00).is_err() {
-                hold((display, sd_chip_select), "black full refresh failed");
+            if display.refresh_solid(&mut bus, 0x00).is_err() {
+                return "black full refresh failed";
             }
             info!("Black full refresh complete");
-            hold((display, sd_chip_select), "black display stage complete");
+            "black display stage complete"
         }
         DisplayDiagnosticStage::Checkerboard => {
-            if display.refresh_generated_frame(fill_checkerboard).is_err() {
-                hold((display, sd_chip_select), "checkerboard refresh failed");
+            if display
+                .refresh_generated_frame(&mut bus, fill_checkerboard)
+                .is_err()
+            {
+                return "checkerboard refresh failed";
             }
             info!("Checkerboard full refresh complete");
-            hold(
-                (display, sd_chip_select),
-                "checkerboard display stage complete",
-            );
+            "checkerboard display stage complete"
         }
-        DisplayDiagnosticStage::Orientation => run_orientation(display, sd_chip_select, rotation),
-        DisplayDiagnosticStage::Image => run_image(display, sd_chip_select, rotation),
+        DisplayDiagnosticStage::Orientation => {
+            run_orientation_stage(&mut display, &mut bus, rotation)
+        }
+        DisplayDiagnosticStage::Image => run_image_stage(&mut display, &mut bus, rotation),
     }
 }
 
-fn run_orientation<B, S>(
-    mut display: InitializedSsd1677<'_, B>,
-    retained: S,
+fn run_orientation_stage<B>(
+    display: &mut Ssd1677<Ready>,
+    bus: &mut B,
     rotation: Rotation,
-) -> !
+) -> &'static str
 where
     B: DisplayBus,
 {
     if display
-        .refresh_generated_frame(|offset, output| {
+        .refresh_generated_frame(bus, |offset, output| {
             fill_rotated_orientation(rotation, offset, output);
         })
         .is_err()
     {
-        hold((display, retained), "orientation refresh failed");
+        return "orientation refresh failed";
     }
     info!(
         "Rotated orientation full refresh complete: degrees={}",
         rotation.degrees()
     );
-    hold((display, retained), "orientation display stage complete");
+    "orientation display stage complete"
 }
 
-fn run_image<B, S>(mut display: InitializedSsd1677<'_, B>, retained: S, rotation: Rotation) -> !
+fn run_image_stage<B>(display: &mut Ssd1677<Ready>, bus: &mut B, rotation: Rotation) -> &'static str
 where
     B: DisplayBus,
 {
     let frame = match Frame::new(BUILT_IMAGE, rotation) {
         Ok(frame) => frame,
-        Err(_) => hold((display, retained), "built image frame is invalid"),
+        Err(_) => return "built image frame is invalid",
     };
-    if display.refresh_logical_frame(frame).is_err() {
-        hold((display, retained), "image refresh failed");
+    if display.refresh_logical_frame(bus, frame).is_err() {
+        return "image refresh failed";
     }
     info!(
         "Image full refresh complete: width={} height={} rotation={}",
@@ -1103,7 +1112,7 @@ where
         frame.height(),
         frame.rotation().degrees()
     );
-    hold((display, retained), "image display stage complete");
+    "image display stage complete"
 }
 
 fn parse_rotation(value: &str) -> Option<Rotation> {
