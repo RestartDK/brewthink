@@ -42,8 +42,10 @@
           default = pkgs.mkShell {
             packages = [
               rustToolchain
+              pkgs.bun
               pkgs.espflash
               pkgs.esptool
+              pkgs.wasm-bindgen-cli
             ];
           };
         }

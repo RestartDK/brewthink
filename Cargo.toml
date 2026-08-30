@@ -7,6 +7,7 @@ version      = "0.1.0"
 [features]
 default          = []
 host-image-tools = ["dep:image"]
+web-sim          = ["dep:image", "dep:wasm-bindgen"]
 
 [[bin]]
 name = "brewthink"
@@ -17,11 +18,19 @@ name              = "prepare-image"
 path              = "./src/bin/prepare-image.rs"
 required-features = ["host-image-tools"]
 
+[[bin]]
+name              = "web-sim"
+path              = "./src/bin/web-sim.rs"
+required-features = ["web-sim"]
+
 [dependencies]
 embedded-hal = "1.0.0"
 
 [target.'cfg(not(target_arch = "riscv32"))'.dependencies]
 image = { version = "0.25.10", optional = true, default-features = false, features = ["bmp", "jpeg", "png", "pnm"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { version = "=0.2.121", optional = true }
 
 [target.'cfg(target_arch = "riscv32")'.dependencies]
 defmt                  = "1.0.1"
