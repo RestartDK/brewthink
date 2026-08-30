@@ -1,0 +1,146 @@
+# SSD1677 display bring-up
+
+## Scope
+
+Brewthink currently supports conservative monochrome full refreshes on the Xteink X4's 800 × 480 GDEQ0426T82 panel. The implementation deliberately excludes partial refresh, custom LUTs, grayscale, deep sleep, SD traffic, and radio initialization.
+
+The portable code is under `src/display/`:
+
+- `bus.rs` owns command/data framing, reset timing, and bounded BUSY polling through `embedded-hal` traits.
+- `ssd1677.rs` owns the controller command sequence, geometry, RAM writes, and full-refresh activation.
+- `framebuffer.rs` defines rotation-aware logical frame views and panel transforms.
+- `diagnostic.rs` generates heap-free test patterns.
+
+The ESP32-C3 adapter is under `src/x4/display.rs`. It binds SPI2 and the verified X4 GPIOs while retaining SD CS high.
+
+## Hardware contract
+
+| Property | Value |
+| --- | --- |
+| Panel | Good Display GDEQ0426T82 |
+| Controller | SSD1677 |
+| Panel RAM resolution | 800 × 480 landscape |
+| Default logical resolution | 480 × 800 portrait |
+| Configurable rotations | 0°, 90°, 180°, 270° clockwise into panel RAM |
+| Default rotation | 270° |
+| Format | 1 bit per pixel; `0` black, `1` white |
+| Panel row size | 100 bytes |
+| Default logical row size | 60 bytes |
+| Frame size | 48,000 bytes |
+| SPI | Mode 0, MSB first, 20 MHz |
+| BUSY | Active high |
+| BUSY timeout | 15 seconds |
+| Reset | High 20 ms, low 2 ms, high 20 ms |
+| SCLK / MOSI | GPIO8 / GPIO10 |
+| Display CS / D/C / reset / BUSY | GPIO21 / GPIO4 / GPIO5 / GPIO6 |
+| SD CS | GPIO12, retained high throughout display diagnostics |
+
+OpenX4 and MarigoldOS both run the X4 display at 40 MHz. Brewthink starts at 20 MHz. The SSD1677 datasheet describes a controller with up to 960 source and 680 gate outputs; those maxima are not the fitted panel dimensions. Brewthink uses the GDEQ0426T82's actual 800 × 480 geometry.
+
+The first labeled test established that panel RAM is naturally landscape. `Frame` exposes rotation as a domain value rather than baking orientation into drawing code:
+
+| `Rotation` | Logical size | Logical-to-panel mapping |
+| --- | --- | --- |
+| `Degrees0` | 800 × 480 | `panel_x = x`, `panel_y = y` |
+| `Degrees90` | 480 × 800 | `panel_x = 799 - y`, `panel_y = x` |
+| `Degrees180` | 800 × 480 | `panel_x = 799 - x`, `panel_y = 479 - y` |
+| `Degrees270` | 480 × 800 | `panel_x = y`, `panel_y = 479 - x` |
+
+The first 90° portrait test was upside down on the physical unit. Rotating that result another 180° selects absolute `Degrees270`, now Brewthink's default. Logical framebuffers remain directly usable by host and WASM renderers; only the SSD1677 flush path applies the selected transform.
+
+## Initialization transcript
+
+The host test `initialization_matches_x4_golden_transcript` fixes this sequence byte-for-byte:
+
+| Operation | Command | Data |
+| --- | ---: | --- |
+| Hardware reset | — | high 20 ms, low 2 ms, high 20 ms |
+| Software reset | `0x12` | — |
+| Wait for BUSY low | — | — |
+| Internal temperature sensor | `0x18` | `80` |
+| Booster soft start | `0x0C` | `AE C7 C3 C0 40` |
+| Driver output control | `0x01` | `DF 01 02` |
+| Border waveform | `0x3C` | `01` |
+| X increment, Y decrement | `0x11` | `01` |
+| RAM X range | `0x44` | `00 00 1F 03` (`0..799`) |
+| RAM Y range | `0x45` | `DF 01 00 00` (`479..0`) |
+| Auto-clear BW RAM | `0x46` | `F7` |
+| Wait for BUSY low | — | — |
+| Auto-clear RED RAM | `0x47` | `F7` |
+| Wait for BUSY low | — | — |
+| Full-refresh comparison mode | `0x21` | `40 00` |
+| Prepare full OTP update | `0x22` | `F7` |
+
+A full refresh resets the RAM window and counters, writes the same 48,000-byte frame to BW RAM (`0x24`) and RED/previous RAM (`0x26`), then sends:
+
+```text
+0x21  40 00
+0x22  F4
+0x20
+wait until BUSY is low
+```
+
+The first `SpiBus::write` and every command/data phase are flushed before D/C or CS changes. A transport error deselects the display. A BUSY timeout is returned as an error; diagnostics stop and retain the GPIO/SPI objects without retrying.
+
+## Diagnostic stages
+
+The default build uses stage `none` and does not initialize SPI or the display control pins. A stage must be selected at compile time:
+
+```bash
+BREWTHINK_DISPLAY_STAGE=orientation \
+BREWTHINK_DISPLAY_ROTATION=270 \
+  scripts/build-app1-image.sh artifacts/brewthink-display-rotation-270-app1.bin
+```
+
+`BREWTHINK_DISPLAY_ROTATION` accepts `0`, `90`, `180`, or `270` and defaults to `270`. Unsupported values stop before SPI initialization.
+
+Supported stages are cumulative:
+
+| Stage | Last operation |
+| --- | --- |
+| `reset` | Hardware reset only; no SSD1677 command |
+| `initialize` | Golden initialization and BUSY waits; no explicit refresh |
+| `write` | Write two white 48,000-byte planes; no activation |
+| `refresh` | Full white refresh |
+| `black` | Full black refresh |
+| `checkerboard` | Full 40 × 40-pixel checkerboard refresh |
+| `orientation` | Border, axes, and corner labels using `BREWTHINK_DISPLAY_ROTATION` |
+
+Each diagnostic runs once, reports completion or failure, then holds without retry. Generated patterns use a 256-byte transfer buffer rather than a 48 KB framebuffer.
+
+Building does not touch hardware. A reviewed image can be written and read back with the guarded app1-only workflow:
+
+```bash
+ESPFLASH_PORT=/dev/cu.usbmodemXXXX \
+  scripts/flash-app1-and-readback.sh \
+  --image artifacts/brewthink-display-rotation-270-app1.bin
+```
+
+Do not use `cargo run`. Review the printed image size, write range, and sector erase range before confirming.
+
+## Verified on the physical X4
+
+On 2026-08-30, the guarded workflow wrote and read back each stage only in `app1`. The monitor observed completion without SPI errors, BUSY timeouts, panics, or retries:
+
+1. Reset complete.
+2. Initialization and automatic RAM clears complete.
+3. Two explicit 48,000-byte white-plane writes complete without activation.
+4. White full refresh complete.
+5. Black full refresh complete.
+6. Checkerboard full refresh complete.
+7. Native landscape orientation full refresh complete.
+8. 90° logical portrait refresh complete; human inspection found it upside down.
+9. Corrected 270° portrait refresh complete.
+
+The corrected image was `100,128` bytes with SHA-256 `cb81a48ed2ffe96e379d3c70d339083b46c6b65db5b2d22f41ca8a1ef2bac890`. Its write range was `0x650000..0x66871F`, wholly inside `app1`.
+
+`otadata` was not changed during display bring-up. This unit was already configured to boot `app1`; verified stock firmware remains in `app0`.
+
+Controller completion and flash readback are machine-verified. The transformed portrait label placement and visual quality still require human inspection of the panel. Results from one X4 do not establish compatibility across all panel revisions, units, temperatures, or battery voltages.
+
+## References
+
+- OpenX4 Community SDK: `libs/display/EInkDisplay/src/EInkDisplay.cpp`
+- MarigoldOS: `display/src/epd/ssd1677.rs` and `fw/src/display_flush/ssd1677.rs`
+- Solomon Systech SSD1677 datasheet
+- Good Display GDEQ0426T82 panel documentation

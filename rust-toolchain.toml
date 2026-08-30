@@ -6,4 +6,7 @@ components = [
   "rust-src",
   "rustfmt",
 ]
-targets = ["riscv32imc-unknown-none-elf"]
+targets = [
+  "riscv32imc-unknown-none-elf",
+  "wasm32-unknown-unknown",
+]

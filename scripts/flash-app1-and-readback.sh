@@ -149,7 +149,7 @@ This script will NOT write:
   bootloader, partition table, nvs, otadata, app0, spiffs/LittleFS, or coredump.
 
 Important consequence:
-  otadata remains unchanged, so the stock app0 slot should remain selected at reboot.
+  otadata remains unchanged, so the current boot-slot selection remains in effect.
 EOF
 
 if (( YES == 0 )); then
@@ -188,5 +188,5 @@ image sha256:    $IMAGE_SHA
 readback sha256: $READBACK_SHA
 verified range:  $(fmt_hex "$START")..$(fmt_hex "$END")
 
-otadata was not modified by this script; stock app0 should still be the selected boot slot.
+otadata was not modified by this script; the previous boot-slot selection remains in effect.
 EOF

@@ -9,65 +9,17 @@ name = "brewthink"
 path = "./src/bin/main.rs"
 
 [dependencies]
-esp-hal = { version = "~1.1.0", features = ["defmt", "esp32c3", "unstable"] }
+embedded-hal = "1.0.0"
 
-esp-rtos = { version = "0.3.0", features = [
-  "defmt",
-  "embassy",
-  "esp-alloc",
-  "esp-radio",
-  "esp32c3",
-] }
-
+[target.'cfg(target_arch = "riscv32")'.dependencies]
 defmt                  = "1.0.1"
+embassy-executor       = { version = "0.10.0", features = ["defmt"] }
+embassy-time           = { version = "0.5.0", features = ["defmt"] }
+esp-backtrace          = { version = "0.19.0", features = ["defmt", "esp32c3", "panic-handler"] }
 esp-bootloader-esp-idf = { version = "0.5.0", features = ["defmt", "esp32c3"] }
-
-embassy-net = { version = "0.9.1", features = [
-  "defmt",
-  "dhcpv4",
-  "medium-ethernet",
-  "tcp",
-  "udp",
-] }
-embedded-io = { version = "0.7.1", features = ["defmt"] }
-embedded-io-async = { version = "0.7.0", features = ["defmt"] }
-esp-alloc = { version = "0.10.0", features = ["defmt"] }
-esp-backtrace = { version = "0.19.0", features = [
-  "defmt",
-  "esp32c3",
-  "panic-handler",
-] }
-esp-println = { version = "0.17.0", features = ["defmt-espflash", "esp32c3"] }
-# for more networking protocol support see https://crates.io/crates/edge-net
-bt-hci = "0.8.0"
-embassy-executor = { version = "0.10.0", features = ["defmt"] }
-embassy-time = { version = "0.5.0", features = ["defmt"] }
-esp-radio = { version = "0.18.0", features = [
-  "ble",
-  "coex",
-  "defmt",
-  "esp-alloc",
-  "esp32c3",
-  "unstable",
-  "wifi",
-] }
-smoltcp = { version = "0.13.0", default-features = false, features = [
-  "defmt",
-  "medium-ethernet",
-  "multicast",
-  "proto-dhcpv4",
-  "proto-dns",
-  "proto-ipv4",
-  "socket-dns",
-  "socket-icmp",
-  "socket-raw",
-  "socket-tcp",
-  "socket-udp",
-] }
-trouble-host = { version = "0.6.0", features = ["gatt"] }
-
-critical-section = "1.2.0"
-static_cell      = "2.1.1"
+esp-hal                = { version = "~1.1.0", features = ["defmt", "esp32c3", "unstable"] }
+esp-println            = { version = "0.17.0", features = ["defmt-espflash", "esp32c3"] }
+esp-rtos               = { version = "0.3.0", features = ["defmt", "embassy", "esp32c3"] }
 
 
 # For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html

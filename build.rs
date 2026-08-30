@@ -1,8 +1,19 @@
 fn main() {
     linker_be_nice();
+    println!("cargo:rerun-if-env-changed=BREWTHINK_DISPLAY_STAGE");
+    println!("cargo:rerun-if-env-changed=BREWTHINK_DISPLAY_ROTATION");
+
+    if std::env::var("TARGET").as_deref() != Ok("riscv32imc-unknown-none-elf") {
+        return;
+    }
+
     println!("cargo:rustc-link-arg=-Tdefmt.x");
     // make sure linkall.x is the last linker script (otherwise might cause problems with flip-link)
     println!("cargo:rustc-link-arg=-Tlinkall.x");
+    println!(
+        "cargo:rustc-link-arg=--error-handling-script={}",
+        std::env::current_exe().unwrap().display()
+    );
 }
 
 fn linker_be_nice() {
@@ -63,9 +74,4 @@ fn linker_be_nice() {
 
         std::process::exit(0);
     }
-
-    println!(
-        "cargo:rustc-link-arg=--error-handling-script={}",
-        std::env::current_exe().unwrap().display()
-    );
 }
