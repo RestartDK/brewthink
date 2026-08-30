@@ -59,3 +59,13 @@ The firmware stores only the packed 48,000-byte frame in mapped flash. It uses t
 ## Verified sample
 
 `anime-girl.jpeg` is a progressive 720 × 720 JPEG. The pipeline decoded it into a centered 480 × 480 image inside the 480 × 800 portrait frame. A PNG encoding of the same source also completed the pipeline. Both outputs contained 101,698 black pixels and 282,302 white pixels.
+
+The guarded workflow wrote and read back the JPEG image only in `app1`:
+
+```text
+image size:   99,552 bytes
+write range:  0x650000..0x6684DF
+SHA-256:      66b76caf888a0b6c6239f516a006239f0d44dfd55bf98ebafcb672cc3fc18a25
+```
+
+The write operation's built-in verification passed. Its immediate readback connection timed out. A separate read-only retry returned the exact image SHA-256. The firmware then completed one full image refresh and held without retry. `otadata` was unchanged.

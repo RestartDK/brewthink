@@ -267,6 +267,7 @@ Goal: sync useful content while staying offline-first.
 ## Current immediate next steps
 
 - [x] Visually confirm the corrected 270° orientation and record the result.
-- [ ] Display the build-time decoded sample image from guarded `app1`.
+- [x] Display the build-time decoded sample image from guarded `app1`.
+- [ ] Record human inspection of the decoded sample's rotation and dither quality.
 - [ ] Add a host/WASM display backend around the shared packed image type.
 - [ ] Design bounded-memory runtime image decoding before adding SD image browsing.

@@ -248,13 +248,33 @@ write range:  0x650000..0x66871F
 SHA-256:      cb81a48ed2ffe96e379d3c70d339083b46c6b65db5b2d22f41ca8a1ef2bac890
 ```
 
+## Image pipeline status
+
+Completed on 2026-08-30:
+
+- Added a `no_std` image-rendering crate shared by host, WASM, and firmware builds.
+- Added `contain` and `cover` scaling, bilinear sampling, integer luma conversion, fixed thresholding, and 4 × 4 ordered dithering.
+- Added host-side JPEG, PNG, BMP, and PNM decoding. Full RGB decode data never enters X4 RAM.
+- Added an `image` firmware stage that embeds a packed 48,000-byte frame in mapped flash and streams it through the existing 256-byte transfer buffer.
+- Decoded the progressive 720 × 720 `anime-girl.jpeg` sample and generated a 480 × 800 PBM preview.
+- Built, wrote, and read back the sample image only in `app1`:
+
+  ```text
+  image size:   99,552 bytes
+  write range:  0x650000..0x6684DF
+  SHA-256:      66b76caf888a0b6c6239f516a006239f0d44dfd55bf98ebafcb672cc3fc18a25
+  ```
+
+- The write verification passed. The immediate readback connection timed out, then a separate read-only retry matched the image SHA-256.
+- The controller completed one full image refresh and held without retry.
+
 Current device state:
 
 - `app0` still contains verified stock firmware.
-- `app1` contains the orientation diagnostic.
+- `app1` contains the decoded JPEG diagnostic.
 - `otadata` remains at its pre-bring-up `seq=2 -> app1` state.
-- The controller reported orientation-refresh completion and is holding without retry.
 - Human inspection confirmed the corrected 270° labels are upright and correctly placed.
+- Human inspection of the decoded sample's rotation and dither quality is pending.
 
 ## Current uncommitted work
 
@@ -282,11 +302,11 @@ Do not commit anything under `backup/`, `.direnv/`, `target/`, or `artifacts/`.
 
 ## Next steps
 
-1. Display the build-time decoded JPEG sample from guarded `app1`.
+1. Record human inspection of the decoded sample's rotation and dither quality.
 2. Add a host/WASM display backend around the shared packed image type.
 3. Design bounded-memory runtime decoding before reading images from microSD.
 4. Keep partial refresh, custom LUTs, display sleep, SD, GPIO13, and radio out of scope until full-refresh image rendering is stable.
 
 ## Definition of the next successful checkpoint
 
-The next checkpoint is complete when a decoded source image renders through the same 1-bit pipeline on the build host and the X4 full-refresh backend.
+The next checkpoint is complete when the decoded image's physical result is recorded and the same packed image can render through a host/WASM display backend.

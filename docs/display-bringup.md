@@ -132,8 +132,9 @@ On 2026-08-30, the guarded workflow wrote and read back each stage only in `app1
 7. Native landscape orientation full refresh complete.
 8. 90° logical portrait refresh complete; human inspection found it upside down.
 9. Corrected 270° portrait refresh complete and visually confirmed upright.
+10. Build-time decoded JPEG full refresh complete.
 
-The corrected image was `100,128` bytes with SHA-256 `cb81a48ed2ffe96e379d3c70d339083b46c6b65db5b2d22f41ca8a1ef2bac890`. Its write range was `0x650000..0x66871F`, wholly inside `app1`.
+The corrected orientation image was `100,128` bytes with SHA-256 `cb81a48ed2ffe96e379d3c70d339083b46c6b65db5b2d22f41ca8a1ef2bac890`. Its write range was `0x650000..0x66871F`, wholly inside `app1`. See `docs/image-pipeline.md` for the decoded image result.
 
 `otadata` was not changed during display bring-up. This unit was already configured to boot `app1`; verified stock firmware remains in `app0`.
 
