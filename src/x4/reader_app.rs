@@ -1,6 +1,10 @@
 use core::fmt::Write;
 
 use defmt::info;
+use embassy_futures::select::{Either, select};
+use embassy_sync::{
+    blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, signal::Signal,
+};
 use embassy_time::{Duration, Timer};
 use embedded_sdmmc::{TimeSource, Timestamp};
 use esp_hal::{
@@ -34,7 +38,7 @@ use crate::{
     },
     image::{MonochromeBitmap, MonochromeImage, Size},
     input::{
-        Button, ButtonDebouncer,
+        Button, ButtonDebouncer, ButtonEvent, ButtonTransition, PressedButtons,
         control::{ControlCommand, ControlLineBuffer},
     },
     library::{ShelfBook, render_shelf, render_shelf_cover},
@@ -217,10 +221,60 @@ static mut RETAINED_RESUME: [u32; 6] = [0; 6];
 #[cfg(brewthink_previous_frame_storage = "host_ram")]
 static DISPLAYED_FRAME: StaticCell<[u8; FRAME_BYTES]> = StaticCell::new();
 
+const INPUT_EVENT_CAPACITY: usize = 32;
+static INPUT_EVENTS: Channel<CriticalSectionRawMutex, ButtonEvent, INPUT_EVENT_CAPACITY> =
+    Channel::new();
+static STOP_INPUT: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+static POWER_PIN: Channel<CriticalSectionRawMutex, GPIO3<'static>, 1> = Channel::new();
+
+#[embassy_executor::task]
+pub async fn reader_input_task(mut inputs: X4InputHardware) {
+    let mut debouncer = ButtonDebouncer::new();
+    let mut released_after_boot = false;
+
+    'sampling: loop {
+        if STOP_INPUT.try_take().is_some() {
+            break;
+        }
+
+        match inputs
+            .sample()
+            .await
+            .ok()
+            .and_then(|sample| decode_buttons(sample).ok())
+        {
+            Some(buttons) => {
+                if !released_after_boot {
+                    released_after_boot = buttons == PressedButtons::none();
+                } else if let Some(changes) = debouncer.update(buttons) {
+                    for event in changes.events() {
+                        if matches!(
+                            select(STOP_INPUT.wait(), INPUT_EVENTS.send(event)).await,
+                            Either::First(())
+                        ) {
+                            break 'sampling;
+                        }
+                    }
+                }
+            }
+            None => debouncer.reject_sample(),
+        }
+
+        let next_sample = Timer::after(Duration::from_millis(20));
+        if matches!(
+            select(STOP_INPUT.wait(), next_sample).await,
+            Either::First(())
+        ) {
+            break;
+        }
+    }
+
+    POWER_PIN.send(inputs.into_power_pin()).await;
+}
+
 #[embassy_executor::task]
 pub async fn reader_app_task(
     hardware: X4StorageHardware<'static>,
-    mut inputs: X4InputHardware,
     mut control: UsbSerialJtagRx<'static, Blocking>,
     low_power: LPWR<'static>,
     wakeup_cause: SleepSource,
@@ -288,7 +342,7 @@ pub async fn reader_app_task(
         &mut loaded,
     ) {
         Ok(Some(resume)) => {
-            enter_sleep(resume, store, panel, inputs, low_power).await;
+            enter_sleep(resume, store, panel, low_power).await;
         }
         Ok(None) => {}
         Err(status) => stop(status).await,
@@ -297,7 +351,6 @@ pub async fn reader_app_task(
         info!("reader resumed after GPIO3 deep-sleep wake");
     }
 
-    let mut debouncer = ButtonDebouncer::new();
     let mut control_lines = ControlLineBuffer::new();
     esp_println::println!(
         "BREWCTL/1 READY version=1 width=480 height=800 bytes={}",
@@ -306,19 +359,6 @@ pub async fn reader_app_task(
     write_control_status(&app);
 
     loop {
-        let physical_changes = match inputs
-            .sample()
-            .await
-            .ok()
-            .and_then(|sample| decode_buttons(sample).ok())
-        {
-            Some(buttons) => debouncer.update(buttons),
-            None => {
-                debouncer.reject_sample();
-                None
-            }
-        };
-
         if let Some(button) = poll_control(
             &mut control,
             &mut control_lines,
@@ -336,34 +376,37 @@ pub async fn reader_app_task(
             .run_input(InputSource::Usb, button)
             {
                 Ok(Some(resume)) => {
-                    enter_sleep(resume, store, panel, inputs, low_power).await;
+                    enter_sleep(resume, store, panel, low_power).await;
                 }
                 Ok(None) => {}
                 Err(status) => stop(status).await,
             }
         }
 
-        if let Some(changes) = physical_changes {
-            for button in changes.pressed().iter() {
-                match (ReaderRuntime {
-                    app: &mut app,
-                    library,
-                    store,
-                    panel: &mut panel,
-                    workspaces: &mut workspaces,
-                    loaded: &mut loaded,
-                })
-                .run_input(InputSource::Physical, button)
-                {
-                    Ok(Some(resume)) => {
-                        enter_sleep(resume, store, panel, inputs, low_power).await;
-                    }
-                    Ok(None) => {}
-                    Err(status) => stop(status).await,
-                }
-            }
+        let next_control_poll = Timer::after(Duration::from_millis(20));
+        let Either::First(event) = select(INPUT_EVENTS.receive(), next_control_poll).await else {
+            continue;
+        };
+        if event.transition() != ButtonTransition::Pressed {
+            continue;
         }
-        Timer::after(Duration::from_millis(20)).await;
+
+        match (ReaderRuntime {
+            app: &mut app,
+            library,
+            store,
+            panel: &mut panel,
+            workspaces: &mut workspaces,
+            loaded: &mut loaded,
+        })
+        .run_input(InputSource::Physical, event.button())
+        {
+            Ok(Some(resume)) => {
+                enter_sleep(resume, store, panel, low_power).await;
+            }
+            Ok(None) => {}
+            Err(status) => stop(status).await,
+        }
     }
 }
 
@@ -941,7 +984,6 @@ async fn enter_sleep(
     resume: ResumePoint,
     store: &'static DeviceStore,
     panel: ReaderDisplay,
-    inputs: X4InputHardware,
     low_power: LPWR<'static>,
 ) -> ! {
     write_resume(resume);
@@ -959,7 +1001,8 @@ async fn enter_sleep(
     if let Err(status) = sleep_result {
         stop(status).await;
     }
-    let mut power: GPIO3<'static> = inputs.into_power_pin();
+    STOP_INPUT.signal(());
+    let mut power = POWER_PIN.receive().await;
     loop {
         let released = {
             let input = Input::new(power.reborrow(), InputConfig::default().with_pull(Pull::Up));

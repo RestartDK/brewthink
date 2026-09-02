@@ -38,8 +38,6 @@ use embedded_sdmmc::{
     Error as FilesystemError, Mode, TimeSource, Timestamp, VolumeIdx, VolumeManager,
 };
 use esp_backtrace as _;
-#[cfg(feature = "device-reader")]
-use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_hal::{
     clock::CpuClock,
     delay::Delay,
@@ -52,7 +50,14 @@ use esp_hal::{
     system::SleepSource,
     timer::timg::TimerGroup,
 };
+#[cfg(feature = "device-reader")]
+use esp_hal::{
+    interrupt::{Priority, software::SoftwareInterrupt},
+    usb_serial_jtag::UsbSerialJtag,
+};
 use esp_println as _;
+#[cfg(feature = "device-reader")]
+use esp_rtos::embassy::InterruptExecutor;
 use static_cell::StaticCell;
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -96,9 +101,11 @@ fn initialize(spawner: Spawner) {
     let chip_selects = SharedSpiChipSelects::deselected(peripherals.GPIO21, peripherals.GPIO12);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
-    let sw_interrupt =
+    let sw_interrupts =
         esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
-    esp_rtos::start(timg0.timer0, sw_interrupt.software_interrupt0);
+    #[cfg(feature = "device-reader")]
+    let reader_input_interrupt = sw_interrupts.software_interrupt1;
+    esp_rtos::start(timg0.timer0, sw_interrupts.software_interrupt0);
 
     info!(
         "Brewthink X4 firmware booted: version={=str}",
@@ -262,10 +269,11 @@ fn initialize(spawner: Spawner) {
                     peripherals.GPIO20,
                 )
                 .initialize();
+                spawn_reader_input(inputs, reader_input_interrupt);
+
                 let (control, _control_tx) = UsbSerialJtag::new(peripherals.USB_DEVICE).split();
                 let task = match brewthink::x4::reader_app_task(
                     hardware,
-                    inputs,
                     control,
                     peripherals.LPWR,
                     esp_hal::system::wakeup_cause(),
@@ -319,6 +327,20 @@ fn initialize(spawner: Spawner) {
             run_display_diagnostic(hardware, display_stage, rotation);
         }
     }
+}
+
+#[cfg(feature = "device-reader")]
+#[inline(never)]
+fn spawn_reader_input(inputs: X4InputHardware, interrupt: SoftwareInterrupt<'static, 1>) {
+    static READER_INPUT_EXECUTOR: StaticCell<InterruptExecutor<1>> = StaticCell::new();
+    let input_spawner = READER_INPUT_EXECUTOR
+        .init(InterruptExecutor::new(interrupt))
+        .start(Priority::Priority1);
+    let input_task = match brewthink::x4::reader_input_task(inputs) {
+        Ok(task) => task,
+        Err(_) => hold((), "reader input task allocation failed"),
+    };
+    input_spawner.spawn(input_task);
 }
 
 fn storage_hardware_or_hold(
