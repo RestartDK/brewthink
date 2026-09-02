@@ -6,6 +6,7 @@ pub const STORAGE_READONLY: &str = "storage-readonly";
 pub const STORAGE_WRITE_TEST: &str = "storage-write-test";
 pub const INTEGRATED_DEVICE: &str = "integrated-device";
 pub const SLEEP_WAKE: &str = "sleep-wake";
+pub const READER_APP: &str = "reader-app";
 pub const DISPLAY_RESET: &str = "display-reset";
 pub const DISPLAY_INITIALIZE: &str = "display-initialize";
 pub const DISPLAY_WRITE: &str = "display-write";
@@ -24,6 +25,7 @@ pub const ALL_STAGES: &[&str] = &[
     STORAGE_WRITE_TEST,
     INTEGRATED_DEVICE,
     SLEEP_WAKE,
+    READER_APP,
     DISPLAY_RESET,
     DISPLAY_INITIALIZE,
     DISPLAY_WRITE,

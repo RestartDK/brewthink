@@ -7,7 +7,6 @@ This repository is for learning embedded Rust by building custom firmware for a 
 - Do **not** erase flash.
 - Do **not** write to flash unless the user explicitly asks and the exact offset/size/target are reviewed.
 - Do **not** burn eFuses or run any `espefuse burn...` command.
-- Do **not** overwrite the bootloader, partition table, NVS, filesystem, or stock `app0` during early development.
 - Do **not** use `cargo run` as a flashing shortcut. The generated runner has been disabled intentionally.
 - Do **not** commit files under `backup/`, `.direnv/`, or `target/`.
 - Do **not** commit raw flash dumps, NVS, filesystem extracts, MAC addresses, credentials, or private device identifiers.
@@ -149,6 +148,21 @@ cargo check
 ```
 
 `cargo check` is safe. `cargo run` must not flash the device; the generated runner was disabled intentionally.
+
+## Herdr pane rules
+
+Builds, flashes, and serial monitors run in dedicated herdr tabs. Past sessions lost many minutes to empty reads, stale watch matches, and blind re-runs. These rules exist to prevent that.
+
+- Pane shells start direnv-activated with the flake env. Run `cargo`, `espflash`, and repo scripts directly. Never wrap them in `nix develop --command`; the flake re-evaluation prints nothing for minutes and outlasts watch timeouts.
+- `read` with `source: "recent"` or `"recent-unwrapped"` (and any `read` without a source) returns only the trailing burst of pane output. On a settled pane that is the final prompt redraw or nothing at all. To read a finished command, use `source: "visible"`.
+- `watch` matches against the current trailing output window plus new output. A needle printed by a previous run in the same pane can match instantly. Never watch for generic needles like `Finished`, `OK:`, or `Commands:`.
+- End every finite command with a unique sentinel and tee a log file:
+  `{ cmd1 && cmd2; echo "__PI_DONE_T<token>_EXIT_$?__"; } 2>&1 | tee /tmp/pi-<name>.log`
+  Mint a fresh `<token>` per run and watch for the exact sentinel string. Size the timeout for a cold build: 360000 ms for cargo/clippy, 180000 ms for flash scripts, 60000 ms for monitor boot markers.
+- On a watch timeout, never re-run blind. Read the pane with `source: "visible"` and tail the tee'd log first. Re-run only when the shell prompt is back and the sentinel never printed.
+- Never send keys (C-c, C-r) to a pane before a visible read confirms what is running in it. C-r resets the chip inside espflash monitor; in a plain shell it does something else entirely.
+- `espflash monitor` never exits. Watch only for the specific bench marker you need, then move on. When the task ends, C-c the monitor and close its tab.
+- For output that matters, grep the tee'd log with the bash tool instead of re-reading scrollback.
 
 ## External references to inspect
 

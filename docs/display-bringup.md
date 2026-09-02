@@ -2,7 +2,7 @@
 
 ## Scope
 
-Brewthink currently supports conservative monochrome full refreshes and explicit SSD1677 deep sleep on the Xteink X4's 800 × 480 GDEQ0426T82 panel. The implementation deliberately excludes partial refresh, custom LUTs, grayscale, and radio initialization. Integrated diagnostics serialize display and read-only SD traffic through one SPI2 owner.
+Brewthink supports conservative monochrome full refreshes and explicit SSD1677 deep sleep on the Xteink X4's 800 × 480 GDEQ0426T82 panel. The reader also has experimental host-RAM and controller-RAM baseline storage for full-clean, quick-clean, and differential refreshes. Rectangular updates, custom LUTs, grayscale, and radio initialization remain excluded. Integrated diagnostics serialize display and read-only SD traffic through one SPI2 owner.
 
 The portable code is under `src/display/`:
 
@@ -27,7 +27,7 @@ The ESP32-C3 adapter is under `src/x4/display.rs`. It binds SPI2 and the verifie
 | Panel row size | 100 bytes |
 | Default logical row size | 60 bytes |
 | Frame size | 48,000 bytes |
-| SPI | Mode 0, MSB first, 20 MHz |
+| SPI | Mode 0, MSB first, 40 MHz |
 | BUSY | Active high |
 | BUSY timeout | 15 seconds |
 | Reset | High 20 ms, low 2 ms, high 20 ms |
@@ -35,7 +35,9 @@ The ESP32-C3 adapter is under `src/x4/display.rs`. It binds SPI2 and the verifie
 | Display CS / D/C / reset / BUSY | GPIO21 / GPIO4 / GPIO5 / GPIO6 |
 | SD CS | GPIO12, retained high throughout display diagnostics |
 
-OpenX4 and MarigoldOS both run the X4 display at 40 MHz. Brewthink starts at 20 MHz. The SSD1677 datasheet describes a controller with up to 960 source and 680 gate outputs; those maxima are not the fitted panel dimensions. Brewthink uses the GDEQ0426T82's actual 800 × 480 geometry.
+Brewthink runs the X4 display phase at 40 MHz, matching MarigoldOS and the established X4 community overclock. The SSD1677 datasheet specifies a 20 MHz maximum write clock, and current FreeInk/CrossPoint defaults to that in-spec rate unless `FREEINK_X4_OVERCLOCK_SPI` is enabled. Only the display phase uses 40 MHz; Brewthink restores the separately verified 10 MHz SD data clock before card traffic. Moving from 20 to 40 MHz reduces two 48,000-byte plane transfers by about 19 ms but does not shorten the much longer physical e-paper waveform.
+
+The SSD1677 datasheet describes a controller with up to 960 source and 680 gate outputs; those maxima are not the fitted panel dimensions. Brewthink uses the GDEQ0426T82's actual 800 × 480 geometry.
 
 The first labeled test established that panel RAM is naturally landscape. `Frame` exposes rotation as a domain value rather than baking orientation into drawing code:
 
@@ -81,6 +83,46 @@ wait until BUSY is low
 ```
 
 The first `SpiBus::write` and every command/data phase are flushed before D/C or CS changes. A transport error deselects the display. A BUSY timeout is returned as an error; diagnostics stop and retain the GPIO/SPI objects without retrying.
+
+## Experimental baseline storage and refresh
+
+The device reader always has a 48,000-byte next frame in its frame/codec workspace. `PreviousFrameStorage` selects where the last displayed frame lives:
+
+| Storage | Previous frame | ESP32 framebuffer cost |
+| --- | --- | ---: |
+| `host-ram` | Dedicated ESP32 buffer | 96,000 bytes total |
+| `controller-ram` | SSD1677 RED RAM | 48,000 bytes total |
+
+`host-ram` is the conventional dual-buffer strategy. A differential refresh writes the next frame to BW RAM and the host's previous frame to RED RAM before activation. The host copies the next frame into its previous-frame buffer only after BUSY reports completion.
+
+`controller-ram` is the conventional single-buffer strategy. A differential refresh writes only the next frame to BW RAM before activation because RED RAM already holds the previous frame. After completion, Brewthink seeds RED RAM with the new baseline. The stock-parity path also rewrites BW RAM to match FreeInk's conservative controller synchronization.
+
+`BaselineState` tracks whether either storage strategy is trustworthy. A failed refresh marks it unknown. A requested differential refresh becomes quick-clean whenever the baseline is unknown, including the first refresh after boot.
+
+The `automatic` refresh policy requests differential updates during normal interaction. After 15 successful differential updates it requests one quick-clean update and resets the count. A promoted first update also resets the count because the applied mode, rather than the requested mode, drives policy bookkeeping. Fixed `full-clean`, `quick-clean`, and `differential` policies remain available for hardware comparisons.
+
+Two X4 drive profiles are available:
+
+| Drive profile | Initialization | Full-clean | Quick-clean | Differential |
+| --- | --- | ---: | ---: | ---: |
+| `openx4-fast-du` | Booster tail `40`, border `01` | `F4` | `D4` with temperature `5A` | `1C` |
+| `stock-parity` | Booster tail `80`, border `80` | `F7` | `D7` with temperature `5A` | `FC` |
+
+The reader now defaults to the conservative `stock-parity` drive profile, memory-saving `controller-ram` storage, and mixed `automatic` refresh policy. These defaults have compile-time and command-transcript coverage but are not yet verified on the physical panel. Compare baseline storage while holding the drive profile and refresh mode constant:
+
+```bash
+BREWTHINK_X4_DRIVE_PROFILE=stock-parity \
+BREWTHINK_PREVIOUS_FRAME_STORAGE=host-ram \
+BREWTHINK_DISPLAY_REFRESH=differential \
+  scripts/build-reader-app1.sh artifacts/brewthink-reader-stock-parity-host-ram-differential-app1.bin
+
+BREWTHINK_X4_DRIVE_PROFILE=stock-parity \
+BREWTHINK_PREVIOUS_FRAME_STORAGE=controller-ram \
+BREWTHINK_DISPLAY_REFRESH=differential \
+  scripts/build-reader-app1.sh artifacts/brewthink-reader-stock-parity-controller-ram-differential-app1.bin
+```
+
+Accepted drive profiles are `openx4-fast-du` and `stock-parity`. Accepted previous-frame storage values are `host-ram` and `controller-ram`. Accepted refresh policies are `automatic`, `full-clean`, `quick-clean`, and `differential`. Building does not touch the device. Non-default combinations have command-transcript tests but are not yet verified on the physical panel.
 
 ## Display deep sleep
 

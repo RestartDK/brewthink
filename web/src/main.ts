@@ -1,7 +1,7 @@
 import init, {
-  DitherMode,
-  FitMode,
-  render_image,
+  RenderedFrame,
+  WebInput,
+  WebLibrary,
   renderer_version,
 } from "./generated/brewthink_web.js";
 import "./style.css";
@@ -9,33 +9,30 @@ import "./style.css";
 const WIDTH = 480;
 const HEIGHT = 800;
 const FRAME_BYTES = 48_000;
+const MAX_EPUB_BYTES = 32 * 1024 * 1024;
 const INK_SHADE = { red: 27, green: 27, blue: 24 };
 const PAPER_SHADE = { red: 230, green: 227, blue: 211 };
 const integerFormat = new Intl.NumberFormat("en-US");
-const byteFormat = new Intl.NumberFormat("en-US", {
-  minimumFractionDigits: 1,
-  maximumFractionDigits: 1,
-});
 
-type SourceImage = Readonly<{
-  name: string;
-  bytes: Uint8Array;
-}>;
-
-type FrameDetails = Readonly<{
-  sourceWidth: number;
-  sourceHeight: number;
-  contentWidth: number;
-  contentHeight: number;
-  blackPixels: number;
-  payloadBytes: number;
-}>;
+type Screen = "library" | "reader" | "sleep" | "error";
 
 type ViewState =
-  | Readonly<{ kind: "empty" }>
-  | Readonly<{ kind: "loading"; fileName: string }>
-  | Readonly<{ kind: "error"; message: string }>
-  | Readonly<{ kind: "ready"; fileName: string; details: FrameDetails }>;
+  | Readonly<{ kind: "booting" }>
+  | Readonly<{ kind: "rendering"; sourceName: string }>
+  | Readonly<{
+      kind: "ready";
+      sourceName: string;
+      screen: Screen;
+      title: string;
+      creator: string;
+      selected: number;
+      itemCount: number;
+      page: number;
+      pageCount: number;
+      chapter: number;
+      chapterCount: number;
+    }>
+  | Readonly<{ kind: "error"; sourceName: string; message: string }>;
 
 const app = document.querySelector("#app");
 if (!(app instanceof HTMLDivElement)) {
@@ -47,7 +44,7 @@ app.innerHTML = `
     <div class="product-mark" aria-label="Brewthink X4 Simulator">
       <span class="wordmark">BREWTHINK</span>
       <span class="product-divider" aria-hidden="true">/</span>
-      <span class="product-name">X4 simulator</span>
+      <span class="product-name">Reader simulator</span>
     </div>
     <div class="runtime-status" id="runtime-status" role="status" aria-live="polite">
       <span class="status-light" aria-hidden="true"></span>
@@ -59,10 +56,10 @@ app.innerHTML = `
     <section class="device-stage" aria-labelledby="preview-heading">
       <div class="stage-heading">
         <div>
-          <p class="eyebrow">Logical display</p>
-          <h1 id="preview-heading">480 × 800 portrait</h1>
+          <p class="eyebrow">Shared application frame</p>
+          <h1 id="preview-heading">Starting · 480 × 800</h1>
         </div>
-        <span class="rotation-label">270° panel rotation</span>
+        <span class="rotation-label">X4 portrait view</span>
       </div>
 
       <div class="reader" aria-label="Xteink X4 display preview">
@@ -73,12 +70,12 @@ app.innerHTML = `
             width="480"
             height="800"
             role="img"
-            aria-label="Empty X4 e-paper framebuffer"
+            aria-label="Brewthink application loading"
           ></canvas>
           <div class="display-placeholder" id="display-placeholder">
             <span class="placeholder-grid" aria-hidden="true"></span>
-            <p id="placeholder-title">No frame loaded</p>
-            <span id="placeholder-detail">Select an image to run the Rust renderer.</span>
+            <p id="placeholder-title">Starting renderer</p>
+            <span id="placeholder-detail">Preparing the shared Rust application frame.</span>
           </div>
         </div>
         <div class="reader-footer" aria-hidden="true">
@@ -90,96 +87,85 @@ app.innerHTML = `
 
     <aside class="inspector" aria-labelledby="inspector-heading">
       <div class="inspector-heading">
-        <p class="eyebrow">Frame preparation</p>
-        <h2 id="inspector-heading">Render source</h2>
+        <div>
+          <p class="eyebrow">Complete product loop</p>
+          <h2 id="inspector-heading">Library · read · sleep · resume</h2>
+        </div>
+        <span class="build-label">WASM</span>
       </div>
 
       <section class="control-section source-section" aria-labelledby="source-heading">
         <div class="section-heading">
-          <h3 id="source-heading">Source image</h3>
-          <span>JPEG · PNG · BMP · PNM</span>
+          <h3 id="source-heading">Library source</h3>
+          <span>DRM-free EPUB</span>
         </div>
-        <label class="drop-zone" id="drop-zone" for="source-file">
+        <label class="drop-zone" id="drop-zone" for="epub-file">
           <input
             class="file-input"
-            id="source-file"
+            id="epub-file"
             type="file"
-            accept="image/jpeg,image/png,image/bmp,.pnm,.ppm,.pgm,.pbm"
+            accept="application/epub+zip,.epub"
             aria-describedby="format-help"
             disabled
           />
-          <span class="drop-action">Choose image</span>
-          <span class="drop-hint" id="format-help">or drop a file here</span>
+          <span class="drop-action">Open EPUB</span>
+          <span class="drop-hint" id="format-help">or drop one here · read only</span>
         </label>
-        <p class="file-summary" id="file-summary">No source selected</p>
-      </section>
-
-      <section class="control-section" aria-labelledby="fit-heading">
-        <div class="section-heading">
-          <h3 id="fit-heading">Image fit</h3>
-          <span>480 × 800 target</span>
+        <div class="source-summary">
+          <p class="file-summary" id="file-summary">Built-in public-domain sample</p>
+          <button class="text-button" id="reset-library" type="button" disabled>Reset sample</button>
         </div>
-        <fieldset class="segmented-control" id="fit-control">
-          <legend class="visually-hidden">Image fit</legend>
-          <label>
-            <input type="radio" name="fit" value="contain" checked />
-            <span>Contain</span>
-          </label>
-          <label>
-            <input type="radio" name="fit" value="cover" />
-            <span>Cover</span>
-          </label>
-        </fieldset>
       </section>
 
-      <section class="control-section" aria-labelledby="dither-heading">
+      <section class="control-section selected-section" aria-labelledby="selected-heading">
         <div class="section-heading">
-          <h3 id="dither-heading">Dither</h3>
-          <span>1-bit output</span>
+          <h3 id="selected-heading">Current book</h3>
+          <span id="selection-position">—</span>
         </div>
-        <fieldset class="segmented-control" id="dither-control">
-          <legend class="visually-hidden">Dither method</legend>
-          <label>
-            <input type="radio" name="dither" value="ordered" checked />
-            <span>Ordered 4 × 4</span>
-          </label>
-          <label>
-            <input type="radio" name="dither" value="threshold" />
-            <span>Threshold</span>
-          </label>
-        </fieldset>
-      </section>
-
-      <section class="control-section output-section" aria-labelledby="output-heading">
-        <div class="section-heading">
-          <h3 id="output-heading">Packed frame</h3>
-          <span id="frame-state">Waiting</span>
+        <div>
+          <p class="selected-title" id="selected-title">Waiting for renderer</p>
+          <p class="selected-creator" id="selected-creator">—</p>
         </div>
         <dl class="frame-facts">
           <div>
-            <dt>Source</dt>
-            <dd id="source-size">—</dd>
+            <dt id="page-label">View</dt>
+            <dd id="view-position">—</dd>
           </div>
           <div>
-            <dt>Rendered content</dt>
-            <dd id="content-size">—</dd>
-          </div>
-          <div>
-            <dt>Black pixels</dt>
-            <dd id="black-pixels">—</dd>
-          </div>
-          <div>
-            <dt>Payload</dt>
-            <dd id="payload-size">—</dd>
+            <dt>Frame payload</dt>
+            <dd>${integerFormat.format(FRAME_BYTES)} bytes</dd>
           </div>
         </dl>
-        <button class="download-button" id="download-frame" type="button" disabled>
-          Download .frame.bin
-        </button>
+      </section>
+
+      <section class="control-section input-section" aria-labelledby="input-heading">
+        <div class="section-heading">
+          <h3 id="input-heading">Device input</h3>
+          <span>Arrows · Enter · Esc · P</span>
+        </div>
+        <div class="device-controls">
+          <div class="direction-pad" aria-label="Application navigation">
+            <button class="key key-up" type="button" data-input="up" aria-label="Move up">↑</button>
+            <button class="key key-left" type="button" data-input="left" aria-label="Move left">←</button>
+            <span class="key-center" aria-hidden="true"></span>
+            <button class="key key-right" type="button" data-input="right" aria-label="Move right">→</button>
+            <button class="key key-down" type="button" data-input="down" aria-label="Move down">↓</button>
+          </div>
+          <button class="confirm-button" id="confirm-selection" type="button" disabled>
+            <span id="confirm-label">Confirm</span>
+            <small id="confirm-hint">Open selected book</small>
+          </button>
+        </div>
+        <div class="system-controls">
+          <button class="secondary-button" id="back-button" type="button" disabled>Back</button>
+          <button class="secondary-button power-button" id="power-button" type="button" disabled>
+            Sleep
+          </button>
+        </div>
       </section>
 
       <div class="message" id="message" role="status" aria-live="polite">
-        The browser uses the same Rust scaler and ditherer as firmware preparation.
+        Shared Rust owns navigation, reading position, sleep, wake, and rendering.
       </div>
     </aside>
   </main>
@@ -187,28 +173,32 @@ app.innerHTML = `
 
 const canvas = requireCanvas("#display");
 const context = requireCanvasContext(canvas);
-
 const runtimeStatus = requireElement("#runtime-status");
 const runtimeLabel = requireElement("#runtime-label");
-const fileInput = requireInput("#source-file");
+const previewHeading = requireElement("#preview-heading");
+const fileInput = requireInput("#epub-file");
 const dropZone = requireElement("#drop-zone");
 const fileSummary = requireElement("#file-summary");
 const placeholder = requireElement("#display-placeholder");
 const placeholderTitle = requireElement("#placeholder-title");
 const placeholderDetail = requireElement("#placeholder-detail");
-const frameState = requireElement("#frame-state");
-const sourceSize = requireElement("#source-size");
-const contentSize = requireElement("#content-size");
-const blackPixels = requireElement("#black-pixels");
-const payloadSize = requireElement("#payload-size");
-const downloadButton = requireButton("#download-frame");
+const selectedTitle = requireElement("#selected-title");
+const selectedCreator = requireElement("#selected-creator");
+const selectionPosition = requireElement("#selection-position");
+const pageLabel = requireElement("#page-label");
+const viewPosition = requireElement("#view-position");
+const resetButton = requireButton("#reset-library");
+const confirmButton = requireButton("#confirm-selection");
+const confirmLabel = requireElement("#confirm-label");
+const confirmHint = requireElement("#confirm-hint");
+const backButton = requireButton("#back-button");
+const powerButton = requireButton("#power-button");
 const message = requireElement("#message");
-const fitInputs = requireRadioInputs('input[name="fit"]');
-const ditherInputs = requireRadioInputs('input[name="dither"]');
+const directionButtons = requireButtons("[data-input]");
 
-let source: SourceImage | null = null;
-let packedFrame: Uint8Array | null = null;
-let viewState: ViewState = { kind: "empty" };
+let library: WebLibrary | null = null;
+let sourceName = "Built-in public-domain sample";
+let viewState: ViewState = { kind: "booting" };
 let loadGeneration = 0;
 
 drawPaper(context);
@@ -217,7 +207,7 @@ renderState();
 fileInput.addEventListener("change", () => {
   const file = fileInput.files?.item(0);
   if (file !== null && file !== undefined) {
-    void loadFile(file);
+    void loadEpub(file);
   }
 });
 
@@ -229,35 +219,37 @@ dropZone.addEventListener("drop", (event) => {
   dropZone.classList.remove("is-dragging");
   const file = event.dataTransfer?.files.item(0);
   if (file !== null && file !== undefined && !fileInput.disabled) {
-    void loadFile(file);
+    void loadEpub(file);
   }
 });
 
-for (const input of [...fitInputs, ...ditherInputs]) {
-  input.addEventListener("change", () => {
-    if (source !== null) {
-      renderSource(source);
+for (const button of directionButtons) {
+  button.addEventListener("click", () => {
+    const input = inputFromValue(button.dataset.input);
+    if (input !== null) {
+      sendInput(input);
     }
   });
 }
 
-downloadButton.addEventListener("click", () => {
-  if (packedFrame === null || source === null) {
+document.addEventListener("keydown", (event) => {
+  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLButtonElement) {
     return;
   }
-
-  const payload = new ArrayBuffer(packedFrame.byteLength);
-  new Uint8Array(payload).set(packedFrame);
-  const blob = new Blob([payload], { type: "application/octet-stream" });
-  const link = document.createElement("a");
-  const url = URL.createObjectURL(blob);
-  link.href = url;
-  link.download = `${fileStem(source.name)}.frame.bin`;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  const input = inputFromKey(event.key);
+  if (input !== null) {
+    event.preventDefault();
+    sendInput(input);
+  }
 });
+
+resetButton.addEventListener("click", () => {
+  replaceLibrary(new WebLibrary(), "Built-in public-domain sample");
+});
+
+confirmButton.addEventListener("click", () => sendInput(WebInput.Confirm));
+backButton.addEventListener("click", () => sendInput(WebInput.Back));
+powerButton.addEventListener("click", () => sendInput(WebInput.Power));
 
 void initializeRenderer();
 
@@ -267,149 +259,248 @@ async function initializeRenderer(): Promise<void> {
     runtimeStatus.classList.add("is-ready");
     runtimeLabel.textContent = `Rust/WASM ${renderer_version()}`;
     fileInput.disabled = false;
+    replaceLibrary(new WebLibrary(), "Built-in public-domain sample");
   } catch (error: unknown) {
     runtimeStatus.classList.add("is-error");
     runtimeLabel.textContent = "Renderer unavailable";
-    viewState = { kind: "error", message: errorMessage(error) };
+    viewState = {
+      kind: "error",
+      sourceName,
+      message: errorMessage(error),
+    };
     renderState();
   }
 }
 
-async function loadFile(file: File): Promise<void> {
+async function loadEpub(file: File): Promise<void> {
   const generation = ++loadGeneration;
-  viewState = { kind: "loading", fileName: file.name };
+  viewState = { kind: "rendering", sourceName: file.name };
   renderState();
 
   try {
+    if (file.size > MAX_EPUB_BYTES) {
+      throw new Error("EPUB exceeds the 32 MiB simulator limit");
+    }
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (generation !== loadGeneration) {
       return;
     }
-    source = { name: file.name, bytes };
-    renderSource(source);
+    replaceLibrary(WebLibrary.fromEpub(bytes), file.name);
   } catch (error: unknown) {
-    viewState = { kind: "error", message: errorMessage(error) };
-    packedFrame = null;
+    viewState = {
+      kind: "error",
+      sourceName: file.name,
+      message: errorMessage(error),
+    };
     renderState();
   } finally {
     fileInput.value = "";
   }
 }
 
-function renderSource(image: SourceImage): void {
-  viewState = { kind: "loading", fileName: image.name };
+function replaceLibrary(nextLibrary: WebLibrary, nextSourceName: string): void {
+  library?.free();
+  library = nextLibrary;
+  sourceName = nextSourceName;
+  renderApplication();
+}
+
+function sendInput(input: WebInput): void {
+  if (library === null || viewState.kind !== "ready") {
+    return;
+  }
+  if (viewState.screen === "sleep" && input === WebInput.Power) {
+    library.wake();
+  } else {
+    library.input(input);
+  }
+  renderApplication();
+}
+
+function renderApplication(): void {
+  if (library === null) {
+    return;
+  }
+  viewState = { kind: "rendering", sourceName };
   renderState();
 
+  let frame: RenderedFrame | null = null;
   try {
-    const frame = render_image(image.bytes, selectedFit(), selectedDither());
-    const pixels = frame.pixels();
-    const details: FrameDetails = {
-      sourceWidth: frame.source_width,
-      sourceHeight: frame.source_height,
-      contentWidth: frame.content_width,
-      contentHeight: frame.content_height,
-      blackPixels: frame.black_pixels,
-      payloadBytes: frame.payload_bytes,
+    frame = library.render();
+    drawFrame(context, frame.pixels());
+    viewState = {
+      kind: "ready",
+      sourceName,
+      screen: parseScreen(frame.screen),
+      title: frame.title,
+      creator: frame.creator,
+      selected: frame.selected,
+      itemCount: frame.item_count,
+      page: frame.page,
+      pageCount: frame.page_count,
+      chapter: frame.chapter,
+      chapterCount: frame.chapter_count,
     };
-    frame.free();
-
-    drawFrame(context, pixels);
-    packedFrame = pixels;
-    viewState = { kind: "ready", fileName: image.name, details };
   } catch (error: unknown) {
-    packedFrame = null;
-    viewState = { kind: "error", message: errorMessage(error) };
+    viewState = { kind: "error", sourceName, message: errorMessage(error) };
+  } finally {
+    frame?.free();
   }
-
   renderState();
 }
 
 function renderState(): void {
-  message.classList.toggle("is-error", viewState.kind === "error");
+  const isReady = viewState.kind === "ready";
+  const isError = viewState.kind === "error";
+  const screen = viewState.kind === "ready" ? viewState.screen : null;
+  message.classList.toggle("is-error", isError || screen === "error");
+  resetButton.disabled =
+    viewState.kind === "booting" ||
+    viewState.kind === "rendering" ||
+    (isReady && sourceName === "Built-in public-domain sample" && screen === "library");
+  confirmButton.disabled = !isReady || screen === "sleep" || screen === "error";
+  backButton.disabled = !isReady || screen === "library" || screen === "sleep";
+  powerButton.disabled = !isReady || screen === "error";
+  powerButton.textContent = screen === "sleep" ? "Wake" : "Sleep";
+  for (const button of directionButtons) {
+    button.disabled = !isReady || screen === "sleep" || screen === "error";
+  }
 
   switch (viewState.kind) {
-    case "empty":
+    case "booting":
       placeholder.hidden = false;
-      placeholderTitle.textContent = "No frame loaded";
-      placeholderDetail.textContent = "Select an image to run the Rust renderer.";
-      fileSummary.textContent = "No source selected";
-      frameState.textContent = "Waiting";
-      message.textContent =
-        "The browser uses the same Rust scaler and ditherer as firmware preparation.";
-      clearFacts();
+      placeholderTitle.textContent = "Starting renderer";
+      placeholderDetail.textContent = "Preparing the shared Rust application frame.";
+      selectedTitle.textContent = "Waiting for renderer";
+      selectedCreator.textContent = "—";
+      selectionPosition.textContent = "—";
+      viewPosition.textContent = "—";
       break;
-    case "loading":
+    case "rendering":
       placeholder.hidden = false;
-      placeholderTitle.textContent = "Preparing frame";
-      placeholderDetail.textContent = viewState.fileName;
-      fileSummary.textContent = viewState.fileName;
-      frameState.textContent = "Rendering";
-      message.textContent = "Decoding and rendering inside Rust/WASM…";
+      placeholderTitle.textContent = "Building frame";
+      placeholderDetail.textContent = viewState.sourceName;
+      fileSummary.textContent = viewState.sourceName;
+      message.textContent = "Parsing bounded content and packing a 1-bit frame…";
       break;
     case "error":
       placeholder.hidden = false;
-      placeholderTitle.textContent = "Could not render image";
-      placeholderDetail.textContent = "Choose a supported image and try again.";
-      frameState.textContent = "Error";
+      placeholderTitle.textContent = "Could not open EPUB";
+      placeholderDetail.textContent = "Choose a valid, DRM-free EPUB and try again.";
+      fileSummary.textContent = viewState.sourceName;
+      selectedTitle.textContent = "EPUB rejected";
+      selectedCreator.textContent = "—";
+      selectionPosition.textContent = "—";
+      viewPosition.textContent = "—";
       message.textContent = viewState.message;
-      clearFacts();
       break;
-    case "ready": {
-      const { details } = viewState;
+    case "ready":
       placeholder.hidden = true;
+      fileSummary.textContent = viewState.sourceName;
+      selectedTitle.textContent = viewState.title;
+      selectedCreator.textContent = viewState.creator;
+      renderReadyState(viewState);
+      break;
+  }
+}
+
+function renderReadyState(state: Extract<ViewState, { kind: "ready" }>): void {
+  switch (state.screen) {
+    case "library":
+      previewHeading.textContent = "Library shelf · 480 × 800";
+      selectionPosition.textContent = `${state.selected + 1} / ${state.itemCount}`;
+      pageLabel.textContent = "Shelf page";
+      viewPosition.textContent = `${state.page + 1} / ${state.pageCount}`;
+      confirmLabel.textContent = "Confirm";
+      confirmHint.textContent = "Open selected book";
+      message.textContent =
+        "Choose a cover, press Confirm, then turn pages with Left and Right.";
       canvas.setAttribute(
         "aria-label",
-        `${viewState.fileName}, rendered as a 480 by 800 monochrome X4 framebuffer`,
+        `Brewthink two by two library shelf. Selected: ${state.title} by ${state.creator}.`,
       );
-      fileSummary.textContent = viewState.fileName;
-      frameState.textContent = "Ready";
-      sourceSize.textContent = `${details.sourceWidth} × ${details.sourceHeight}`;
-      contentSize.textContent = `${details.contentWidth} × ${details.contentHeight}`;
-      blackPixels.textContent = integerFormat.format(details.blackPixels);
-      payloadSize.textContent = `${byteFormat.format(details.payloadBytes / 1024)} KiB`;
-      message.textContent = "Frame ready. The download is the raw 48,000-byte page payload.";
       break;
-    }
+    case "reader":
+      previewHeading.textContent = "EPUB reader · 480 × 800";
+      selectionPosition.textContent = `Chapter ${state.chapter + 1} / ${state.chapterCount}`;
+      pageLabel.textContent = "Chapter page";
+      viewPosition.textContent = `${state.page + 1} / ${state.pageCount}`;
+      confirmLabel.textContent = "Next page";
+      confirmHint.textContent = "Right and Down also turn";
+      message.textContent =
+        "Reading position is semantic and remains exact across sleep and wake.";
+      canvas.setAttribute(
+        "aria-label",
+        `${state.title} reader. Chapter ${state.chapter + 1} of ${state.chapterCount}, page ${state.page + 1} of ${state.pageCount}.`,
+      );
+      break;
+    case "sleep":
+      previewHeading.textContent = "Retained sleep screen · 480 × 800";
+      selectionPosition.textContent = "Position retained";
+      pageLabel.textContent = "Power state";
+      viewPosition.textContent = "Deep sleep";
+      confirmLabel.textContent = "Sleeping";
+      confirmHint.textContent = "Press Wake to resume";
+      message.textContent =
+        "The e-paper frame remains visible without power. Wake restores the prior view and page.";
+      canvas.setAttribute(
+        "aria-label",
+        `Brewthink sleep screen for ${state.title}. Reading position retained.`,
+      );
+      break;
+    case "error":
+      previewHeading.textContent = "Book error · 480 × 800";
+      selectionPosition.textContent = "Book unavailable";
+      pageLabel.textContent = "Recovery";
+      viewPosition.textContent = "Back to library";
+      message.textContent = "This book could not be opened. Return to the library and choose another.";
+      break;
   }
-
-  downloadButton.disabled = viewState.kind !== "ready";
 }
 
-function clearFacts(): void {
-  sourceSize.textContent = "—";
-  contentSize.textContent = "—";
-  blackPixels.textContent = "—";
-  payloadSize.textContent = "—";
+function inputFromValue(value: string | undefined): WebInput | null {
+  switch (value) {
+    case "left":
+      return WebInput.Left;
+    case "right":
+      return WebInput.Right;
+    case "up":
+      return WebInput.Up;
+    case "down":
+      return WebInput.Down;
+    default:
+      return null;
+  }
 }
 
-function selectedFit(): FitMode {
-  const selected = checkedValue(fitInputs);
-  if (selected === "contain") {
-    return FitMode.Contain;
+function inputFromKey(key: string): WebInput | null {
+  switch (key) {
+    case "ArrowLeft":
+      return WebInput.Left;
+    case "ArrowRight":
+      return WebInput.Right;
+    case "ArrowUp":
+      return WebInput.Up;
+    case "ArrowDown":
+      return WebInput.Down;
+    case "Enter":
+      return WebInput.Confirm;
+    case "Escape":
+      return WebInput.Back;
+    case "p":
+    case "P":
+    case " ":
+      return WebInput.Power;
+    default:
+      return null;
   }
-  if (selected === "cover") {
-    return FitMode.Cover;
-  }
-  throw new Error(`Unknown fit mode: ${selected}`);
 }
 
-function selectedDither(): DitherMode {
-  const selected = checkedValue(ditherInputs);
-  if (selected === "ordered") {
-    return DitherMode.Ordered;
+function parseScreen(value: string): Screen {
+  if (value === "library" || value === "reader" || value === "sleep" || value === "error") {
+    return value;
   }
-  if (selected === "threshold") {
-    return DitherMode.Threshold;
-  }
-  throw new Error(`Unknown dither mode: ${selected}`);
-}
-
-function checkedValue(inputs: readonly HTMLInputElement[]): string {
-  const selected = inputs.find((input) => input.checked);
-  if (selected === undefined) {
-    throw new Error("A rendering option must be selected");
-  }
-  return selected.value;
+  throw new Error(`Unknown application screen: ${value}`);
 }
 
 function drawPaper(target: CanvasRenderingContext2D): void {
@@ -424,7 +515,6 @@ function drawFrame(target: CanvasRenderingContext2D, pixels: Uint8Array): void {
 
   const imageData = target.createImageData(WIDTH, HEIGHT);
   let destination = 0;
-
   for (const byte of pixels) {
     for (let bit = 7; bit >= 0; bit -= 1) {
       const isWhite = (byte & (1 << bit)) !== 0;
@@ -436,7 +526,6 @@ function drawFrame(target: CanvasRenderingContext2D, pixels: Uint8Array): void {
       destination += 4;
     }
   }
-
   target.putImageData(imageData, 0, 0);
 }
 
@@ -452,12 +541,6 @@ function handleDragLeave(event: DragEvent): void {
     return;
   }
   dropZone.classList.remove("is-dragging");
-}
-
-function fileStem(fileName: string): string {
-  const withoutExtension = fileName.replace(/\.[^.]+$/, "");
-  const safeName = withoutExtension.replace(/[^a-zA-Z0-9_-]+/g, "-");
-  return safeName.length === 0 ? "brewthink-page" : safeName;
 }
 
 function errorMessage(error: unknown): string {
@@ -491,6 +574,17 @@ function requireButton(selector: string): HTMLButtonElement {
   return element;
 }
 
+function requireButtons(selector: string): readonly HTMLButtonElement[] {
+  const elements = document.querySelectorAll(selector);
+  const buttons = Array.from(elements).filter(
+    (element): element is HTMLButtonElement => element instanceof HTMLButtonElement,
+  );
+  if (buttons.length === 0 || buttons.length !== elements.length) {
+    throw new Error(`Missing buttons: ${selector}`);
+  }
+  return buttons;
+}
+
 function requireCanvas(selector: string): HTMLCanvasElement {
   const element = document.querySelector(selector);
   if (!(element instanceof HTMLCanvasElement)) {
@@ -505,15 +599,4 @@ function requireCanvasContext(canvasElement: HTMLCanvasElement): CanvasRendering
     throw new Error("Canvas 2D rendering is unavailable");
   }
   return canvasContext;
-}
-
-function requireRadioInputs(selector: string): readonly HTMLInputElement[] {
-  const elements = document.querySelectorAll(selector);
-  const inputs = Array.from(elements).filter(
-    (element): element is HTMLInputElement => element instanceof HTMLInputElement,
-  );
-  if (inputs.length === 0 || inputs.length !== elements.length) {
-    throw new Error(`Missing radio inputs: ${selector}`);
-  }
-  return inputs;
 }

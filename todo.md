@@ -1,6 +1,6 @@
 # Brewthink TODO
 
-Goal: build custom Rust firmware for the Xteink X4 e-reader, learning the hardware one subsystem at a time. The first big milestone is to show a picture on the reader while preserving stock recovery.
+Goal: build an EPUB-first Rust reader for the Xteink X4 while preserving stock recovery and learning each constrained hardware subsystem deliberately.
 
 ## Safety baseline
 
@@ -133,18 +133,18 @@ Core tasks:
 - [x] Add `wasm32-unknown-unknown` to `rust-toolchain.toml`.
 - [x] Add Bun and `wasm-bindgen-cli` to `flake.nix`.
 - [x] Create the `web-sim` WASM app and Vite frontend.
-- [ ] Create or extract shared `app-core` for state transitions.
+- [x] Create shared, host-tested library selection and paging state.
 - [x] Create shared rendering code that outputs the default 480 × 800 portrait framebuffer.
 - [x] Render the shared framebuffer to an HTML canvas.
-- [ ] Map keyboard input to the same button events used by firmware:
-  - [ ] Arrow keys → Up/Down/Left/Right.
-  - [ ] Enter → Confirm.
-  - [ ] Escape → Back.
-  - [ ] P or Space → Power/action as appropriate.
+- [x] Map keyboard input to the same button events used by firmware:
+  - [x] Arrow keys → Up/Down/Left/Right.
+  - [x] Enter → Confirm.
+  - [x] Escape → Back.
+  - [x] P or Space → Power/action as appropriate.
 - [ ] Add fake battery state.
-- [ ] Add fake file list / fake SD storage.
-- [x] Add browser file picker and drag-and-drop for image testing.
-- [ ] Keep app logic host-testable with normal Rust tests.
+- [x] Add a synthetic public-domain catalog and browser-provided EPUB source.
+- [x] Add browser file picker and drag-and-drop for EPUB shelf testing.
+- [x] Keep app logic host-testable with normal Rust tests.
 
 Shared concepts to define:
 
@@ -159,7 +159,7 @@ Useful simulator features later:
 
 - [ ] Simulated e-paper refresh delay.
 - [ ] Optional ghosting/partial-refresh visualization.
-- [ ] Simulated sleep screen.
+- [x] Simulated sleep screen.
 - [ ] Mock Komga/OPDS responses.
 - [ ] LocalStorage/IndexedDB state persistence.
 
@@ -214,24 +214,29 @@ Goal: turn on/off safely and preserve battery.
 
 ## Milestone 10 — Offline-first library app
 
-Goal: move from image demo to actual reader application.
+Goal: move from diagnostics to the EPUB-first reader application.
 
-- [ ] Define host-testable app state model.
-- [ ] Define library item model.
-- [ ] Scan local storage for books/images.
-- [ ] Create library screen.
-- [ ] Store reading position/progress.
+- [x] Define host-testable library selection and paging state.
+- [x] Define the initial title, creator, and cover shelf item model.
+- [x] Scan read-only local storage for EPUB books.
+- [x] Create the shared 2 × 2 cover library screen.
+- [x] Store checksummed book/chapter/page resume state across deep sleep.
+- [x] Connect the X4 shelf, chapter pagination, controls, display refresh, and sleep/wake loop.
 - [ ] Add recently opened items.
 - [ ] Add simple settings.
 - [ ] Keep rendering/layout logic testable off-device.
 
 ## Milestone 11 — Reading formats
 
-Suggested order from easiest/most realistic to hardest:
+EPUB is the first reading format; add other formats only after the EPUB reader is usable.
 
-- [ ] Plain text or markdown for simple reader flow.
-- [ ] CBZ support, since it is mostly zipped page images.
-- [ ] EPUB support.
+- [x] Parse a bounded EPUB package, metadata, manifest, spine, navigation, and cover on the host/WASM path.
+- [x] Decode and render an EPUB cover in the simulator.
+- [x] Add seekable, bounded-memory ZIP/DEFLATE and PNG/JPEG cover decoding on the X4.
+- [x] Parse XHTML into bounded semantic text and paginate it without retaining a DOM.
+- [ ] Add constrained publisher CSS mapping onto Brewthink reader styles.
+- [ ] Complete figures, tables, footnotes, links, and dedicated viewers.
+- [ ] Consider plain text, markdown, or CBZ after EPUB.
 - [ ] PDF support only after feasibility review.
 - [ ] Consider pre-rendered/page-image PDF workflow because ESP32-C3 has no PSRAM.
 - [ ] Add format-specific caches where needed.
@@ -276,9 +281,9 @@ Goal: sync useful content while staying offline-first.
 
 ## Current immediate next steps
 
-- [ ] Define host-testable `LibraryState`, `LibraryItem`, selection, and button transitions.
-- [ ] Render the first 480 × 800 library screen in the simulator with fixture items.
-- [ ] Add a normal-firmware, read-only FAT32 catalog for `/BREWTHINK`.
+- [x] Define host-testable library selection, paging, and shelf item state.
+- [x] Render the first 2 × 2, 480 × 800 library screen in the simulator with fixture items.
+- [ ] Add a normal-firmware, read-only FAT32 catalog for `/Books`.
 - [ ] Show real SD files and explicit empty, missing-card, and unsupported-file states.
 - [ ] Open the first bounded-memory content format from the library.
 - [ ] Reuse the verified power-button sleep path from the library application.

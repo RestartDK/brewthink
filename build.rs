@@ -5,6 +5,9 @@ mod stage_names {
 }
 
 const DISPLAY_FRAME_BYTES: u64 = 48_000;
+const X4_DRIVE_PROFILES: &[&str] = &["openx4-fast-du", "stock-parity"];
+const PREVIOUS_FRAME_STORAGES: &[&str] = &["host-ram", "controller-ram"];
+const DISPLAY_REFRESH_MODES: &[&str] = &["automatic", "full-clean", "quick-clean", "differential"];
 const GENERATED_IMAGE_NAME: &str = "brewthink-image.bin";
 
 fn main() {
@@ -12,11 +15,15 @@ fn main() {
     for variable in [
         "BREWTHINK_DIAGNOSTIC_STAGE",
         "BREWTHINK_DISPLAY_ROTATION",
+        "BREWTHINK_X4_DRIVE_PROFILE",
+        "BREWTHINK_PREVIOUS_FRAME_STORAGE",
+        "BREWTHINK_DISPLAY_REFRESH",
         "BREWTHINK_IMAGE_FRAME",
     ] {
         println!("cargo:rerun-if-env-changed={variable}");
     }
     validate_build_selection();
+    configure_previous_frame_storage();
 
     if env::var("TARGET").as_deref() != Ok("riscv32imc-unknown-none-elf") {
         return;
@@ -46,6 +53,41 @@ fn validate_build_selection() {
             stage_names::DISPLAY_ROTATIONS.join(", ")
         );
     }
+    if let Ok(profile) = env::var("BREWTHINK_X4_DRIVE_PROFILE") {
+        assert!(
+            X4_DRIVE_PROFILES.contains(&profile.as_str()),
+            "unknown BREWTHINK_X4_DRIVE_PROFILE={profile:?}; expected one of: {}",
+            X4_DRIVE_PROFILES.join(", ")
+        );
+    }
+    if let Ok(storage) = env::var("BREWTHINK_PREVIOUS_FRAME_STORAGE") {
+        assert!(
+            PREVIOUS_FRAME_STORAGES.contains(&storage.as_str()),
+            "unknown BREWTHINK_PREVIOUS_FRAME_STORAGE={storage:?}; expected one of: {}",
+            PREVIOUS_FRAME_STORAGES.join(", ")
+        );
+    }
+    if let Ok(mode) = env::var("BREWTHINK_DISPLAY_REFRESH") {
+        assert!(
+            DISPLAY_REFRESH_MODES.contains(&mode.as_str()),
+            "unknown BREWTHINK_DISPLAY_REFRESH={mode:?}; expected one of: {}",
+            DISPLAY_REFRESH_MODES.join(", ")
+        );
+    }
+}
+
+fn configure_previous_frame_storage() {
+    let storage = env::var("BREWTHINK_PREVIOUS_FRAME_STORAGE")
+        .unwrap_or_else(|_| "controller-ram".to_owned());
+    let value = match storage.as_str() {
+        "host-ram" => "host_ram",
+        "controller-ram" => "controller_ram",
+        _ => unreachable!(),
+    };
+    println!(
+        "cargo:rustc-check-cfg=cfg(brewthink_previous_frame_storage, values(\"host_ram\", \"controller_ram\"))"
+    );
+    println!("cargo:rustc-cfg=brewthink_previous_frame_storage=\"{value}\"");
 }
 
 fn prepare_image() -> Result<(), Box<dyn Error>> {

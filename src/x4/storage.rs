@@ -1,10 +1,10 @@
-#[cfg(feature = "sd-write-diagnostic")]
+#[cfg(feature = "sd-card")]
 use core::{
     cell::{Cell, RefCell},
     fmt,
 };
 
-#[cfg(feature = "sd-write-diagnostic")]
+#[cfg(feature = "sd-card")]
 use embedded_sdmmc::{Block, BlockCount, BlockDevice, BlockIdx};
 use esp_hal::{
     Blocking,
@@ -30,7 +30,7 @@ use super::{
 
 const INITIALIZATION_FREQUENCY: Rate = Rate::from_khz(400);
 const TRANSFER_FREQUENCY: Rate = Rate::from_mhz(10);
-const DISPLAY_FREQUENCY: Rate = Rate::from_mhz(20);
+const DISPLAY_FREQUENCY: Rate = Rate::from_mhz(40);
 
 pub type X4SharedSpi<'d> = SharedSpi<Spi<'d, Blocking>, Output<'d>, Output<'d>>;
 
@@ -51,27 +51,35 @@ pub enum X4StorageError {
     Spi(SharedSpiError<SpiError>),
 }
 
-#[cfg(feature = "sd-write-diagnostic")]
+#[cfg(feature = "sd-card")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum X4FatBlockDeviceError {
     Card,
     BlockIndexOverflow,
     CapacityOverflow,
+    ReadOnly,
 }
 
-#[cfg(feature = "sd-write-diagnostic")]
+#[cfg(feature = "sd-card")]
 impl fmt::Display for X4FatBlockDeviceError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Card => "SD card operation failed",
             Self::BlockIndexOverflow => "block index overflowed",
             Self::CapacityOverflow => "card capacity exceeds the FAT block-device limit",
+            Self::ReadOnly => "book storage is read-only",
         })
     }
 }
 
-#[cfg(feature = "sd-write-diagnostic")]
+#[cfg(feature = "sd-card")]
 impl core::error::Error for X4FatBlockDeviceError {}
+
+#[cfg(feature = "sd-card")]
+pub struct X4ReadOnlyFatBlockDevice<'d> {
+    card: RefCell<crate::storage::ReadOnlySdCard<X4StorageHardware<'d>>>,
+    sectors_read: Cell<u32>,
+}
 
 #[cfg(feature = "sd-write-diagnostic")]
 pub struct X4FatBlockDevice<'d> {
@@ -182,6 +190,80 @@ impl<'d> X4StorageHardware<'d> {
 
     pub fn both_are_deselected(&mut self) -> bool {
         self.shared.both_are_deselected()
+    }
+}
+
+#[cfg(feature = "sd-card")]
+impl<'d> X4ReadOnlyFatBlockDevice<'d> {
+    pub fn new(card: crate::storage::ReadOnlySdCard<X4StorageHardware<'d>>) -> Self {
+        Self {
+            card: RefCell::new(card),
+            sectors_read: Cell::new(0),
+        }
+    }
+
+    pub fn sectors_read(&self) -> u32 {
+        self.sectors_read.get()
+    }
+
+    pub fn chip_select_states(&self) -> (bool, bool, bool) {
+        let mut card = self.card.borrow_mut();
+        let hardware = card.bus_mut();
+        let display_high = hardware.display_is_deselected();
+        let sd_high = hardware.sd_is_deselected();
+        let both_high = hardware.both_are_deselected();
+        (display_high, sd_high, both_high)
+    }
+
+    pub fn with_hardware<R>(
+        &mut self,
+        function: impl FnOnce(&mut X4StorageHardware<'d>) -> R,
+    ) -> R {
+        function(self.card.get_mut().bus_mut())
+    }
+
+    pub fn into_card(self) -> crate::storage::ReadOnlySdCard<X4StorageHardware<'d>> {
+        self.card.into_inner()
+    }
+
+    fn block_index(start: u32, offset: usize) -> Result<u32, X4FatBlockDeviceError> {
+        let offset =
+            u32::try_from(offset).map_err(|_| X4FatBlockDeviceError::BlockIndexOverflow)?;
+        start
+            .checked_add(offset)
+            .ok_or(X4FatBlockDeviceError::BlockIndexOverflow)
+    }
+}
+
+#[cfg(feature = "sd-card")]
+impl BlockDevice for X4ReadOnlyFatBlockDevice<'_> {
+    type Error = X4FatBlockDeviceError;
+
+    fn read(&self, blocks: &mut [Block], start_block_idx: BlockIdx) -> Result<(), Self::Error> {
+        let mut card = self.card.borrow_mut();
+        for (offset, block) in blocks.iter_mut().enumerate() {
+            let index = Self::block_index(start_block_idx.0, offset)?;
+            card.read_block(index, &mut block.contents)
+                .map_err(|_| X4FatBlockDeviceError::Card)?;
+            self.sectors_read
+                .set(self.sectors_read.get().saturating_add(1));
+        }
+        Ok(())
+    }
+
+    fn write(&self, _blocks: &[Block], _start_block_idx: BlockIdx) -> Result<(), Self::Error> {
+        Err(X4FatBlockDeviceError::ReadOnly)
+    }
+
+    fn num_blocks(&self) -> Result<BlockCount, Self::Error> {
+        let count = self
+            .card
+            .borrow()
+            .card_info()
+            .ok_or(X4FatBlockDeviceError::Card)?
+            .block_count;
+        let count = u32::try_from(count).map_err(|_| X4FatBlockDeviceError::CapacityOverflow)?;
+        Ok(BlockCount(count))
     }
 }
 
