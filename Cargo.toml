@@ -6,6 +6,7 @@ version      = "0.1.0"
 
 [features]
 default             = []
+device-control      = ["dep:crc32fast", "dep:image", "dep:libc"]
 device-reader       = ["sd-card", "dep:crc32fast", "dep:embedded-io", "dep:embedded-png", "dep:miniz_oxide", "dep:tjpgd-rs"]
 epub                = ["dep:quick-xml", "dep:zip"]
 host-image-tools    = ["dep:image"]
@@ -16,6 +17,11 @@ web-sim             = ["dep:image", "dep:wasm-bindgen", "epub"]
 [[bin]]
 name = "brewthink"
 path = "./src/bin/main.rs"
+
+[[bin]]
+name              = "device-control"
+path              = "./tools/device-control.rs"
+required-features = ["device-control"]
 
 [[bin]]
 name              = "prepare-image"
@@ -51,6 +57,7 @@ zip               = { version = "=6.0.0", optional = true, default-features = fa
 
 [target.'cfg(not(target_arch = "riscv32"))'.dependencies]
 image = { version = "0.25.10", optional = true, default-features = false, features = ["bmp", "jpeg", "png", "pnm"] }
+libc  = { version = "=0.2.189", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { version = "=0.2.121", optional = true }

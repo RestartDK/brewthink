@@ -38,8 +38,6 @@ use embedded_sdmmc::{
     Error as FilesystemError, Mode, TimeSource, Timestamp, VolumeIdx, VolumeManager,
 };
 use esp_backtrace as _;
-#[cfg(feature = "device-reader")]
-use esp_hal::interrupt::{Priority, software::SoftwareInterrupt};
 use esp_hal::{
     clock::CpuClock,
     delay::Delay,
@@ -51,6 +49,11 @@ use esp_hal::{
     },
     system::SleepSource,
     timer::timg::TimerGroup,
+};
+#[cfg(feature = "device-reader")]
+use esp_hal::{
+    interrupt::{Priority, software::SoftwareInterrupt},
+    usb_serial_jtag::UsbSerialJtag,
 };
 use esp_println as _;
 #[cfg(feature = "device-reader")]
@@ -268,8 +271,10 @@ fn initialize(spawner: Spawner) {
                 .initialize();
                 spawn_reader_input(inputs, reader_input_interrupt);
 
+                let (control, _control_tx) = UsbSerialJtag::new(peripherals.USB_DEVICE).split();
                 let task = match brewthink::x4::reader_app_task(
                     hardware,
+                    control,
                     peripherals.LPWR,
                     esp_hal::system::wakeup_cause(),
                 ) {
