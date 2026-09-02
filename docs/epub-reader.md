@@ -4,7 +4,7 @@ Brewthink is an EPUB-first reader. The target is content-complete, readable refl
 
 ## Product contract
 
-The first library screen is a 2 × 2 cover shelf. Four covers occupy most of the 480 × 800 frame. The selected book has a stronger border, and its title and creator appear in the footer. Directional input changes the selection; Confirm opens the selected book.
+Brewthink opens on Home with Books, Files, and Settings. Books contains the 2 × 2 cover shelf. Four covers occupy most of the 480 × 800 frame. The selected book has a stronger border, and its title and creator appear in the footer. Files shows the source EPUB names and sizes. Settings changes reader font, text size, and line spacing without changing the Brewthink wordmark or application chrome.
 
 A complete reader must preserve:
 
@@ -54,12 +54,14 @@ The current host, WASM, and X4 paths provide:
 - Cover extraction with CRC verification supplied by the ZIP decoder.
 - Bounded PNG/JPEG cover decoding, alpha compositing onto white, center cropping, grayscale conversion, and ordered dithering.
 - Immediate conversion of decoded covers into 5,808-byte, 176 × 264 packed shelf bitmaps; no full-color frame is retained.
-- Shared 2 × 2 shelf navigation and packed-cover framebuffer rendering in ordinary Rust tests, WASM, and X4 firmware.
+- Shared Home, Books, Files, Settings, Reader, Error, and Sleep navigation and framebuffer rendering in ordinary Rust tests, WASM, and X4 firmware.
+- A shared battery indicator backed by a smoothed voltage estimate on X4 and a fake battery state in WASM.
+- Bounded reader typography choices whose resolved metrics drive both pagination and rendering.
 - Read-only FAT `/Books` discovery, a seekable file adapter, bounded streaming ZIP/DEFLATE, fixed-memory XML, and page-at-a-time XHTML layout on the X4.
 - A normal X4 application loop connecting all seven controls, shelf, chapter/page navigation, SSD1677 refresh, retained sleep frame, GPIO3 deep sleep/wake, and checksummed book/chapter/page resume.
 - Synthetic EPUB, PNG-alpha, and JPEG fixtures plus private acceptance against every spine item and the cover in the Hamming EPUB.
 
-The simulator's `std` ZIP and image decoders remain separate from the device pipeline. The X4 implementation uses read-at FAT access, fixed-capacity publication state, incremental DEFLATE, no-heap PNG/JPEG decoding, and statically allocated phase-overlaid workspaces.
+The simulator's `std` ZIP and image decoders remain separate from the device pipeline. The X4 implementation uses read-at FAT access, fixed-capacity publication state, incremental DEFLATE, no-heap PNG/JPEG decoding, and statically allocated phase-overlaid workspaces. Checksummed RTC-fast-memory state now retains the active screen and reader preferences across deep sleep.
 
 ## Device memory contract
 
@@ -115,7 +117,7 @@ A limit failure becomes a visible, recoverable book error or a cover placeholder
 
 A durable reading location is semantic: book identity, spine resource, and source/token position. Page numbers are derived and can change with fonts or layout settings.
 
-Normal book access stays read-only. The current resume record is versioned by magic and checksummed in RTC fast memory; it stores catalog index, spine index, and page index. Durable storage must eventually use stable book identity plus semantic source/token position so a font or layout change cannot alter the logical resume point. Any future SD writes go through a separate `AppDataStore` restricted to Brewthink-owned files under `/Brewthink`; the general book/file capability must not expose arbitrary writes.
+Normal book access stays read-only. The current resume record is versioned by magic and checksummed in RTC fast memory; it stores the active screen, reader preferences, catalog index, spine index, and page index. When typography changes, Brewthink maps the saved chapter progress into the new page count. Durable storage must eventually use stable book identity plus semantic source/token position so reflow can return to the exact paragraph. Any future SD writes go through a separate `AppDataStore` restricted to Brewthink-owned files under `/Brewthink`; the general book/file capability must not expose arbitrary writes.
 
 ## Acceptance matrix
 

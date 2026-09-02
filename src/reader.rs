@@ -4,7 +4,13 @@ use embedded_graphics::{
     Drawable, Pixel,
     draw_target::DrawTargetExt,
     geometry::{OriginDimensions, Point, Size as GraphicsSize},
-    mono_font::{MonoTextStyle, ascii::FONT_6X10, ascii::FONT_9X18_BOLD},
+    mono_font::{
+        MonoFont, MonoTextStyle,
+        ascii::{
+            FONT_4X6, FONT_5X7, FONT_6X9, FONT_6X10, FONT_6X12, FONT_7X13, FONT_7X14, FONT_9X15,
+            FONT_9X18_BOLD, FONT_10X20,
+        },
+    },
     pixelcolor::BinaryColor,
     prelude::{DrawTarget, Primitive},
     primitives::{PrimitiveStyle, Rectangle},
@@ -12,19 +18,17 @@ use embedded_graphics::{
 };
 
 use crate::{
-    app::ReadingLocation,
+    app::{ReaderFont, ReaderFontSize, ReaderPreferences, ReaderSpacing, ReadingLocation},
     image::{MonochromeImage, Size},
+    power::BatteryStatus,
+    ui::draw_app_bar,
 };
 
 pub const FRAME_WIDTH: usize = 480;
 pub const FRAME_HEIGHT: usize = 800;
 pub const BODY_WIDTH_PIXELS: usize = 444;
-pub const BODY_TOP: usize = 76;
+pub const BODY_TOP: usize = 92;
 pub const BODY_BOTTOM: usize = 736;
-pub const BODY_LINE_HEIGHT: usize = 13;
-pub const HEADING_LINE_HEIGHT: usize = 23;
-pub const BODY_CHARACTERS: usize = BODY_WIDTH_PIXELS / 6;
-pub const HEADING_CHARACTERS: usize = BODY_WIDTH_PIXELS / 9;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReaderStyle {
@@ -37,22 +41,60 @@ pub enum ReaderStyle {
 }
 
 impl ReaderStyle {
-    pub const fn line_height(self) -> usize {
+    pub const fn left(self) -> usize {
         match self {
-            Self::Heading => HEADING_LINE_HEIGHT,
-            Self::Body | Self::Quote | Self::ListItem | Self::Preformatted | Self::Caption => {
-                BODY_LINE_HEIGHT
-            }
+            Self::Heading | Self::Body | Self::Preformatted => 18,
+            Self::ListItem | Self::Caption => 30,
+            Self::Quote => 36,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct ReaderTheme {
+    body: &'static MonoFont<'static>,
+    line_gap: usize,
+}
+
+impl ReaderTheme {
+    pub const fn from_preferences(preferences: ReaderPreferences) -> Self {
+        let body = match (preferences.font(), preferences.size()) {
+            (ReaderFont::Book, ReaderFontSize::Small) => &FONT_5X7,
+            (ReaderFont::Book, ReaderFontSize::Medium) => &FONT_6X10,
+            (ReaderFont::Book, ReaderFontSize::Large) => &FONT_9X15,
+            (ReaderFont::Compact, ReaderFontSize::Small) => &FONT_4X6,
+            (ReaderFont::Compact, ReaderFontSize::Medium) => &FONT_6X9,
+            (ReaderFont::Compact, ReaderFontSize::Large) => &FONT_7X13,
+            (ReaderFont::Mono, ReaderFontSize::Small) => &FONT_6X12,
+            (ReaderFont::Mono, ReaderFontSize::Medium) => &FONT_7X14,
+            (ReaderFont::Mono, ReaderFontSize::Large) => &FONT_10X20,
+        };
+        let line_gap = match preferences.spacing() {
+            ReaderSpacing::Compact => 1,
+            ReaderSpacing::Normal => 3,
+            ReaderSpacing::Relaxed => 6,
+        };
+        Self { body, line_gap }
+    }
+
+    pub const fn font(self, style: ReaderStyle) -> &'static MonoFont<'static> {
+        match style {
+            ReaderStyle::Heading => &FONT_9X18_BOLD,
+            ReaderStyle::Body
+            | ReaderStyle::Quote
+            | ReaderStyle::ListItem
+            | ReaderStyle::Preformatted
+            | ReaderStyle::Caption => self.body,
         }
     }
 
-    pub const fn characters_per_line(self) -> usize {
-        match self {
-            Self::Heading => HEADING_CHARACTERS,
-            Self::Body | Self::Quote | Self::ListItem | Self::Preformatted | Self::Caption => {
-                BODY_CHARACTERS
-            }
-        }
+    pub const fn line_height(self, style: ReaderStyle) -> usize {
+        self.font(style).character_size.height as usize + self.line_gap
+    }
+
+    pub const fn characters_per_line(self, style: ReaderStyle) -> usize {
+        let inset = style.left() - 18;
+        (BODY_WIDTH_PIXELS - inset) / self.font(style).character_size.width as usize
     }
 }
 
@@ -82,6 +124,8 @@ pub struct ReaderView<'a> {
     chapter_title: &'a str,
     lines: &'a [ReaderLine<'a>],
     location: ReadingLocation,
+    preferences: ReaderPreferences,
+    battery: BatteryStatus,
 }
 
 impl<'a> ReaderView<'a> {
@@ -90,12 +134,16 @@ impl<'a> ReaderView<'a> {
         chapter_title: &'a str,
         lines: &'a [ReaderLine<'a>],
         location: ReadingLocation,
+        preferences: ReaderPreferences,
+        battery: BatteryStatus,
     ) -> Self {
         Self {
             book_title,
             chapter_title,
             lines,
             location,
+            preferences,
+            battery,
         }
     }
 }
@@ -119,34 +167,32 @@ pub fn render_reader(
     }
 
     target.clear_white();
+    draw_app_bar(target, view.book_title, view.battery);
     let mut display = FrameTarget::new(target);
-    let body = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-    let heading = MonoTextStyle::new(&FONT_9X18_BOLD, BinaryColor::On);
-    let header_clip = Rectangle::new(Point::new(18, 20), GraphicsSize::new(360, 13));
-    Text::with_baseline(view.book_title, Point::new(18, 20), body, Baseline::Top)
-        .draw(&mut display.clipped(&header_clip))
-        .ok();
+    let chrome = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+    let theme = ReaderTheme::from_preferences(view.preferences);
 
     let mut chapter = FixedText::<48>::new();
     write!(
         chapter,
-        "{}/{}",
+        "CHAPTER {}/{}",
         view.location.spine_index() + 1,
         view.location.spine_count()
     )
     .ok();
-    Text::with_baseline(chapter.as_str(), Point::new(426, 20), body, Baseline::Top)
-        .draw(&mut display)
-        .ok();
-    Rectangle::new(Point::new(18, 48), GraphicsSize::new(444, 2))
-        .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+    Text::with_baseline(chapter.as_str(), Point::new(378, 70), chrome, Baseline::Top)
         .draw(&mut display)
         .ok();
 
-    let chapter_clip = Rectangle::new(Point::new(18, 57), GraphicsSize::new(444, 19));
-    Text::with_baseline(view.chapter_title, Point::new(18, 57), body, Baseline::Top)
-        .draw(&mut display.clipped(&chapter_clip))
-        .ok();
+    let chapter_clip = Rectangle::new(Point::new(18, 70), GraphicsSize::new(340, 15));
+    Text::with_baseline(
+        view.chapter_title,
+        Point::new(18, 70),
+        chrome,
+        Baseline::Top,
+    )
+    .draw(&mut display.clipped(&chapter_clip))
+    .ok();
 
     let body_clip = Rectangle::new(
         Point::new(18, BODY_TOP as i32),
@@ -154,20 +200,14 @@ pub fn render_reader(
     );
     let mut y = BODY_TOP;
     for line in view.lines {
-        let height = line.style.line_height();
+        let height = theme.line_height(line.style);
         if y + height > BODY_BOTTOM {
             return Err(ReaderRenderError::ContentExceedsPage);
         }
-        let (x, text_style) = match line.style {
-            ReaderStyle::Heading => (18, heading),
-            ReaderStyle::Quote => (36, body),
-            ReaderStyle::ListItem => (30, body),
-            ReaderStyle::Caption => (30, body),
-            ReaderStyle::Body | ReaderStyle::Preformatted => (18, body),
-        };
+        let text_style = MonoTextStyle::new(theme.font(line.style), BinaryColor::On);
         Text::with_baseline(
             line.text,
-            Point::new(x, y as i32),
+            Point::new(line.style.left() as i32, y as i32),
             text_style,
             Baseline::Top,
         )
@@ -188,15 +228,21 @@ pub fn render_reader(
         view.location.page_count()
     )
     .ok();
-    Text::with_baseline(progress.as_str(), Point::new(18, 768), body, Baseline::Top)
-        .draw(&mut display)
-        .ok();
+    Text::with_baseline(
+        progress.as_str(),
+        Point::new(18, 768),
+        chrome,
+        Baseline::Top,
+    )
+    .draw(&mut display)
+    .ok();
     Ok(())
 }
 
 pub fn render_reader_error(
     book_title: &str,
     message: &str,
+    battery: BatteryStatus,
     target: &mut MonochromeImage<'_>,
 ) -> Result<(), ReaderRenderError> {
     let expected =
@@ -207,16 +253,10 @@ pub fn render_reader_error(
         });
     }
     target.clear_white();
+    draw_app_bar(target, book_title, battery);
     let mut display = FrameTarget::new(target);
     let body = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
     let heading = MonoTextStyle::new(&FONT_9X18_BOLD, BinaryColor::On);
-    Text::with_baseline("BREWTHINK", Point::new(18, 20), heading, Baseline::Top)
-        .draw(&mut display)
-        .ok();
-    Rectangle::new(Point::new(18, 52), GraphicsSize::new(444, 2))
-        .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
-        .draw(&mut display)
-        .ok();
     Text::with_baseline("BOOK ERROR", Point::new(176, 280), heading, Baseline::Top)
         .draw(&mut display)
         .ok();
@@ -330,6 +370,7 @@ mod tests {
     fn renders_a_reader_page_into_the_exact_x4_frame() {
         let mut app = App::new(1);
         app.input(AppInput::Confirm);
+        app.input(AppInput::Confirm);
         let AppEffect::RenderReader(location) = app.chapter_loaded(1, 2).unwrap() else {
             panic!("reader effect expected");
         };
@@ -342,7 +383,14 @@ mod tests {
         let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
 
         render_reader(
-            ReaderView::new("A Small Book", "Chapter one", &lines, location),
+            ReaderView::new(
+                "A Small Book",
+                "Chapter one",
+                &lines,
+                location,
+                app.preferences(),
+                app.battery(),
+            ),
             &mut frame,
         )
         .unwrap();
@@ -355,17 +403,26 @@ mod tests {
     fn rejects_lines_that_exceed_the_bounded_body_region() {
         let mut app = App::new(1);
         app.input(AppInput::Confirm);
+        app.input(AppInput::Confirm);
         let AppEffect::RenderReader(location) = app.chapter_loaded(1, 1).unwrap() else {
             panic!("reader effect expected");
         };
         let line = ReaderLine::new("line", ReaderStyle::Body);
-        let lines = vec![line; (BODY_BOTTOM - BODY_TOP) / line.style().line_height() + 1];
+        let theme = super::ReaderTheme::from_preferences(app.preferences());
+        let lines = vec![line; (BODY_BOTTOM - BODY_TOP) / theme.line_height(line.style()) + 1];
         let mut bytes = vec![0xFF; 48_000];
         let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
 
         assert_eq!(
             render_reader(
-                ReaderView::new("Book", "Chapter", &lines, location),
+                ReaderView::new(
+                    "Book",
+                    "Chapter",
+                    &lines,
+                    location,
+                    app.preferences(),
+                    app.battery(),
+                ),
                 &mut frame
             ),
             Err(ReaderRenderError::ContentExceedsPage)

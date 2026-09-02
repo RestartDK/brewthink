@@ -14,6 +14,8 @@ use embedded_graphics::{
 use crate::{
     app::LibraryState,
     image::{MonochromeBitmap, MonochromeImage, Region, Size},
+    power::BatteryStatus,
+    ui::draw_app_bar,
 };
 
 const FRAME_WIDTH: usize = 480;
@@ -62,6 +64,7 @@ pub enum ShelfRenderError {
 pub fn render_shelf(
     state: LibraryState,
     books: &[ShelfBook<'_>],
+    battery: BatteryStatus,
     target: &mut MonochromeImage<'_>,
 ) -> Result<(), ShelfRenderError> {
     let expected =
@@ -79,7 +82,7 @@ pub fn render_shelf(
     }
 
     target.clear_white();
-    draw_header(target, state);
+    draw_header(target, state, battery);
 
     if books.is_empty() {
         draw_empty_state(target);
@@ -144,29 +147,16 @@ pub fn render_shelf_cover(
     Ok(())
 }
 
-fn draw_header(target: &mut MonochromeImage<'_>, state: LibraryState) {
-    let mut display = FrameTarget::new(target);
-    let heading = MonoTextStyle::new(&FONT_9X18_BOLD, BinaryColor::On);
-    Text::with_baseline("BREWTHINK", Point::new(18, 18), heading, Baseline::Top)
-        .draw(&mut display)
-        .ok();
-
-    let mut count = FixedText::<48>::new();
+fn draw_header(target: &mut MonochromeImage<'_>, state: LibraryState, battery: BatteryStatus) {
+    let mut section = FixedText::<48>::new();
     write!(
-        count,
-        "LIBRARY  {} BOOK{}",
+        section,
+        "BOOKS  {} ITEM{}",
         state.book_count(),
         if state.book_count() == 1 { "" } else { "S" }
     )
     .ok();
-    let label = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-    Text::with_baseline(count.as_str(), Point::new(308, 24), label, Baseline::Top)
-        .draw(&mut display)
-        .ok();
-    Rectangle::new(Point::new(18, 52), GraphicsSize::new(444, 2))
-        .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
-        .draw(&mut display)
-        .ok();
+    draw_app_bar(target, section.as_str(), battery);
 }
 
 fn draw_empty_state(target: &mut MonochromeImage<'_>) {
@@ -296,7 +286,7 @@ fn draw_footer(
         .draw(&mut display)
         .ok();
     Text::with_baseline(
-        "ARROWS  MOVE     CONFIRM  OPEN",
+        "ARROWS  MOVE     CONFIRM  OPEN     BACK  HOME",
         Point::new(18, 768),
         body,
         Baseline::Top,
@@ -436,7 +426,13 @@ mod tests {
         let mut bytes = vec![0; FRAME_SIZE];
         let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
 
-        render_shelf(LibraryState::new(books.len()), &books, &mut frame).unwrap();
+        render_shelf(
+            LibraryState::new(books.len()),
+            &books,
+            crate::power::BatteryStatus::default(),
+            &mut frame,
+        )
+        .unwrap();
 
         assert!(frame.pixel_is_black(32, 75));
         assert!(!frame.pixel_is_black(272, 75));
@@ -457,7 +453,13 @@ mod tests {
         let mut bytes = vec![0; FRAME_SIZE];
         let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
 
-        render_shelf(LibraryState::new(books.len()), &books, &mut frame).unwrap();
+        render_shelf(
+            LibraryState::new(books.len()),
+            &books,
+            crate::power::BatteryStatus::default(),
+            &mut frame,
+        )
+        .unwrap();
 
         assert!(frame.pixel_is_black(32, 75));
         assert!(frame.pixel_is_black(207, 338));
@@ -474,7 +476,13 @@ mod tests {
         let mut bytes = vec![0; FRAME_SIZE];
         let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
 
-        render_shelf(state, &books, &mut frame).unwrap();
+        render_shelf(
+            state,
+            &books,
+            crate::power::BatteryStatus::default(),
+            &mut frame,
+        )
+        .unwrap();
 
         assert!(frame.pixel_is_black(32, 75));
         assert!(!frame.pixel_is_black(272, 200));
@@ -500,7 +508,12 @@ mod tests {
         let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
 
         assert_eq!(
-            render_shelf(LibraryState::new(1), &[], &mut frame),
+            render_shelf(
+                LibraryState::new(1),
+                &[],
+                crate::power::BatteryStatus::default(),
+                &mut frame,
+            ),
             Err(ShelfRenderError::CatalogLengthMismatch { state: 1, books: 0 })
         );
     }

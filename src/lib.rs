@@ -16,13 +16,17 @@ pub mod diagnostics;
 pub mod display;
 #[cfg(feature = "epub")]
 pub mod epub;
+pub mod files;
+pub mod home;
 pub mod image;
 pub mod input;
 pub mod library;
 pub mod power;
 pub mod reader;
+pub mod settings;
 pub mod sleep;
 pub mod storage;
+pub mod ui;
 pub mod x4;
 #[cfg(feature = "device-reader")]
 pub mod zip_stream;

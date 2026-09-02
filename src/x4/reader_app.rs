@@ -22,7 +22,10 @@ use esp_hal::{
 use static_cell::StaticCell;
 
 use crate::{
-    app::{App, AppEffect, AppInput, AppView, BookId, Direction, ReadingLocation, ResumePoint},
+    app::{
+        App, AppEffect, AppInput, AppView, BookId, BookOrigin, Direction, HomeItem,
+        ReaderPreferences, ReadingLocation, ResumePoint, SettingsItem,
+    },
     bounded_layout::{BoundedPage, MAX_PAGE_LINES, layout_xhtml_page_into},
     bounded_xml::FixedString,
     cover::{
@@ -36,13 +39,17 @@ use crate::{
         framebuffer::{FRAME_BYTES, Rotation},
         ssd1677::{BufferedDisplay, RefreshPolicy, RefreshPolicyMode, Ssd1677, X4DriveProfile},
     },
+    files::{FileItem, render_files},
+    home::render_home,
     image::{MonochromeBitmap, MonochromeImage, Size},
     input::{
         Button, ButtonDebouncer, ButtonEvent, ButtonTransition, PressedButtons,
         control::{ControlCommand, ControlLineBuffer},
     },
     library::{ShelfBook, render_shelf, render_shelf_cover},
+    power::{BatteryEstimator, BatteryStatus},
     reader::{ReaderLine, ReaderStyle, ReaderView, render_reader, render_reader_error},
+    settings::render_settings,
     sleep::{SleepView, render_sleep},
     storage::{BookFile, ReadOnlyFatBookStore, ReadOnlySdCard},
     x4::{X4InputHardware, X4ReadOnlyFatBlockDevice, X4StorageHardware, decode_buttons},
@@ -126,6 +133,20 @@ impl DeviceLibrary {
             .and_then(Option::as_ref)
             .map(FixedString::as_str)
     }
+
+    fn file_name(&self, book: BookId) -> &str {
+        self.files
+            .get(book.index())
+            .and_then(Option::as_ref)
+            .map_or("Unknown.epub", |file| file.name().as_str())
+    }
+
+    fn file_size(&self, book: BookId) -> u32 {
+        self.files
+            .get(book.index())
+            .and_then(Option::as_ref)
+            .map_or(0, BookFile::size)
+    }
 }
 
 #[repr(C, align(8))]
@@ -205,18 +226,29 @@ struct LoadedChapter {
 struct ResumeRecord {
     magic: u32,
     kind: u32,
-    book: u32,
-    spine: u32,
-    page: u32,
+    primary: u32,
+    secondary: u32,
+    tertiary: u32,
+    detail: u32,
+    preferences: u32,
     checksum: u32,
 }
 
-const RESUME_MAGIC: u32 = 0x4257_5231;
-const LIBRARY_KIND: u32 = 1;
-const READER_KIND: u32 = 2;
+#[derive(Clone, Copy)]
+struct RetainedApp {
+    resume: ResumePoint,
+    preferences: ReaderPreferences,
+}
+
+const RESUME_MAGIC: u32 = 0x4257_5232;
+const HOME_KIND: u32 = 1;
+const BOOKS_KIND: u32 = 2;
+const FILES_KIND: u32 = 3;
+const SETTINGS_KIND: u32 = 4;
+const READER_KIND: u32 = 5;
 
 #[esp_hal::ram(unstable(rtc_fast, persistent))]
-static mut RETAINED_RESUME: [u32; 6] = [0; 6];
+static mut RETAINED_RESUME: [u32; 8] = [0; 8];
 
 #[cfg(brewthink_previous_frame_storage = "host_ram")]
 static DISPLAYED_FRAME: StaticCell<[u8; FRAME_BYTES]> = StaticCell::new();
@@ -225,11 +257,13 @@ const INPUT_EVENT_CAPACITY: usize = 32;
 static INPUT_EVENTS: Channel<CriticalSectionRawMutex, ButtonEvent, INPUT_EVENT_CAPACITY> =
     Channel::new();
 static STOP_INPUT: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+static BATTERY_STATUS: Signal<CriticalSectionRawMutex, BatteryStatus> = Signal::new();
 static POWER_PIN: Channel<CriticalSectionRawMutex, GPIO3<'static>, 1> = Channel::new();
 
 #[embassy_executor::task]
 pub async fn reader_input_task(mut inputs: X4InputHardware) {
     let mut debouncer = ButtonDebouncer::new();
+    let mut battery = BatteryEstimator::new();
     let mut released_after_boot = false;
 
     'sampling: loop {
@@ -237,27 +271,30 @@ pub async fn reader_input_task(mut inputs: X4InputHardware) {
             break;
         }
 
-        match inputs
-            .sample()
-            .await
-            .ok()
-            .and_then(|sample| decode_buttons(sample).ok())
-        {
-            Some(buttons) => {
-                if !released_after_boot {
-                    released_after_boot = buttons == PressedButtons::none();
-                } else if let Some(changes) = debouncer.update(buttons) {
-                    for event in changes.events() {
-                        if matches!(
-                            select(STOP_INPUT.wait(), INPUT_EVENTS.send(event)).await,
-                            Either::First(())
-                        ) {
-                            break 'sampling;
+        match inputs.sample().await {
+            Ok(sample) => {
+                if let Some(status) = battery.observe(sample.battery_voltage(), sample.usb_state) {
+                    BATTERY_STATUS.signal(status);
+                }
+                match decode_buttons(sample) {
+                    Ok(buttons) => {
+                        if !released_after_boot {
+                            released_after_boot = buttons == PressedButtons::none();
+                        } else if let Some(changes) = debouncer.update(buttons) {
+                            for event in changes.events() {
+                                if matches!(
+                                    select(STOP_INPUT.wait(), INPUT_EVENTS.send(event)).await,
+                                    Either::First(())
+                                ) {
+                                    break 'sampling;
+                                }
+                            }
                         }
                     }
+                    Err(_) => debouncer.reject_sample(),
                 }
             }
-            None => debouncer.reject_sample(),
+            Err(_) => debouncer.reject_sample(),
         }
 
         let next_sample = Timer::after(Duration::from_millis(20));
@@ -328,9 +365,18 @@ pub async fn reader_app_task(
         panel.display.previous_frame_storage().name(),
         panel.refresh_policy.mode().name()
     );
-    let resume = read_resume().unwrap_or(ResumePoint::Library { selected: None });
-    let (mut app, first_effect) = App::from_resume(library.length, resume)
-        .unwrap_or((App::new(library.length), AppEffect::RenderLibrary));
+    let retained = read_resume().unwrap_or(RetainedApp {
+        resume: ResumePoint::Home {
+            selected: HomeItem::Books,
+        },
+        preferences: ReaderPreferences::default(),
+    });
+    let (mut app, first_effect) =
+        App::from_resume(library.length, retained.preferences, retained.resume)
+            .unwrap_or((App::new(library.length), AppEffect::RenderHome));
+    if let Some(status) = BATTERY_STATUS.try_take() {
+        app.set_battery(status);
+    }
     let mut loaded = None;
     match run_effect(
         first_effect,
@@ -342,7 +388,7 @@ pub async fn reader_app_task(
         &mut loaded,
     ) {
         Ok(Some(resume)) => {
-            enter_sleep(resume, store, panel, low_power).await;
+            enter_sleep(resume, app.preferences(), store, panel, low_power).await;
         }
         Ok(None) => {}
         Err(status) => stop(status).await,
@@ -359,6 +405,9 @@ pub async fn reader_app_task(
     write_control_status(&app);
 
     loop {
+        if let Some(status) = BATTERY_STATUS.try_take() {
+            app.set_battery(status);
+        }
         if let Some(button) = poll_control(
             &mut control,
             &mut control_lines,
@@ -376,7 +425,7 @@ pub async fn reader_app_task(
             .run_input(InputSource::Usb, button)
             {
                 Ok(Some(resume)) => {
-                    enter_sleep(resume, store, panel, low_power).await;
+                    enter_sleep(resume, app.preferences(), store, panel, low_power).await;
                 }
                 Ok(None) => {}
                 Err(status) => stop(status).await,
@@ -402,7 +451,7 @@ pub async fn reader_app_task(
         .run_input(InputSource::Physical, event.button())
         {
             Ok(Some(resume)) => {
-                enter_sleep(resume, store, panel, low_power).await;
+                enter_sleep(resume, app.preferences(), store, panel, low_power).await;
             }
             Ok(None) => {}
             Err(status) => stop(status).await,
@@ -506,6 +555,12 @@ fn poll_control(
 
 fn write_control_status(app: &App) {
     match app.view() {
+        AppView::Home(state) => {
+            esp_println::println!(
+                "BREWCTL/1 STATUS view=home selected={}",
+                state.selected().index()
+            );
+        }
         AppView::Library => match app.library().selected() {
             Some(selected) => esp_println::println!(
                 "BREWCTL/1 STATUS view=library selected={} books={}",
@@ -517,10 +572,29 @@ fn write_control_status(app: &App) {
                 app.library().book_count()
             ),
         },
+        AppView::Files(state) => match state.selected() {
+            Some(selected) => esp_println::println!(
+                "BREWCTL/1 STATUS view=files selected={} books={}",
+                selected.index(),
+                state.book_count()
+            ),
+            None => esp_println::println!(
+                "BREWCTL/1 STATUS view=files selected=none books={}",
+                state.book_count()
+            ),
+        },
+        AppView::Settings(state) => {
+            esp_println::println!(
+                "BREWCTL/1 STATUS view=settings selected={} preferences={}",
+                state.selected().index(),
+                state.draft().packed()
+            );
+        }
         AppView::Loading => {
             esp_println::println!("BREWCTL/1 STATUS view=loading");
         }
-        AppView::Reader(location) => {
+        AppView::Reader(session) => {
+            let location = session.location();
             esp_println::println!(
                 "BREWCTL/1 STATUS view=reader book={} spine={} page={} pages={}",
                 location.book().index(),
@@ -529,7 +603,7 @@ fn write_control_status(app: &App) {
                 location.page_count()
             );
         }
-        AppView::Error { book } => {
+        AppView::Error { book, origin: _ } => {
             esp_println::println!("BREWCTL/1 STATUS view=error book={}", book.index());
         }
         AppView::Sleeping { .. } => {
@@ -634,6 +708,11 @@ fn run_effect(
     loop {
         effect = match effect {
             AppEffect::None => return Ok(None),
+            AppEffect::RenderHome => {
+                render_home_frame(app, workspaces.frame_codec.frame())?;
+                refresh(store, panel, workspaces.frame_codec.frame())?;
+                return Ok(None);
+            }
             AppEffect::RenderLibrary => {
                 esp_println::println!("BREWCTL/1 LOG stage=render-library state=start");
                 render_library(app, library, store, workspaces)?;
@@ -643,6 +722,16 @@ fn run_effect(
                     "reader shelf refreshed: selected={}",
                     app.library().selected().map_or(usize::MAX, BookId::index)
                 );
+                return Ok(None);
+            }
+            AppEffect::RenderFiles => {
+                render_files_frame(app, library, workspaces.frame_codec.frame())?;
+                refresh(store, panel, workspaces.frame_codec.frame())?;
+                return Ok(None);
+            }
+            AppEffect::RenderSettings => {
+                render_settings_frame(app, workspaces.frame_codec.frame())?;
+                refresh(store, panel, workspaces.frame_codec.frame())?;
                 return Ok(None);
             }
             AppEffect::LoadChapter {
@@ -661,6 +750,7 @@ fn run_effect(
                         match layout_xhtml_page_into(
                             &workspaces.resource[..chapter.length],
                             0,
+                            app.preferences(),
                             workspaces.page,
                         ) {
                             Ok(()) => app
@@ -696,6 +786,7 @@ fn run_effect(
                 }
                 let xhtml = &workspaces.resource[..chapter.length];
                 render_page(
+                    app,
                     location,
                     library,
                     xhtml,
@@ -720,14 +811,14 @@ fn run_effect(
             }
             AppEffect::RenderError { book } => {
                 esp_println::println!("BREWCTL/1 LOG stage=render-error state=start");
-                render_error(book, library, workspaces.frame_codec.frame())?;
+                render_error(app, book, library, workspaces.frame_codec.frame())?;
                 refresh(store, panel, workspaces.frame_codec.frame())?;
                 esp_println::println!("BREWCTL/1 LOG stage=render-error state=done");
                 return Ok(None);
             }
             AppEffect::RenderSleep { resume } => {
                 esp_println::println!("BREWCTL/1 LOG stage=render-sleep state=start");
-                render_sleep_frame(resume, library, store, workspaces)?;
+                render_sleep_frame(resume, app.battery(), library, store, workspaces)?;
                 refresh(store, panel, workspaces.frame_codec.frame())?;
                 esp_println::println!("BREWCTL/1 LOG stage=render-sleep state=done");
                 info!("reader retained sleep frame refreshed");
@@ -809,6 +900,43 @@ fn decode_book_cover(
     Ok(true)
 }
 
+fn render_home_frame(app: &App, frame: &mut [u8; FRAME_BYTES]) -> Result<(), &'static str> {
+    let mut image = MonochromeImage::new(frame_size(), frame)
+        .map_err(|_| "reader frame buffer has the wrong size")?;
+    render_home(app.home(), app.battery(), &mut image).map_err(|_| "reader home render failed")
+}
+
+fn render_files_frame(
+    app: &App,
+    library: &DeviceLibrary,
+    frame: &mut [u8; FRAME_BYTES],
+) -> Result<(), &'static str> {
+    let mut files = [FileItem::new("", 0); MAX_DEVICE_BOOKS];
+    for (index, file) in files[..library.length].iter_mut().enumerate() {
+        let book = BookId::new(index);
+        *file = FileItem::new(library.file_name(book), library.file_size(book));
+    }
+    let mut image = MonochromeImage::new(frame_size(), frame)
+        .map_err(|_| "reader frame buffer has the wrong size")?;
+    render_files(
+        app.files(),
+        &files[..library.length],
+        app.battery(),
+        &mut image,
+    )
+    .map_err(|_| "reader files render failed")
+}
+
+fn render_settings_frame(app: &App, frame: &mut [u8; FRAME_BYTES]) -> Result<(), &'static str> {
+    let AppView::Settings(settings) = app.view() else {
+        return Err("reader settings render requested outside settings");
+    };
+    let mut image = MonochromeImage::new(frame_size(), frame)
+        .map_err(|_| "reader frame buffer has the wrong size")?;
+    render_settings(settings, app.battery(), &mut image)
+        .map_err(|_| "reader settings render failed")
+}
+
 fn render_library(
     app: &App,
     library: &DeviceLibrary,
@@ -852,8 +980,13 @@ fn render_library(
     let full_cover = &*workspaces.cover;
     let mut image = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
         .map_err(|_| "reader frame buffer has the wrong size")?;
-    render_shelf(app.library(), &books[..library.length], &mut image)
-        .map_err(|_| "reader shelf render failed")?;
+    render_shelf(
+        app.library(),
+        &books[..library.length],
+        app.battery(),
+        &mut image,
+    )
+    .map_err(|_| "reader shelf render failed")?;
     for (slot, index) in visible.enumerate() {
         if decoded[slot] {
             let cover = if selected_full && Some(index) == selected {
@@ -869,13 +1002,14 @@ fn render_library(
 }
 
 fn render_page(
+    app: &App,
     location: ReadingLocation,
     library: &DeviceLibrary,
     xhtml: &[u8],
     page: &mut BoundedPage,
     frame: &mut [u8; FRAME_BYTES],
 ) -> Result<(), &'static str> {
-    layout_xhtml_page_into(xhtml, location.page_index(), page)
+    layout_xhtml_page_into(xhtml, location.page_index(), app.preferences(), page)
         .map_err(|_| "reader requested page layout failed")?;
     let mut lines = [ReaderLine::new("", ReaderStyle::Body); MAX_PAGE_LINES];
     let mut line_count = 0;
@@ -888,6 +1022,8 @@ fn render_page(
         page.chapter_title(),
         &lines[..line_count],
         location,
+        app.preferences(),
+        app.battery(),
     );
     let mut image = MonochromeImage::new(frame_size(), frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
@@ -896,13 +1032,15 @@ fn render_page(
 
 fn render_sleep_frame(
     resume: ResumePoint,
+    battery: BatteryStatus,
     library: &DeviceLibrary,
     store: &DeviceStore,
     workspaces: &mut Workspaces,
 ) -> Result<(), &'static str> {
     let selected = match resume {
-        ResumePoint::Library { selected } => selected,
+        ResumePoint::Books { selected } | ResumePoint::Files { selected } => selected,
         ResumePoint::Reader { book, .. } => Some(book),
+        ResumePoint::Home { .. } | ResumePoint::Settings { .. } => None,
     };
     let mut status = FixedString::<64>::new();
     match resume {
@@ -917,8 +1055,17 @@ fn render_sleep_frame(
             page_index + 1
         )
         .map_err(|_| "reader sleep status overflowed")?,
-        ResumePoint::Library { .. } => status
-            .push_str("LIBRARY POSITION SAVED")
+        ResumePoint::Home { .. } => status
+            .push_str("HOME POSITION SAVED")
+            .map_err(|_| "reader sleep status overflowed")?,
+        ResumePoint::Books { .. } => status
+            .push_str("BOOKS POSITION SAVED")
+            .map_err(|_| "reader sleep status overflowed")?,
+        ResumePoint::Files { .. } => status
+            .push_str("FILES POSITION SAVED")
+            .map_err(|_| "reader sleep status overflowed")?,
+        ResumePoint::Settings { .. } => status
+            .push_str("SETTINGS POSITION SAVED")
             .map_err(|_| "reader sleep status overflowed")?,
     }
     let has_cover = selected
@@ -930,13 +1077,14 @@ fn render_sleep_frame(
     let mut image = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
         .map_err(|_| "reader frame buffer has the wrong size")?;
     render_sleep(
-        SleepView::new(title, creator, status.as_str(), cover),
+        SleepView::new(title, creator, status.as_str(), cover, battery),
         &mut image,
     )
     .map_err(|_| "reader sleep frame render failed")
 }
 
 fn render_error(
+    app: &App,
     book: BookId,
     library: &DeviceLibrary,
     frame: &mut [u8; FRAME_BYTES],
@@ -946,6 +1094,7 @@ fn render_error(
     render_reader_error(
         library.title(book),
         "This EPUB or chapter could not be opened.",
+        app.battery(),
         &mut image,
     )
     .map_err(|_| "reader error frame render failed")
@@ -982,11 +1131,12 @@ fn refresh(
 
 async fn enter_sleep(
     resume: ResumePoint,
+    preferences: ReaderPreferences,
     store: &'static DeviceStore,
     panel: ReaderDisplay,
     low_power: LPWR<'static>,
 ) -> ! {
-    write_resume(resume);
+    write_resume(resume, preferences);
     let sleep_result = store.with_device(move |device| {
         device.with_hardware(move |hardware| {
             let mut bus = hardware
@@ -1035,84 +1185,118 @@ fn map_button(button: Button) -> AppInput {
     }
 }
 
-fn read_resume() -> Option<ResumePoint> {
+fn read_resume() -> Option<RetainedApp> {
     // SAFETY: the single-core reader accesses this fixed RTC record only from its task.
     let words = unsafe { core::ptr::read_volatile(&raw const RETAINED_RESUME) };
     let record = ResumeRecord {
         magic: words[0],
         kind: words[1],
-        book: words[2],
-        spine: words[3],
-        page: words[4],
-        checksum: words[5],
+        primary: words[2],
+        secondary: words[3],
+        tertiary: words[4],
+        detail: words[5],
+        preferences: words[6],
+        checksum: words[7],
     };
     if record.magic != RESUME_MAGIC || record.checksum != resume_checksum(record) {
         return None;
     }
-    let book = usize::try_from(record.book).ok().map(BookId::new);
-    match record.kind {
-        LIBRARY_KIND if record.book == u32::MAX => Some(ResumePoint::Library { selected: None }),
-        LIBRARY_KIND => Some(ResumePoint::Library {
-            selected: Some(book?),
-        }),
-        READER_KIND => Some(ResumePoint::Reader {
-            book: book?,
-            spine_index: usize::try_from(record.spine).ok()?,
-            page_index: usize::try_from(record.page).ok()?,
-        }),
-        _ => None,
-    }
+    let preferences = ReaderPreferences::from_packed(record.preferences)?;
+    let selected = || {
+        if record.primary == u32::MAX {
+            Some(None)
+        } else {
+            Some(Some(BookId::new(usize::try_from(record.primary).ok()?)))
+        }
+    };
+    let resume = match record.kind {
+        HOME_KIND => ResumePoint::Home {
+            selected: HomeItem::from_index(usize::try_from(record.primary).ok()?)?,
+        },
+        BOOKS_KIND => ResumePoint::Books {
+            selected: selected()?,
+        },
+        FILES_KIND => ResumePoint::Files {
+            selected: selected()?,
+        },
+        SETTINGS_KIND => ResumePoint::Settings {
+            selected: SettingsItem::from_index(usize::try_from(record.primary).ok()?)?,
+            draft: ReaderPreferences::from_packed(record.detail)?,
+        },
+        READER_KIND => ResumePoint::Reader {
+            book: BookId::new(usize::try_from(record.primary).ok()?),
+            spine_index: usize::try_from(record.secondary).ok()?,
+            page_index: usize::try_from(record.tertiary).ok()?,
+            origin: BookOrigin::from_index(usize::try_from(record.detail).ok()?)?,
+        },
+        _ => return None,
+    };
+    Some(RetainedApp {
+        resume,
+        preferences,
+    })
 }
 
-fn write_resume(resume: ResumePoint) {
-    let (kind, book, spine, page) = match resume {
-        ResumePoint::Library { selected } => (
-            LIBRARY_KIND,
-            selected
-                .and_then(|book| u32::try_from(book.index()).ok())
-                .unwrap_or(u32::MAX),
-            0,
-            0,
-        ),
+fn write_resume(resume: ResumePoint, preferences: ReaderPreferences) {
+    let (kind, primary, secondary, tertiary, detail) = match resume {
+        ResumePoint::Home { selected } => (HOME_KIND, selected.index() as u32, 0, 0, 0),
+        ResumePoint::Books { selected } => (BOOKS_KIND, packed_book(selected), 0, 0, 0),
+        ResumePoint::Files { selected } => (FILES_KIND, packed_book(selected), 0, 0, 0),
+        ResumePoint::Settings { selected, draft } => {
+            (SETTINGS_KIND, selected.index() as u32, 0, 0, draft.packed())
+        }
         ResumePoint::Reader {
             book,
             spine_index,
             page_index,
+            origin,
         } => (
             READER_KIND,
             u32::try_from(book.index()).unwrap_or(u32::MAX),
             u32::try_from(spine_index).unwrap_or(u32::MAX),
             u32::try_from(page_index).unwrap_or(u32::MAX),
+            origin.index() as u32,
         ),
     };
     let mut record = ResumeRecord {
         magic: RESUME_MAGIC,
         kind,
-        book,
-        spine,
-        page,
+        primary,
+        secondary,
+        tertiary,
+        detail,
+        preferences: preferences.packed(),
         checksum: 0,
     };
     record.checksum = resume_checksum(record);
     let words = [
         record.magic,
         record.kind,
-        record.book,
-        record.spine,
-        record.page,
+        record.primary,
+        record.secondary,
+        record.tertiary,
+        record.detail,
+        record.preferences,
         record.checksum,
     ];
     // SAFETY: the single-core reader is the sole writer before entering deep sleep.
     unsafe { core::ptr::write_volatile(&raw mut RETAINED_RESUME, words) };
 }
 
+fn packed_book(book: Option<BookId>) -> u32 {
+    book.and_then(|book| u32::try_from(book.index()).ok())
+        .unwrap_or(u32::MAX)
+}
+
 fn resume_checksum(record: ResumeRecord) -> u32 {
     [
         record.magic,
         record.kind,
-        record.book,
-        record.spine,
-        record.page,
+        record.primary,
+        record.secondary,
+        record.tertiary,
+        record.detail,
+        record.preferences,
     ]
     .into_iter()
     .fold(0x811C_9DC5, |hash, value| {

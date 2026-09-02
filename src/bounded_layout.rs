@@ -1,6 +1,7 @@
 use crate::{
+    app::ReaderPreferences,
     bounded_xml::{FixedString, XmlError, XmlEvent, XmlReader, decode_entities},
-    reader::ReaderStyle,
+    reader::{ReaderStyle, ReaderTheme},
 };
 
 pub const MAX_PAGE_LINES: usize = 50;
@@ -93,9 +94,10 @@ impl From<XmlError> for LayoutError {
 pub fn layout_xhtml_page(
     encoded: &[u8],
     requested_page: usize,
+    preferences: ReaderPreferences,
 ) -> Result<BoundedPage, LayoutError> {
     let mut page = BoundedPage::new();
-    layout_xhtml_page_into(encoded, requested_page, &mut page)?;
+    layout_xhtml_page_into(encoded, requested_page, preferences, &mut page)?;
     Ok(page)
 }
 
@@ -103,10 +105,11 @@ pub fn layout_xhtml_page(
 pub fn layout_xhtml_page_into(
     encoded: &[u8],
     requested_page: usize,
+    preferences: ReaderPreferences,
     page: &mut BoundedPage,
 ) -> Result<(), LayoutError> {
     page.reset(requested_page);
-    let mut sink = PageSink::new(requested_page, page);
+    let mut sink = PageSink::new(requested_page, preferences, page);
     let mut reader = XmlReader::new(encoded)?;
     let mut in_body = false;
     let mut hidden_depth = 0usize;
@@ -227,6 +230,7 @@ struct PageSink<'a> {
     requested_page: usize,
     page_index: usize,
     used_height: usize,
+    theme: ReaderTheme,
     page: &'a mut BoundedPage,
     current: FixedString<MAX_READER_LINE_BYTES>,
     style: ReaderStyle,
@@ -235,11 +239,16 @@ struct PageSink<'a> {
 }
 
 impl<'a> PageSink<'a> {
-    const fn new(requested_page: usize, page: &'a mut BoundedPage) -> Self {
+    const fn new(
+        requested_page: usize,
+        preferences: ReaderPreferences,
+        page: &'a mut BoundedPage,
+    ) -> Self {
         Self {
             requested_page,
             page_index: 0,
             used_height: 0,
+            theme: ReaderTheme::from_preferences(preferences),
             page,
             current: FixedString::new(),
             style: ReaderStyle::Body,
@@ -282,7 +291,7 @@ impl<'a> PageSink<'a> {
             self.pending_space = !self.current.is_empty();
             return Ok(());
         }
-        let width = self.style.characters_per_line();
+        let width = self.theme.characters_per_line(self.style);
         if self.pending_space {
             if self.current.as_str().chars().count() + 1 > width {
                 self.line_break(false).map_err(layout_to_xml)?;
@@ -317,7 +326,7 @@ impl<'a> PageSink<'a> {
         line: FixedString<MAX_READER_LINE_BYTES>,
         style: ReaderStyle,
     ) -> Result<(), LayoutError> {
-        let height = style.line_height();
+        let height = self.theme.line_height(style);
         if self.used_height + height > PAGE_HEIGHT {
             self.page_index += 1;
             self.used_height = 0;
@@ -390,7 +399,7 @@ mod tests {
     use std::{string::String, vec::Vec};
 
     use super::{BoundedPage, LayoutError, layout_xhtml_page, layout_xhtml_page_into};
-    use crate::reader::ReaderStyle;
+    use crate::{app::ReaderPreferences, reader::ReaderStyle};
 
     #[test]
     fn preserves_unknown_text_images_lists_tables_and_quotes() {
@@ -400,7 +409,7 @@ mod tests {
 <figure><img alt="diagram"/><figcaption>caption</figcaption></figure>
 <table><tr><td>x</td><td>y</td></tr></table><script>hidden()</script>
 </body></html>"#;
-        let page = layout_xhtml_page(xml, 0).unwrap();
+        let page = layout_xhtml_page(xml, 0, ReaderPreferences::default()).unwrap();
         let lines = page
             .lines()
             .map(|line| line.text())
@@ -422,17 +431,28 @@ mod tests {
         let paragraph = "bounded words ".repeat(4_000);
         let xml = String::from("<html><body><p>") + &paragraph + "</p></body></html>";
         let mut page = BoundedPage::new();
-        layout_xhtml_page_into(xml.as_bytes(), 0, &mut page).unwrap();
+        layout_xhtml_page_into(xml.as_bytes(), 0, ReaderPreferences::default(), &mut page).unwrap();
         let page_count = page.page_count();
 
         assert!(page_count > 1);
 
-        layout_xhtml_page_into(xml.as_bytes(), page_count - 1, &mut page).unwrap();
+        layout_xhtml_page_into(
+            xml.as_bytes(),
+            page_count - 1,
+            ReaderPreferences::default(),
+            &mut page,
+        )
+        .unwrap();
         assert_eq!(page.page_count(), page_count);
         assert_eq!(page.page_index(), page_count - 1);
         assert!(!page.lines().collect::<Vec<_>>().is_empty());
         assert_eq!(
-            layout_xhtml_page_into(xml.as_bytes(), page_count, &mut page),
+            layout_xhtml_page_into(
+                xml.as_bytes(),
+                page_count,
+                ReaderPreferences::default(),
+                &mut page,
+            ),
             Err(LayoutError::PageOutOfBounds)
         );
     }

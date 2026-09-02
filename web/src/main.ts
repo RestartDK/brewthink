@@ -10,11 +10,13 @@ const WIDTH = 480;
 const HEIGHT = 800;
 const FRAME_BYTES = 48_000;
 const MAX_EPUB_BYTES = 32 * 1024 * 1024;
+const READER_PREFERENCES_KEY = "brewthink.reader-preferences.v1";
+const INVALID_READER_PREFERENCES = 0xffff_ffff;
 const INK_SHADE = { red: 27, green: 27, blue: 24 };
 const PAPER_SHADE = { red: 230, green: 227, blue: 211 };
 const integerFormat = new Intl.NumberFormat("en-US");
 
-type Screen = "library" | "reader" | "sleep" | "error";
+type Screen = "home" | "library" | "files" | "settings" | "reader" | "sleep" | "error";
 
 type ViewState =
   | Readonly<{ kind: "booting" }>
@@ -89,7 +91,7 @@ app.innerHTML = `
       <div class="inspector-heading">
         <div>
           <p class="eyebrow">Complete product loop</p>
-          <h2 id="inspector-heading">Library · read · sleep · resume</h2>
+          <h2 id="inspector-heading">Home · books · files · settings · read</h2>
         </div>
         <span class="build-label">WASM</span>
       </div>
@@ -119,7 +121,7 @@ app.innerHTML = `
 
       <section class="control-section selected-section" aria-labelledby="selected-heading">
         <div class="section-heading">
-          <h3 id="selected-heading">Current book</h3>
+          <h3 id="selected-heading">Current selection</h3>
           <span id="selection-position">—</span>
         </div>
         <div>
@@ -165,7 +167,7 @@ app.innerHTML = `
       </section>
 
       <div class="message" id="message" role="status" aria-live="polite">
-        Shared Rust owns navigation, reading position, sleep, wake, and rendering.
+        Shared Rust owns the home menu, books, files, settings, reading, and sleep.
       </div>
     </aside>
   </main>
@@ -244,7 +246,10 @@ document.addEventListener("keydown", (event) => {
 });
 
 resetButton.addEventListener("click", () => {
-  replaceLibrary(new WebLibrary(), "Built-in public-domain sample");
+  replaceLibrary(
+    WebLibrary.withPreferences(readStoredPreferences()),
+    "Built-in public-domain sample",
+  );
 });
 
 confirmButton.addEventListener("click", () => sendInput(WebInput.Confirm));
@@ -259,7 +264,10 @@ async function initializeRenderer(): Promise<void> {
     runtimeStatus.classList.add("is-ready");
     runtimeLabel.textContent = `Rust/WASM ${renderer_version()}`;
     fileInput.disabled = false;
-    replaceLibrary(new WebLibrary(), "Built-in public-domain sample");
+    replaceLibrary(
+      WebLibrary.withPreferences(readStoredPreferences()),
+      "Built-in public-domain sample",
+    );
   } catch (error: unknown) {
     runtimeStatus.classList.add("is-error");
     runtimeLabel.textContent = "Renderer unavailable";
@@ -285,7 +293,10 @@ async function loadEpub(file: File): Promise<void> {
     if (generation !== loadGeneration) {
       return;
     }
-    replaceLibrary(WebLibrary.fromEpub(bytes), file.name);
+    replaceLibrary(
+      WebLibrary.fromEpub(bytes, file.name, readStoredPreferences()),
+      file.name,
+    );
   } catch (error: unknown) {
     viewState = {
       kind: "error",
@@ -314,6 +325,7 @@ function sendInput(input: WebInput): void {
   } else {
     library.input(input);
   }
+  localStorage.setItem(READER_PREFERENCES_KEY, String(library.preferences));
   renderApplication();
 }
 
@@ -357,9 +369,9 @@ function renderState(): void {
   resetButton.disabled =
     viewState.kind === "booting" ||
     viewState.kind === "rendering" ||
-    (isReady && sourceName === "Built-in public-domain sample" && screen === "library");
+    (isReady && sourceName === "Built-in public-domain sample");
   confirmButton.disabled = !isReady || screen === "sleep" || screen === "error";
-  backButton.disabled = !isReady || screen === "library" || screen === "sleep";
+  backButton.disabled = !isReady || screen === "home" || screen === "sleep";
   powerButton.disabled = !isReady || screen === "error";
   powerButton.textContent = screen === "sleep" ? "Wake" : "Sleep";
   for (const button of directionButtons) {
@@ -406,6 +418,19 @@ function renderState(): void {
 
 function renderReadyState(state: Extract<ViewState, { kind: "ready" }>): void {
   switch (state.screen) {
+    case "home":
+      previewHeading.textContent = "Home menu · 480 × 800";
+      selectionPosition.textContent = `${state.selected + 1} / ${state.itemCount}`;
+      pageLabel.textContent = "Menu";
+      viewPosition.textContent = state.title;
+      confirmLabel.textContent = "Open";
+      confirmHint.textContent = `Go to ${state.title.toLowerCase()}`;
+      message.textContent = "Choose Books, Files, or Settings with the same controls as the X4.";
+      canvas.setAttribute(
+        "aria-label",
+        `Brewthink home menu. Selected: ${state.title}. Battery 82 percent.`,
+      );
+      break;
     case "library":
       previewHeading.textContent = "Library shelf · 480 × 800";
       selectionPosition.textContent = `${state.selected + 1} / ${state.itemCount}`;
@@ -420,6 +445,33 @@ function renderReadyState(state: Extract<ViewState, { kind: "ready" }>): void {
         `Brewthink two by two library shelf. Selected: ${state.title} by ${state.creator}.`,
       );
       break;
+    case "files":
+      previewHeading.textContent = "File browser · 480 × 800";
+      selectionPosition.textContent = `${state.selected + 1} / ${state.itemCount}`;
+      pageLabel.textContent = "File page";
+      viewPosition.textContent = `${state.page + 1} / ${state.pageCount}`;
+      confirmLabel.textContent = "Open EPUB";
+      confirmHint.textContent = state.title;
+      message.textContent = "Files shows the EPUB source names and sizes from the read-only catalog.";
+      canvas.setAttribute(
+        "aria-label",
+        `Brewthink file browser. Selected: ${state.title}.`,
+      );
+      break;
+    case "settings":
+      previewHeading.textContent = "Reader settings · 480 × 800";
+      selectionPosition.textContent = `${state.selected + 1} / ${state.itemCount}`;
+      pageLabel.textContent = "Current value";
+      viewPosition.textContent = state.creator;
+      confirmLabel.textContent = state.title === "APPLY SETTINGS" ? "Apply" : "Next value";
+      confirmHint.textContent = "Left and Right also change";
+      message.textContent =
+        "Reader typography changes pagination and rendering. The Brewthink wordmark stays fixed.";
+      canvas.setAttribute(
+        "aria-label",
+        `Brewthink reader settings. Selected: ${state.title}. Value: ${state.creator}.`,
+      );
+      break;
     case "reader":
       previewHeading.textContent = "EPUB reader · 480 × 800";
       selectionPosition.textContent = `Chapter ${state.chapter + 1} / ${state.chapterCount}`;
@@ -428,7 +480,7 @@ function renderReadyState(state: Extract<ViewState, { kind: "ready" }>): void {
       confirmLabel.textContent = "Next page";
       confirmHint.textContent = "Right and Down also turn";
       message.textContent =
-        "Reading position is semantic and remains exact across sleep and wake.";
+        "Sleep restores the page. Typography changes reflow the chapter around its saved progress.";
       canvas.setAttribute(
         "aria-label",
         `${state.title} reader. Chapter ${state.chapter + 1} of ${state.chapterCount}, page ${state.page + 1} of ${state.pageCount}.`,
@@ -497,7 +549,15 @@ function inputFromKey(key: string): WebInput | null {
 }
 
 function parseScreen(value: string): Screen {
-  if (value === "library" || value === "reader" || value === "sleep" || value === "error") {
+  if (
+    value === "home" ||
+    value === "library" ||
+    value === "files" ||
+    value === "settings" ||
+    value === "reader" ||
+    value === "sleep" ||
+    value === "error"
+  ) {
     return value;
   }
   throw new Error(`Unknown application screen: ${value}`);
@@ -541,6 +601,18 @@ function handleDragLeave(event: DragEvent): void {
     return;
   }
   dropZone.classList.remove("is-dragging");
+}
+
+function readStoredPreferences(): number {
+  const stored = localStorage.getItem(READER_PREFERENCES_KEY);
+  if (stored === null) {
+    return INVALID_READER_PREFERENCES;
+  }
+  const value = Number(stored);
+  if (!Number.isSafeInteger(value) || value < 0 || value > 0xffff_ffff) {
+    return INVALID_READER_PREFERENCES;
+  }
+  return value;
 }
 
 function errorMessage(error: unknown): string {

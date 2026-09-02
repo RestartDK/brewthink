@@ -1,11 +1,21 @@
 use std::io::Cursor;
 
 use brewthink::{
-    app::{App, AppEffect, AppInput, AppView, Direction, ReadingLocation, ResumePoint},
+    app::{
+        App, AppEffect, AppInput, AppView, Direction, FilesState, ReaderPreferences,
+        ReadingLocation, ResumePoint, SettingsState,
+    },
     epub::{ChapterContent, ContentStyle, EpubBook},
+    files::{FileItem, render_files},
+    home::render_home,
     image::{Dither, MonochromeBitmap, MonochromeImage, RenderOptions, RgbImage, ScaleMode, Size},
+    input::UsbState,
     library::{ShelfBook, render_shelf},
-    reader::{ReaderLine, ReaderStyle, ReaderView, render_reader},
+    power::BatteryStatus,
+    reader::{
+        ReaderLine, ReaderStyle, ReaderTheme, ReaderView, render_reader, render_reader_error,
+    },
+    settings::render_settings,
     sleep::{SleepView, render_sleep},
 };
 use image::{ImageReader, Limits};
@@ -131,18 +141,42 @@ pub struct WebLibrary {
 impl WebLibrary {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
-        let books = sample_books();
-        let app = App::new(books.len());
+        Self::with_preferences(ReaderPreferences::default().packed())
+    }
+
+    #[wasm_bindgen(js_name = withPreferences)]
+    pub fn with_preferences(packed: u32) -> Self {
+        let preferences = ReaderPreferences::from_packed(packed).unwrap_or_default();
+        let mut books = sample_books();
+        for book in &mut books {
+            book.layout(preferences);
+        }
+        let mut app = App::with_preferences(books.len(), preferences);
+        app.set_battery(BatteryStatus::from_percent(82, UsbState::Disconnected));
         Self { books, app }
     }
 
     #[wasm_bindgen(js_name = fromEpub)]
-    pub fn from_epub(encoded: &[u8]) -> Result<WebLibrary, JsValue> {
-        let imported = OwnedBook::from_epub(encoded)?;
+    pub fn from_epub(
+        encoded: &[u8],
+        file_name: String,
+        packed_preferences: u32,
+    ) -> Result<WebLibrary, JsValue> {
+        let preferences = ReaderPreferences::from_packed(packed_preferences).unwrap_or_default();
+        let imported = OwnedBook::from_epub(encoded, &file_name)?;
         let mut books = sample_books();
         books[0] = imported;
-        let app = App::new(books.len());
+        for book in &mut books {
+            book.layout(preferences);
+        }
+        let mut app = App::with_preferences(books.len(), preferences);
+        app.set_battery(BatteryStatus::from_percent(82, UsbState::Disconnected));
         Ok(Self { books, app })
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn preferences(&self) -> u32 {
+        self.app.preferences().packed()
     }
 
     pub fn move_selection(&mut self, direction: ShelfDirection) -> bool {
@@ -177,18 +211,36 @@ impl WebLibrary {
         let mut frame = MonochromeImage::new(Size::new(WIDTH, HEIGHT).unwrap(), &mut pixels)
             .map_err(js_error)?;
         let metadata = match self.app.view() {
+            AppView::Home(state) => {
+                render_home(state, self.app.battery(), &mut frame).map_err(js_error)?;
+                FrameMetadata::selection(
+                    "home",
+                    state.selected().label(),
+                    "Primary menu",
+                    state.selected().index(),
+                    3,
+                )
+            }
             AppView::Library => self.render_library(&mut frame)?,
-            AppView::Reader(location) => self.render_reader(location, &mut frame)?,
+            AppView::Files(state) => self.render_files(state, &mut frame)?,
+            AppView::Settings(state) => {
+                render_settings(state, self.app.battery(), &mut frame).map_err(js_error)?;
+                FrameMetadata::selection(
+                    "settings",
+                    state.selected().label(),
+                    setting_value(state),
+                    state.selected().index(),
+                    4,
+                )
+            }
+            AppView::Reader(session) => self.render_reader(session.location(), &mut frame)?,
             AppView::Sleeping { resume } => self.render_sleep(resume, &mut frame)?,
-            AppView::Error { book } => {
+            AppView::Error { book, .. } => {
                 let book = &self.books[book.index()];
-                render_sleep(
-                    SleepView::new(
-                        &book.title,
-                        &book.creator,
-                        "BOOK ERROR · BACK TO LIBRARY",
-                        book.cover.as_ref().map(OwnedCover::bitmap),
-                    ),
+                render_reader_error(
+                    &book.title,
+                    "This EPUB or chapter could not be opened.",
+                    self.app.battery(),
                     &mut frame,
                 )
                 .map_err(js_error)?;
@@ -219,8 +271,14 @@ impl Default for WebLibrary {
 
 impl WebLibrary {
     fn apply_input(&mut self, input: AppInput) -> bool {
+        let previous_preferences = self.app.preferences();
         let effect = self.app.input(input);
         let changed = effect != AppEffect::None;
+        if self.app.preferences() != previous_preferences {
+            for book in &mut self.books {
+                book.layout(self.app.preferences());
+            }
+        }
         self.resolve_effect(effect);
         changed
     }
@@ -255,7 +313,10 @@ impl WebLibrary {
                     }
                 }
                 AppEffect::None
+                | AppEffect::RenderHome
                 | AppEffect::RenderLibrary
+                | AppEffect::RenderFiles
+                | AppEffect::RenderSettings
                 | AppEffect::RenderReader(_)
                 | AppEffect::RenderError { .. }
                 | AppEffect::EnterDeepSleep { .. } => return changed,
@@ -276,7 +337,7 @@ impl WebLibrary {
             })
             .collect::<Vec<_>>();
         let state = self.app.library();
-        render_shelf(state, &books, target).map_err(js_error)?;
+        render_shelf(state, &books, self.app.battery(), target).map_err(js_error)?;
         let selected = state.selected().expect("the web catalog is non-empty");
         let book = &self.books[selected.index()];
         Ok(FrameMetadata {
@@ -285,6 +346,32 @@ impl WebLibrary {
             creator: book.creator.clone(),
             selected: selected.index(),
             item_count: books.len(),
+            page: state.page(),
+            page_count: state.page_count(),
+            chapter: 0,
+            chapter_count: 0,
+        })
+    }
+
+    fn render_files(
+        &self,
+        state: FilesState,
+        target: &mut MonochromeImage<'_>,
+    ) -> Result<FrameMetadata, JsValue> {
+        let files = self
+            .books
+            .iter()
+            .map(|book| FileItem::new(&book.file_name, book.file_size))
+            .collect::<Vec<_>>();
+        render_files(state, &files, self.app.battery(), target).map_err(js_error)?;
+        let selected = state.selected().expect("the web catalog is non-empty");
+        let book = &self.books[selected.index()];
+        Ok(FrameMetadata {
+            screen: "files",
+            title: book.file_name.clone(),
+            creator: format!("{} KiB · EPUB", book.file_size.div_ceil(1024)),
+            selected: selected.index(),
+            item_count: files.len(),
             page: state.page(),
             page_count: state.page_count(),
             chapter: 0,
@@ -306,7 +393,14 @@ impl WebLibrary {
             .map(|line| ReaderLine::new(&line.text, line.style))
             .collect::<Vec<_>>();
         render_reader(
-            ReaderView::new(&book.title, &chapter.title, &lines, location),
+            ReaderView::new(
+                &book.title,
+                &chapter.title,
+                &lines,
+                location,
+                self.app.preferences(),
+                self.app.battery(),
+            ),
             target,
         )
         .map_err(js_error)?;
@@ -330,7 +424,10 @@ impl WebLibrary {
     ) -> Result<FrameMetadata, JsValue> {
         let selected = match resume {
             ResumePoint::Reader { book, .. } => Some(book.index()),
-            ResumePoint::Library { selected } => selected.map(|book| book.index()),
+            ResumePoint::Books { selected } | ResumePoint::Files { selected } => {
+                selected.map(|book| book.index())
+            }
+            ResumePoint::Home { .. } | ResumePoint::Settings { .. } => None,
         }
         .unwrap_or(0);
         let book = &self.books[selected];
@@ -344,7 +441,10 @@ impl WebLibrary {
                 spine_index + 1,
                 page_index + 1
             ),
-            ResumePoint::Library { .. } => "LIBRARY POSITION SAVED".into(),
+            ResumePoint::Home { .. } => "HOME POSITION SAVED".into(),
+            ResumePoint::Books { .. } => "BOOKS POSITION SAVED".into(),
+            ResumePoint::Files { .. } => "FILES POSITION SAVED".into(),
+            ResumePoint::Settings { .. } => "SETTINGS POSITION SAVED".into(),
         };
         render_sleep(
             SleepView::new(
@@ -352,6 +452,7 @@ impl WebLibrary {
                 &book.creator,
                 &status,
                 book.cover.as_ref().map(OwnedCover::bitmap),
+                self.app.battery(),
             ),
             target,
         )
@@ -375,6 +476,26 @@ struct FrameMetadata {
 }
 
 impl FrameMetadata {
+    fn selection(
+        screen: &'static str,
+        title: &str,
+        creator: &str,
+        selected: usize,
+        item_count: usize,
+    ) -> Self {
+        Self {
+            screen,
+            title: title.into(),
+            creator: creator.into(),
+            selected,
+            item_count,
+            page: 0,
+            page_count: 0,
+            chapter: 0,
+            chapter_count: 0,
+        }
+    }
+
     fn book(screen: &'static str, book: &OwnedBook) -> Self {
         Self {
             screen,
@@ -390,7 +511,18 @@ impl FrameMetadata {
     }
 }
 
+fn setting_value(state: SettingsState) -> &'static str {
+    match state.selected() {
+        brewthink::app::SettingsItem::Font => state.draft().font().label(),
+        brewthink::app::SettingsItem::Size => state.draft().size().label(),
+        brewthink::app::SettingsItem::Spacing => state.draft().spacing().label(),
+        brewthink::app::SettingsItem::Apply => "Confirm to save",
+    }
+}
+
 struct OwnedBook {
+    file_name: String,
+    file_size: u32,
     title: String,
     creator: String,
     cover: Option<OwnedCover>,
@@ -398,7 +530,7 @@ struct OwnedBook {
 }
 
 impl OwnedBook {
-    fn from_epub(encoded: &[u8]) -> Result<Self, JsValue> {
+    fn from_epub(encoded: &[u8], file_name: &str) -> Result<Self, JsValue> {
         let mut epub = EpubBook::open(encoded).map_err(js_error)?;
         let title = epub.publication().metadata().title().to_owned();
         let creator = epub
@@ -444,16 +576,25 @@ impl OwnedBook {
             return Err(JsValue::from_str("EPUB has no linear readable chapters"));
         }
         Ok(Self {
+            file_name: file_name.into(),
+            file_size: encoded.len().min(u32::MAX as usize) as u32,
             title,
             creator,
             cover,
             chapters,
         })
     }
+
+    fn layout(&mut self, preferences: ReaderPreferences) {
+        for chapter in &mut self.chapters {
+            chapter.layout(preferences);
+        }
+    }
 }
 
 struct OwnedChapter {
     title: String,
+    source: Vec<OwnedLine>,
     pages: Vec<OwnedPage>,
 }
 
@@ -463,8 +604,23 @@ impl OwnedChapter {
             .title()
             .map(str::to_owned)
             .unwrap_or_else(|| format!("Section {}", index + 1));
-        let pages = paginate(&content);
-        Self { title, pages }
+        let source = content
+            .blocks()
+            .iter()
+            .map(|block| OwnedLine {
+                text: block.text().into(),
+                style: reader_style(block.style()),
+            })
+            .collect();
+        Self {
+            title,
+            source,
+            pages: Vec::new(),
+        }
+    }
+
+    fn layout(&mut self, preferences: ReaderPreferences) {
+        self.pages = paginate(&self.source, preferences);
     }
 }
 
@@ -489,18 +645,20 @@ impl OwnedCover {
     }
 }
 
-fn paginate(content: &ChapterContent) -> Vec<OwnedPage> {
+fn paginate(source: &[OwnedLine], preferences: ReaderPreferences) -> Vec<OwnedPage> {
+    let theme = ReaderTheme::from_preferences(preferences);
     let mut pages = Vec::new();
     let mut lines = Vec::new();
     let mut used_height = 0;
-    for block in content.blocks() {
-        let style = reader_style(block.style());
-        for text in wrap_text(block.text(), style.characters_per_line()) {
+    for block in source {
+        let style = block.style;
+        for text in wrap_text(&block.text, theme.characters_per_line(style)) {
             push_line(
                 &mut pages,
                 &mut lines,
                 &mut used_height,
                 OwnedLine { text, style },
+                theme,
             );
         }
         if !lines.is_empty() {
@@ -512,6 +670,7 @@ fn paginate(content: &ChapterContent) -> Vec<OwnedPage> {
                     text: String::new(),
                     style: ReaderStyle::Body,
                 },
+                theme,
             );
         }
     }
@@ -534,8 +693,9 @@ fn push_line(
     lines: &mut Vec<OwnedLine>,
     used_height: &mut usize,
     line: OwnedLine,
+    theme: ReaderTheme,
 ) {
-    let height = line.style.line_height();
+    let height = theme.line_height(line.style);
     if *used_height + height > PAGE_HEIGHT && !lines.is_empty() {
         pages.push(OwnedPage {
             lines: std::mem::take(lines),
@@ -598,14 +758,24 @@ const fn reader_style(style: ContentStyle) -> ReaderStyle {
 
 fn sample_books() -> Vec<OwnedBook> {
     [
-        ("A Study in Scarlet", "Arthur Conan Doyle"),
-        ("Pride and Prejudice", "Jane Austen"),
-        ("Walden", "Henry David Thoreau"),
-        ("Frankenstein", "Mary Shelley"),
+        (
+            "study-in-scarlet.epub",
+            "A Study in Scarlet",
+            "Arthur Conan Doyle",
+        ),
+        (
+            "pride-and-prejudice.epub",
+            "Pride and Prejudice",
+            "Jane Austen",
+        ),
+        ("walden.epub", "Walden", "Henry David Thoreau"),
+        ("frankenstein.epub", "Frankenstein", "Mary Shelley"),
     ]
     .into_iter()
     .enumerate()
-    .map(|(index, (title, creator))| OwnedBook {
+    .map(|(index, (file_name, title, creator))| OwnedBook {
+        file_name: file_name.into(),
+        file_size: 180_000 + index as u32 * 74_000,
         title: title.into(),
         creator: creator.into(),
         cover: Some(pattern_cover(index)),
@@ -617,11 +787,10 @@ fn sample_books() -> Vec<OwnedBook> {
 fn sample_chapters(title: &str) -> Vec<OwnedChapter> {
     (0..3)
         .map(|chapter| {
-            let mut lines = Vec::new();
-            for paragraph in 0..18 {
-                lines.push(OwnedLine {
+            let source = (0..18)
+                .map(|paragraph| OwnedLine {
                     text: format!(
-                        "{} · section {} · passage {}. This public-domain sample proves page turning, chapter boundaries, sleep, wake, and exact reading-position resume in the shared application state.",
+                        "{} · section {} · passage {}. This public-domain sample proves page turning, chapter boundaries, sleep, wake, and reading-position resume in the shared application state.",
                         title,
                         chapter + 1,
                         paragraph + 1
@@ -631,35 +800,12 @@ fn sample_chapters(title: &str) -> Vec<OwnedChapter> {
                     } else {
                         ReaderStyle::Body
                     },
-                });
-                lines.push(OwnedLine {
-                    text: String::new(),
-                    style: ReaderStyle::Body,
-                });
-            }
-            let content = lines
-                .into_iter()
-                .flat_map(|line| {
-                    wrap_text(&line.text, line.style.characters_per_line())
-                        .into_iter()
-                        .map(move |text| OwnedLine {
-                            text,
-                            style: line.style,
-                        })
                 })
-                .collect::<Vec<_>>();
-            let mut pages = Vec::new();
-            let mut page = Vec::new();
-            let mut used = 0;
-            for line in content {
-                push_line(&mut pages, &mut page, &mut used, line);
-            }
-            if !page.is_empty() {
-                pages.push(OwnedPage { lines: page });
-            }
+                .collect();
             OwnedChapter {
                 title: format!("Section {}", chapter + 1),
-                pages,
+                source,
+                pages: Vec::new(),
             }
         })
         .collect()

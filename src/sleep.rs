@@ -11,7 +11,11 @@ use embedded_graphics::{
     text::{Baseline, Text},
 };
 
-use crate::image::{MonochromeBitmap, MonochromeImage, Size};
+use crate::{
+    image::{MonochromeBitmap, MonochromeImage, Size},
+    power::BatteryStatus,
+    ui::draw_app_bar,
+};
 
 const FRAME_WIDTH: usize = 480;
 const FRAME_HEIGHT: usize = 800;
@@ -24,6 +28,7 @@ pub struct SleepView<'a> {
     creator: &'a str,
     status: &'a str,
     cover: Option<MonochromeBitmap<'a>>,
+    battery: BatteryStatus,
 }
 
 impl<'a> SleepView<'a> {
@@ -32,12 +37,14 @@ impl<'a> SleepView<'a> {
         creator: &'a str,
         status: &'a str,
         cover: Option<MonochromeBitmap<'a>>,
+        battery: BatteryStatus,
     ) -> Self {
         Self {
             title,
             creator,
             status,
             cover,
+            battery,
         }
     }
 }
@@ -68,19 +75,9 @@ pub fn render_sleep(
     }
 
     target.clear_white();
-    let mut display = FrameTarget::new(target);
+    draw_app_bar(target, "SLEEP", view.battery);
     let small = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
     let heading = MonoTextStyle::new(&FONT_9X18_BOLD, BinaryColor::On);
-    Text::with_baseline("BREWTHINK", Point::new(18, 20), heading, Baseline::Top)
-        .draw(&mut display)
-        .ok();
-    Text::with_baseline("SLEEP", Point::new(426, 24), small, Baseline::Top)
-        .draw(&mut display)
-        .ok();
-    Rectangle::new(Point::new(18, 52), GraphicsSize::new(444, 2))
-        .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
-        .draw(&mut display)
-        .ok();
 
     match view.cover {
         Some(cover) => {
@@ -175,7 +172,10 @@ mod tests {
     use std::vec;
 
     use super::{SleepView, render_sleep};
-    use crate::image::{MonochromeBitmap, MonochromeImage, Size};
+    use crate::{
+        image::{MonochromeBitmap, MonochromeImage, Size},
+        power::BatteryStatus,
+    };
 
     #[test]
     fn renders_a_retained_sleep_cover_frame() {
@@ -185,7 +185,13 @@ mod tests {
         let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
 
         render_sleep(
-            SleepView::new("A Small Book", "An Author", "PAGE 3", Some(cover)),
+            SleepView::new(
+                "A Small Book",
+                "An Author",
+                "PAGE 3",
+                Some(cover),
+                BatteryStatus::default(),
+            ),
             &mut frame,
         )
         .unwrap();
