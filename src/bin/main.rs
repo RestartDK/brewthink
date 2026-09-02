@@ -55,6 +55,22 @@ use static_cell::StaticCell;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
+#[cfg(feature = "device-reader")]
+struct RejectingAllocator;
+
+#[cfg(feature = "device-reader")]
+unsafe impl core::alloc::GlobalAlloc for RejectingAllocator {
+    unsafe fn alloc(&self, _layout: core::alloc::Layout) -> *mut u8 {
+        core::ptr::null_mut()
+    }
+
+    unsafe fn dealloc(&self, _pointer: *mut u8, _layout: core::alloc::Layout) {}
+}
+
+#[cfg(feature = "device-reader")]
+#[global_allocator]
+static GLOBAL_ALLOCATOR: RejectingAllocator = RejectingAllocator;
+
 const DIAGNOSTIC_STAGE: &str = match option_env!("BREWTHINK_DIAGNOSTIC_STAGE") {
     Some(stage) => stage,
     None => "heartbeat",
@@ -215,6 +231,46 @@ fn initialize(spawner: Spawner) {
                 peripherals.LPWR,
                 esp_hal::system::wakeup_cause(),
             );
+        }
+        DiagnosticStage::ReaderApp => {
+            #[cfg(not(feature = "device-reader"))]
+            hold(chip_selects, "device reader feature is disabled");
+
+            #[cfg(feature = "device-reader")]
+            {
+                let hardware = storage_hardware_or_hold(
+                    X4SharedSpiPeripherals::new(
+                        peripherals.SPI2,
+                        peripherals.GPIO8,
+                        peripherals.GPIO10,
+                        peripherals.GPIO7,
+                        peripherals.GPIO4,
+                        peripherals.GPIO5,
+                        peripherals.GPIO6,
+                    ),
+                    chip_selects,
+                    "SPI2 reader configuration failed",
+                );
+                let inputs = X4InputPeripherals::new(
+                    peripherals.ADC1,
+                    peripherals.GPIO0,
+                    peripherals.GPIO1,
+                    peripherals.GPIO2,
+                    peripherals.GPIO3,
+                    peripherals.GPIO20,
+                )
+                .initialize();
+                let task = match brewthink::x4::reader_app_task(
+                    hardware,
+                    inputs,
+                    peripherals.LPWR,
+                    esp_hal::system::wakeup_cause(),
+                ) {
+                    Ok(task) => task,
+                    Err(_) => hold((), "reader task allocation failed"),
+                };
+                spawner.spawn(task);
+            }
         }
         DiagnosticStage::DisplayReset => {
             let hardware = storage_hardware_or_hold(
@@ -1024,7 +1080,7 @@ fn run_display_stage(
         Ok(bus) => bus,
         Err(_) => return "display bus configuration failed",
     };
-    info!("SPI2 ready: mode=0 frequency_mhz=20 SD_CS_high=true");
+    info!("SPI2 ready: mode=0 frequency_mhz=40 SD_CS_high=true");
 
     let mut display = match Ssd1677::new().initialize(&mut bus) {
         Ok(display) => display,

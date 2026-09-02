@@ -59,6 +59,10 @@ pub struct Frame<'a> {
 }
 
 impl<'a> Frame<'a> {
+    pub(crate) const fn from_array(bytes: &'a [u8; FRAME_BYTES], rotation: Rotation) -> Self {
+        Self { bytes, rotation }
+    }
+
     pub fn new(bytes: &'a [u8], rotation: Rotation) -> Result<Self, Error> {
         if bytes.len() != FRAME_BYTES {
             return Err(Error::InvalidFrameLength {

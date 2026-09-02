@@ -27,6 +27,31 @@ impl Size {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Region {
+    x: usize,
+    y: usize,
+    size: Size,
+}
+
+impl Region {
+    pub const fn new(x: usize, y: usize, size: Size) -> Self {
+        Self { x, y, size }
+    }
+
+    pub const fn x(self) -> usize {
+        self.x
+    }
+
+    pub const fn y(self) -> usize {
+        self.y
+    }
+
+    pub const fn size(self) -> Size {
+        self.size
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RgbImage<'a> {
     size: Size,
     pixels: &'a [u8],
@@ -60,6 +85,27 @@ impl<'a> RgbImage<'a> {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MonochromeBitmap<'a> {
+    size: Size,
+    bytes: &'a [u8],
+}
+
+impl<'a> MonochromeBitmap<'a> {
+    pub fn new(size: Size, bytes: &'a [u8]) -> Result<Self, Error> {
+        validate_monochrome_shape(size, bytes.len())?;
+        Ok(Self { size, bytes })
+    }
+
+    pub const fn size(self) -> Size {
+        self.size
+    }
+
+    pub fn pixel_is_black(self, x: usize, y: usize) -> bool {
+        pixel_is_black(self.size, self.bytes, x, y)
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub struct MonochromeImage<'a> {
     size: Size,
@@ -68,16 +114,7 @@ pub struct MonochromeImage<'a> {
 
 impl<'a> MonochromeImage<'a> {
     pub fn new(size: Size, bytes: &'a mut [u8]) -> Result<Self, Error> {
-        if !size.width.is_multiple_of(8) {
-            return Err(Error::WidthNotByteAligned { width: size.width });
-        }
-        let expected = size.pixels() / 8;
-        if bytes.len() != expected {
-            return Err(Error::InvalidMonochromeLength {
-                expected,
-                actual: bytes.len(),
-            });
-        }
+        validate_monochrome_shape(size, bytes.len())?;
         Ok(Self { size, bytes })
     }
 
@@ -90,18 +127,38 @@ impl<'a> MonochromeImage<'a> {
     }
 
     pub fn pixel_is_black(&self, x: usize, y: usize) -> bool {
-        let row_bytes = self.size.width / 8;
-        self.bytes[y * row_bytes + x / 8] & (0x80 >> (x % 8)) == 0
+        pixel_is_black(self.size, self.bytes, x, y)
     }
 
-    fn clear_white(&mut self) {
+    pub(crate) fn clear_white(&mut self) {
         self.bytes.fill(0xFF);
     }
 
-    fn set_black(&mut self, x: usize, y: usize) {
-        let row_bytes = self.size.width / 8;
-        self.bytes[y * row_bytes + x / 8] &= !(0x80 >> (x % 8));
+    pub(crate) fn set_pixel(&mut self, x: usize, y: usize, black: bool) {
+        let mask = 0x80 >> (x % 8);
+        let byte = &mut self.bytes[y * (self.size.width / 8) + x / 8];
+        if black {
+            *byte &= !mask;
+        } else {
+            *byte |= mask;
+        }
     }
+}
+
+fn validate_monochrome_shape(size: Size, actual: usize) -> Result<(), Error> {
+    if !size.width.is_multiple_of(8) {
+        return Err(Error::WidthNotByteAligned { width: size.width });
+    }
+    let expected = size.pixels() / 8;
+    if actual != expected {
+        return Err(Error::InvalidMonochromeLength { expected, actual });
+    }
+    Ok(())
+}
+
+fn pixel_is_black(size: Size, bytes: &[u8], x: usize, y: usize) -> bool {
+    let row_bytes = size.width / 8;
+    bytes[y * row_bytes + x / 8] & (0x80 >> (x % 8)) == 0
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -145,6 +202,7 @@ pub enum Error {
     InvalidRgbLength { expected: usize, actual: usize },
     WidthNotByteAligned { width: usize },
     InvalidMonochromeLength { expected: usize, actual: usize },
+    RegionOutOfBounds,
 }
 
 pub fn render(
@@ -152,38 +210,59 @@ pub fn render(
     target: &mut MonochromeImage<'_>,
     options: RenderOptions,
 ) -> RenderReport {
-    let scaled = scaled_size(source.size, target.size, options.scale);
-    let offset_x = target.size.width as i128 - scaled.width as i128;
-    let offset_y = target.size.height as i128 - scaled.height as i128;
-    let left = offset_x / 2;
-    let top = offset_y / 2;
-
     target.clear_white();
+    render_region(source, target, Region::new(0, 0, target.size), options)
+        .expect("the full target is always a valid render region")
+}
 
-    for y in 0..target.size.height {
-        let scaled_y = y as i128 - top;
-        if !(0..scaled.height as i128).contains(&scaled_y) {
-            continue;
-        }
+pub fn render_region(
+    source: &RgbImage<'_>,
+    target: &mut MonochromeImage<'_>,
+    region: Region,
+    options: RenderOptions,
+) -> Result<RenderReport, Error> {
+    let right = region
+        .x
+        .checked_add(region.size.width)
+        .ok_or(Error::RegionOutOfBounds)?;
+    let bottom = region
+        .y
+        .checked_add(region.size.height)
+        .ok_or(Error::RegionOutOfBounds)?;
+    if right > target.size.width || bottom > target.size.height {
+        return Err(Error::RegionOutOfBounds);
+    }
 
-        for x in 0..target.size.width {
-            let scaled_x = x as i128 - left;
-            if !(0..scaled.width as i128).contains(&scaled_x) {
-                continue;
-            }
+    let scaled = scaled_size(source.size, region.size, options.scale);
+    let left = (region.size.width as i128 - scaled.width as i128) / 2;
+    let top = (region.size.height as i128 - scaled.height as i128) / 2;
 
-            let luma = sample_bilinear(source, scaled_x as usize, scaled_y as usize, scaled);
-            if is_black(luma, x, y, options.dither) {
-                target.set_black(x, y);
-            }
+    for region_y in 0..region.size.height {
+        let scaled_y = region_y as i128 - top;
+        for region_x in 0..region.size.width {
+            let scaled_x = region_x as i128 - left;
+            let black = if (0..scaled.width as i128).contains(&scaled_x)
+                && (0..scaled.height as i128).contains(&scaled_y)
+            {
+                let luma = sample_bilinear(source, scaled_x as usize, scaled_y as usize, scaled);
+                is_black(
+                    luma,
+                    region.x + region_x,
+                    region.y + region_y,
+                    options.dither,
+                )
+            } else {
+                false
+            };
+            target.set_pixel(region.x + region_x, region.y + region_y, black);
         }
     }
 
-    RenderReport {
+    Ok(RenderReport {
         source: source.size,
-        target: target.size,
+        target: region.size,
         scaled,
-    }
+    })
 }
 
 fn scaled_size(source: Size, target: Size, mode: ScaleMode) -> Size {
@@ -255,7 +334,10 @@ mod tests {
 
     use std::vec;
 
-    use super::{Dither, Error, MonochromeImage, RenderOptions, RgbImage, ScaleMode, Size, render};
+    use super::{
+        Dither, Error, MonochromeBitmap, MonochromeImage, Region, RenderOptions, RgbImage,
+        ScaleMode, Size, render, render_region,
+    };
 
     #[test]
     fn constructors_reject_invalid_buffer_shapes() {
@@ -266,6 +348,13 @@ mod tests {
             Err(Error::InvalidRgbLength {
                 expected: 48,
                 actual: 2,
+            })
+        ));
+        assert!(matches!(
+            MonochromeBitmap::new(size, &[0; 1]),
+            Err(Error::InvalidMonochromeLength {
+                expected: 2,
+                actual: 1,
             })
         ));
         let mut bytes = [0; 1];
@@ -349,6 +438,50 @@ mod tests {
         assert_eq!(report.scaled, Size::new(16, 8).unwrap());
         assert!(target.pixel_is_black(0, 4));
         assert!(!target.pixel_is_black(7, 4));
+    }
+
+    #[test]
+    fn region_rendering_changes_only_the_requested_rectangle() {
+        let source_size = Size::new(1, 1).unwrap();
+        let source = RgbImage::new(source_size, &[0, 0, 0]).unwrap();
+        let target_size = Size::new(16, 8).unwrap();
+        let mut bytes = [0xFF; 16];
+        let mut target = MonochromeImage::new(target_size, &mut bytes).unwrap();
+
+        render_region(
+            &source,
+            &mut target,
+            Region::new(4, 2, Size::new(8, 4).unwrap()),
+            RenderOptions {
+                scale: ScaleMode::Cover,
+                dither: Dither::Threshold(128),
+            },
+        )
+        .unwrap();
+
+        assert!(!target.pixel_is_black(3, 3));
+        assert!(target.pixel_is_black(4, 2));
+        assert!(target.pixel_is_black(11, 5));
+        assert!(!target.pixel_is_black(12, 5));
+        assert!(!target.pixel_is_black(7, 6));
+    }
+
+    #[test]
+    fn region_rendering_rejects_out_of_bounds_rectangles() {
+        let source = RgbImage::new(Size::new(1, 1).unwrap(), &[0, 0, 0]).unwrap();
+        let target_size = Size::new(8, 8).unwrap();
+        let mut bytes = [0xFF; 8];
+        let mut target = MonochromeImage::new(target_size, &mut bytes).unwrap();
+
+        assert_eq!(
+            render_region(
+                &source,
+                &mut target,
+                Region::new(1, 1, Size::new(8, 8).unwrap()),
+                RenderOptions::default(),
+            ),
+            Err(Error::RegionOutOfBounds)
+        );
     }
 
     #[test]

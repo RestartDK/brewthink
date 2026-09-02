@@ -323,6 +323,10 @@ where
         self.info
     }
 
+    pub fn bus_mut(&mut self) -> &mut B {
+        &mut self.bus
+    }
+
     #[cfg(feature = "sd-write-diagnostic")]
     pub fn enable_write_diagnostic(self) -> ExplicitWriteSdCard<B> {
         ExplicitWriteSdCard { inner: self }

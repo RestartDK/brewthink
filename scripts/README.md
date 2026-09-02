@@ -86,6 +86,14 @@ scripts/build-sleep-wake-app1.sh
 
 On an ordinary boot, this stage refreshes the orientation pattern, sends the SSD1677 deep-sleep command and check code, verifies both shared-SPI chip selects high, then enters ESP32-C3 deep sleep with active-low GPIO3 as the only wake source. Waking with the power button causes a fresh boot, hardware-resets the display out of deep sleep, refreshes it white, and holds without sleeping again. GPIO13 is not initialized. The stage has no SD write capability.
 
+## Read-only EPUB reader image
+
+```bash
+scripts/build-reader-app1.sh
+```
+
+This builds the normal X4 reader behind `device-reader`. It scans up to sixteen DRM-free EPUBs from `/Books`, validates each package with bounded fixed-memory ZIP/XML parsing, renders PNG or baseline-JPEG covers, paginates XHTML, handles all seven controls, and retains a checksummed book/chapter/page resume record in RTC fast memory across GPIO3 deep sleep. EPUB and FAT access expose no successful write path, and the decoder workspace is statically allocated and phase-overlaid to preserve the runtime stack reserve. Building the image is local and read-only; copying a book to microSD and flashing the guarded `app1` image each require separate explicit approval.
+
 Build a JPEG, PNG, BMP, or PNM into an app1 image with:
 
 ```bash

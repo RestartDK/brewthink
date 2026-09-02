@@ -191,7 +191,7 @@ mod hardware {
         battery: CalibratedAdcPin<GPIO0<'static>>,
         navigation: CalibratedAdcPin<GPIO1<'static>>,
         page: CalibratedAdcPin<GPIO2<'static>>,
-        power: Input<'static>,
+        power: GPIO3<'static>,
         usb_detect: Input<'static>,
     }
 
@@ -212,7 +212,11 @@ mod hardware {
             let page =
                 config.enable_pin_with_cal::<_, AdcCalCurve<X4Adc>>(page, Attenuation::_11dB);
             let adc = Adc::new(adc, config);
-            let power = Input::new(power, InputConfig::default().with_pull(Pull::Up));
+            let mut power = power;
+            {
+                let _configured =
+                    Input::new(power.reborrow(), InputConfig::default().with_pull(Pull::Up));
+            }
             let usb_detect = Input::new(usb_detect, InputConfig::default());
 
             Self {
@@ -242,13 +246,25 @@ mod hardware {
                     .map_err(|()| InputReadError::Page)?,
             );
 
+            let power_pressed = {
+                let power = Input::new(
+                    self.power.reborrow(),
+                    InputConfig::default().with_pull(Pull::Up),
+                );
+                power.is_low()
+            };
+
             Ok(RawInputSample {
                 battery_pin_voltage,
                 navigation_voltage,
                 page_voltage,
-                power_pressed: self.power.is_low(),
+                power_pressed,
                 usb_state: UsbState::from_connected(self.usb_detect.is_high()),
             })
+        }
+
+        pub fn into_power_pin(self) -> GPIO3<'static> {
+            self.power
         }
     }
 
