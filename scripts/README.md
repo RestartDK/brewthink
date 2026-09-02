@@ -94,6 +94,19 @@ scripts/build-reader-app1.sh
 
 This builds the normal X4 reader behind `device-reader`. It scans up to sixteen DRM-free EPUBs from `/Books`, validates each package with bounded fixed-memory ZIP/XML parsing, renders PNG or baseline-JPEG covers, paginates XHTML, handles all seven controls, and retains a checksummed book/chapter/page resume record in RTC fast memory across GPIO3 deep sleep. EPUB and FAT access expose no successful write path, and the decoder workspace is statically allocated and phase-overlaid to preserve the runtime stack reserve. Building the image is local and read-only; copying a book to microSD and flashing the guarded `app1` image each require separate explicit approval.
 
+### USB reader control
+
+The Rust `device-control` host binary sends typed input commands through native USB Serial/JTAG while the reader is awake. Its launcher always builds for the host target, so it cannot invoke the embedded Cargo runner:
+
+```bash
+ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/device-control.sh status
+ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/device-control.sh tap right
+ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/device-control.sh screen artifacts/device-screen.png
+ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/device-control.sh monitor
+```
+
+A USB tap enters the same `AppInput` path as a debounced physical press. `screen` reads the exact 48,000-byte monochrome frame last sent to the SSD1677, checks its CRC32, and writes a 480 × 800 PNG. The PNG proves what firmware generated, not what physically appeared on the panel. The CLI opens the port directly without changing DTR or RTS. A Power tap renders the sleep frame and enters deep sleep, which disconnects USB; waking still requires GPIO3 through the physical Power button.
+
 Build a JPEG, PNG, BMP, or PNM into an app1 image with:
 
 ```bash
