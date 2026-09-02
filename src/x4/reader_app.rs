@@ -4,6 +4,7 @@ use defmt::info;
 use embassy_time::{Duration, Timer};
 use embedded_sdmmc::{TimeSource, Timestamp};
 use esp_hal::{
+    Blocking,
     delay::Delay,
     gpio::{Input, InputConfig, Pull, RtcPinWithResistors},
     peripherals::{GPIO3, LPWR},
@@ -12,11 +13,12 @@ use esp_hal::{
         sleep::{RtcioWakeupSource, WakeupLevel},
     },
     system::SleepSource,
+    usb_serial_jtag::UsbSerialJtagRx,
 };
 use static_cell::StaticCell;
 
 use crate::{
-    app::{App, AppEffect, AppInput, BookId, Direction, ReadingLocation, ResumePoint},
+    app::{App, AppEffect, AppInput, AppView, BookId, Direction, ReadingLocation, ResumePoint},
     bounded_layout::{BoundedPage, MAX_PAGE_LINES, layout_xhtml_page_into},
     bounded_xml::FixedString,
     cover::{
@@ -31,7 +33,10 @@ use crate::{
         ssd1677::{BufferedDisplay, RefreshPolicy, RefreshPolicyMode, Ssd1677, X4DriveProfile},
     },
     image::{MonochromeBitmap, MonochromeImage, Size},
-    input::{Button, ButtonDebouncer},
+    input::{
+        Button, ButtonDebouncer,
+        control::{ControlCommand, ControlLineBuffer},
+    },
     library::{ShelfBook, render_shelf, render_shelf_cover},
     reader::{ReaderLine, ReaderStyle, ReaderView, render_reader, render_reader_error},
     sleep::{SleepView, render_sleep},
@@ -216,6 +221,7 @@ static DISPLAYED_FRAME: StaticCell<[u8; FRAME_BYTES]> = StaticCell::new();
 pub async fn reader_app_task(
     hardware: X4StorageHardware<'static>,
     mut inputs: X4InputHardware,
+    mut control: UsbSerialJtagRx<'static, Blocking>,
     low_power: LPWR<'static>,
     wakeup_cause: SleepSource,
 ) {
@@ -292,40 +298,212 @@ pub async fn reader_app_task(
     }
 
     let mut debouncer = ButtonDebouncer::new();
+    let mut control_lines = ControlLineBuffer::new();
+    esp_println::println!(
+        "BREWCTL/1 READY version=1 width=480 height=800 bytes={}",
+        FRAME_BYTES
+    );
+    write_control_status(&app);
+
     loop {
-        match inputs
+        let physical_changes = match inputs
             .sample()
             .await
             .ok()
             .and_then(|sample| decode_buttons(sample).ok())
         {
-            Some(buttons) => {
-                if let Some(changes) = debouncer.update(buttons) {
-                    for button in changes.pressed().iter() {
-                        info!("reader button pressed: {=str}", button.name());
-                        let effect = app.input(map_button(button));
-                        match run_effect(
-                            effect,
-                            &mut app,
-                            library,
-                            store,
-                            &mut panel,
-                            &mut workspaces,
-                            &mut loaded,
-                        ) {
-                            Ok(Some(resume)) => {
-                                enter_sleep(resume, store, panel, inputs, low_power).await;
-                            }
-                            Ok(None) => {}
-                            Err(status) => stop(status).await,
-                        }
+            Some(buttons) => debouncer.update(buttons),
+            None => {
+                debouncer.reject_sample();
+                None
+            }
+        };
+
+        if let Some(button) = poll_control(
+            &mut control,
+            &mut control_lines,
+            &app,
+            workspaces.frame_codec.frame(),
+        ) {
+            match (ReaderRuntime {
+                app: &mut app,
+                library,
+                store,
+                panel: &mut panel,
+                workspaces: &mut workspaces,
+                loaded: &mut loaded,
+            })
+            .run_input(InputSource::Usb, button)
+            {
+                Ok(Some(resume)) => {
+                    enter_sleep(resume, store, panel, inputs, low_power).await;
+                }
+                Ok(None) => {}
+                Err(status) => stop(status).await,
+            }
+        }
+
+        if let Some(changes) = physical_changes {
+            for button in changes.pressed().iter() {
+                match (ReaderRuntime {
+                    app: &mut app,
+                    library,
+                    store,
+                    panel: &mut panel,
+                    workspaces: &mut workspaces,
+                    loaded: &mut loaded,
+                })
+                .run_input(InputSource::Physical, button)
+                {
+                    Ok(Some(resume)) => {
+                        enter_sleep(resume, store, panel, inputs, low_power).await;
                     }
+                    Ok(None) => {}
+                    Err(status) => stop(status).await,
                 }
             }
-            None => debouncer.reject_sample(),
         }
         Timer::after(Duration::from_millis(20)).await;
     }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum InputSource {
+    Physical,
+    Usb,
+}
+
+impl InputSource {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Physical => "physical",
+            Self::Usb => "usb",
+        }
+    }
+}
+
+struct ReaderRuntime<'a> {
+    app: &'a mut App,
+    library: &'a DeviceLibrary,
+    store: &'a DeviceStore,
+    panel: &'a mut ReaderDisplay,
+    workspaces: &'a mut Workspaces,
+    loaded: &'a mut Option<LoadedChapter>,
+}
+
+impl ReaderRuntime<'_> {
+    fn run_input(
+        &mut self,
+        source: InputSource,
+        button: Button,
+    ) -> Result<Option<ResumePoint>, &'static str> {
+        info!("reader button pressed: {=str}", button.name());
+        esp_println::println!(
+            "BREWCTL/1 EVENT source={} input={}",
+            source.name(),
+            button.name()
+        );
+        let result = run_effect(
+            self.app.input(map_button(button)),
+            self.app,
+            self.library,
+            self.store,
+            self.panel,
+            self.workspaces,
+            self.loaded,
+        );
+
+        match result {
+            Ok(resume) => {
+                if source == InputSource::Usb {
+                    write_control_status(self.app);
+                    esp_println::println!("BREWCTL/1 DONE command=tap status=ok");
+                }
+                Ok(resume)
+            }
+            Err(status) => {
+                if source == InputSource::Usb {
+                    esp_println::println!("BREWCTL/1 ERROR command=tap reason=reader-operation");
+                    esp_println::println!("BREWCTL/1 DONE command=tap status=error");
+                }
+                Err(status)
+            }
+        }
+    }
+}
+
+fn poll_control(
+    control: &mut UsbSerialJtagRx<'static, Blocking>,
+    lines: &mut ControlLineBuffer,
+    app: &App,
+    frame: &[u8; FRAME_BYTES],
+) -> Option<Button> {
+    while let Ok(byte) = control.read_byte() {
+        let Some(parsed) = lines.push(byte) else {
+            continue;
+        };
+        match parsed {
+            Ok(ControlCommand::Tap(button)) => return Some(button),
+            Ok(ControlCommand::Status) => {
+                write_control_status(app);
+                esp_println::println!("BREWCTL/1 DONE command=status status=ok");
+            }
+            Ok(ControlCommand::Screen) => {
+                write_control_screen(frame);
+                esp_println::println!("BREWCTL/1 DONE command=screen status=ok");
+            }
+            Err(error) => {
+                esp_println::println!("BREWCTL/1 ERROR command=parse reason={}", error.name());
+                esp_println::println!("BREWCTL/1 DONE command=parse status=error");
+            }
+        }
+    }
+    None
+}
+
+fn write_control_status(app: &App) {
+    match app.view() {
+        AppView::Library => match app.library().selected() {
+            Some(selected) => esp_println::println!(
+                "BREWCTL/1 STATUS view=library selected={} books={}",
+                selected.index(),
+                app.library().book_count()
+            ),
+            None => esp_println::println!(
+                "BREWCTL/1 STATUS view=library selected=none books={}",
+                app.library().book_count()
+            ),
+        },
+        AppView::Loading => {
+            esp_println::println!("BREWCTL/1 STATUS view=loading");
+        }
+        AppView::Reader(location) => {
+            esp_println::println!(
+                "BREWCTL/1 STATUS view=reader book={} spine={} page={} pages={}",
+                location.book().index(),
+                location.spine_index(),
+                location.page_index(),
+                location.page_count()
+            );
+        }
+        AppView::Error { book } => {
+            esp_println::println!("BREWCTL/1 STATUS view=error book={}", book.index());
+        }
+        AppView::Sleeping { .. } => {
+            esp_println::println!("BREWCTL/1 STATUS view=sleeping");
+        }
+    }
+}
+
+fn write_control_screen(frame: &[u8; FRAME_BYTES]) {
+    let crc32 = crc32fast::hash(frame);
+    esp_println::println!(
+        "BREWCTL/1 SCREEN width=480 height=800 bytes={} crc32={:08x}",
+        frame.len(),
+        crc32
+    );
+    esp_println::Printer::write_bytes(frame);
+    esp_println::Printer::write_bytes(b"\n");
 }
 
 fn load_library(
@@ -414,8 +592,10 @@ fn run_effect(
         effect = match effect {
             AppEffect::None => return Ok(None),
             AppEffect::RenderLibrary => {
+                esp_println::println!("BREWCTL/1 LOG stage=render-library state=start");
                 render_library(app, library, store, workspaces)?;
                 refresh(store, panel, workspaces.frame_codec.frame())?;
+                esp_println::println!("BREWCTL/1 LOG stage=render-library state=done");
                 info!(
                     "reader shelf refreshed: selected={}",
                     app.library().selected().map_or(usize::MAX, BookId::index)
@@ -426,27 +606,46 @@ fn run_effect(
                 book,
                 spine_index,
                 target: _,
-            } => match load_chapter(book, spine_index, library, store, workspaces) {
-                Ok(chapter) => {
-                    *loaded = Some(chapter);
-                    match layout_xhtml_page_into(
-                        &workspaces.resource[..chapter.length],
-                        0,
-                        workspaces.page,
-                    ) {
-                        Ok(()) => app
-                            .chapter_loaded(chapter.spine_count, workspaces.page.page_count())
-                            .map_err(|_| "reader application state rejected chapter")?,
-                        Err(_) => app
-                            .chapter_failed()
-                            .map_err(|_| "reader application state rejected layout failure")?,
+            } => {
+                esp_println::println!(
+                    "BREWCTL/1 LOG stage=load-chapter state=start book={} spine={}",
+                    book.index(),
+                    spine_index
+                );
+                let next = match load_chapter(book, spine_index, library, store, workspaces) {
+                    Ok(chapter) => {
+                        *loaded = Some(chapter);
+                        match layout_xhtml_page_into(
+                            &workspaces.resource[..chapter.length],
+                            0,
+                            workspaces.page,
+                        ) {
+                            Ok(()) => app
+                                .chapter_loaded(chapter.spine_count, workspaces.page.page_count())
+                                .map_err(|_| "reader application state rejected chapter")?,
+                            Err(_) => app
+                                .chapter_failed()
+                                .map_err(|_| "reader application state rejected layout failure")?,
+                        }
                     }
-                }
-                Err(_) => app
-                    .chapter_failed()
-                    .map_err(|_| "reader application state rejected failure")?,
-            },
+                    Err(_) => app
+                        .chapter_failed()
+                        .map_err(|_| "reader application state rejected failure")?,
+                };
+                esp_println::println!(
+                    "BREWCTL/1 LOG stage=load-chapter state=done book={} spine={}",
+                    book.index(),
+                    spine_index
+                );
+                next
+            }
             AppEffect::RenderReader(location) => {
+                esp_println::println!(
+                    "BREWCTL/1 LOG stage=render-reader state=start book={} spine={} page={}",
+                    location.book().index(),
+                    location.spine_index(),
+                    location.page_index()
+                );
                 let chapter = loaded.ok_or("reader chapter was not loaded")?;
                 if chapter.book != location.book() || chapter.spine_index != location.spine_index()
                 {
@@ -461,6 +660,12 @@ fn run_effect(
                     workspaces.frame_codec.frame(),
                 )?;
                 refresh(store, panel, workspaces.frame_codec.frame())?;
+                esp_println::println!(
+                    "BREWCTL/1 LOG stage=render-reader state=done book={} spine={} page={}",
+                    location.book().index(),
+                    location.spine_index(),
+                    location.page_index()
+                );
                 info!(
                     "reader page refreshed: book={} spine={} page={} pages={}",
                     location.book().index(),
@@ -471,13 +676,17 @@ fn run_effect(
                 return Ok(None);
             }
             AppEffect::RenderError { book } => {
+                esp_println::println!("BREWCTL/1 LOG stage=render-error state=start");
                 render_error(book, library, workspaces.frame_codec.frame())?;
                 refresh(store, panel, workspaces.frame_codec.frame())?;
+                esp_println::println!("BREWCTL/1 LOG stage=render-error state=done");
                 return Ok(None);
             }
             AppEffect::RenderSleep { resume } => {
+                esp_println::println!("BREWCTL/1 LOG stage=render-sleep state=start");
                 render_sleep_frame(resume, library, store, workspaces)?;
                 refresh(store, panel, workspaces.frame_codec.frame())?;
+                esp_println::println!("BREWCTL/1 LOG stage=render-sleep state=done");
                 info!("reader retained sleep frame refreshed");
                 app.sleep_frame_ready()
                     .map_err(|_| "reader application state rejected sleep frame")?

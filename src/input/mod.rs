@@ -1,3 +1,5 @@
+pub mod control;
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Millivolts(u16);
 
@@ -93,6 +95,10 @@ impl Button {
             Self::Down => "down",
             Self::Power => "power",
         }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|button| button.name() == name)
     }
 
     const fn mask(self) -> u8 {
