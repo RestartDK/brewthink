@@ -1,8 +1,8 @@
 use core::{fmt, ops::ControlFlow};
 
-use embedded_sdmmc::{
-    BlockDevice, Error, File, LfnBuffer, Mode, TimeSource, Volume, VolumeIdx, VolumeManager,
-};
+use embedded_sdmmc::{BlockDevice, Error, LfnBuffer, Mode, TimeSource, VolumeIdx, VolumeManager};
+#[cfg(feature = "device-reader")]
+use embedded_sdmmc::{File, Volume};
 
 pub const BOOK_DIRECTORY: &str = "BOOKS";
 pub const MAX_BOOK_NAME_BYTES: usize = 256;
