@@ -27,7 +27,7 @@ Books and Files refer to the same catalog by `BookId`. Books presents covers and
 
 ## Typography
 
-Reader preferences use bounded choices for font, size, and line spacing. One resolved reader theme supplies both pagination and rendering metrics. The fixed Brewthink wordmark and application chrome never inherit reader typography.
+Reader preferences use bounded choices for font, size, and line spacing. The default is Noto Serif 14 pt, matching CrossPoint Reader. One resolved reader theme supplies both pagination and rendering metrics. The fixed Brewthink wordmark and application chrome never inherit reader typography.
 
 A reading checkpoint records the preferences used to derive its page. Reopening under different preferences maps the previous chapter progress into the new page count. Stable semantic content anchors remain the longer-term persistence target.
 

@@ -253,7 +253,7 @@ impl FilesState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum ReaderFont {
-    Book,
+    NotoSerif,
     Compact,
     Mono,
 }
@@ -265,7 +265,7 @@ impl ReaderFont {
 
     pub const fn from_index(index: usize) -> Option<Self> {
         match index {
-            0 => Some(Self::Book),
+            0 => Some(Self::NotoSerif),
             1 => Some(Self::Compact),
             2 => Some(Self::Mono),
             _ => None,
@@ -274,7 +274,7 @@ impl ReaderFont {
 
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Book => "BOOK",
+            Self::NotoSerif => "NOTO SERIF",
             Self::Compact => "COMPACT",
             Self::Mono => "MONO",
         }
@@ -426,7 +426,7 @@ impl ReaderPreferences {
 impl Default for ReaderPreferences {
     fn default() -> Self {
         Self::new(
-            ReaderFont::Book,
+            ReaderFont::NotoSerif,
             ReaderFontSize::Medium,
             ReaderSpacing::Normal,
         )
@@ -736,7 +736,7 @@ impl App {
         Self::with_preferences(
             book_count,
             ReaderPreferences::new(
-                ReaderFont::Book,
+                ReaderFont::NotoSerif,
                 ReaderFontSize::Medium,
                 ReaderSpacing::Normal,
             ),

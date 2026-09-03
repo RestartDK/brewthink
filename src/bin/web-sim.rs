@@ -652,7 +652,7 @@ fn paginate(source: &[OwnedLine], preferences: ReaderPreferences) -> Vec<OwnedPa
     let mut used_height = 0;
     for block in source {
         let style = block.style;
-        for text in wrap_text(&block.text, theme.characters_per_line(style)) {
+        for text in wrap_text(&block.text, theme, style) {
             push_line(
                 &mut pages,
                 &mut lines,
@@ -706,35 +706,36 @@ fn push_line(
     lines.push(line);
 }
 
-fn wrap_text(text: &str, width: usize) -> Vec<String> {
+fn wrap_text(text: &str, theme: ReaderTheme, style: ReaderStyle) -> Vec<String> {
+    let line_width = theme.line_width(style);
+    let space_width = theme.character_width(style, ' ');
     let mut lines = Vec::new();
     let mut current = String::new();
+    let mut current_width = 0;
     for word in text.split_whitespace() {
-        if word.chars().count() > width {
-            if !current.is_empty() {
-                lines.push(std::mem::take(&mut current));
-            }
-            let mut remainder = word;
-            while remainder.chars().count() > width {
-                let split = remainder
-                    .char_indices()
-                    .nth(width)
-                    .map(|(index, _)| index)
-                    .unwrap_or(remainder.len());
-                lines.push(remainder[..split].to_owned());
-                remainder = &remainder[split..];
-            }
-            current.push_str(remainder);
-            continue;
-        }
-        let separator = usize::from(!current.is_empty());
-        if current.chars().count() + separator + word.chars().count() > width {
+        let word_width = theme.text_width(style, word);
+        if !current.is_empty() && current_width + space_width + word_width > line_width {
             lines.push(std::mem::take(&mut current));
+            current_width = 0;
+        }
+        if word_width > line_width {
+            for character in word.chars() {
+                let character_width = theme.character_width(style, character);
+                if !current.is_empty() && current_width + character_width > line_width {
+                    lines.push(std::mem::take(&mut current));
+                    current_width = 0;
+                }
+                current.push(character);
+                current_width += character_width;
+            }
+            continue;
         }
         if !current.is_empty() {
             current.push(' ');
+            current_width += space_width;
         }
         current.push_str(word);
+        current_width += word_width;
     }
     if !current.is_empty() {
         lines.push(current);

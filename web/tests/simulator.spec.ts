@@ -41,10 +41,10 @@ test("runs the complete library, reader, sleep, wake, and resume loop", async ({
   await page.keyboard.press("Enter");
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
   await expect(page.locator("#selection-position")).toHaveText("Chapter 1 / 3");
-  await expect(page.locator("#view-position")).toHaveText("1 / 2");
+  await expect(page.locator("#view-position")).toHaveText("1 / 9");
 
   await page.keyboard.press("ArrowRight");
-  await expect(page.locator("#view-position")).toHaveText("2 / 2");
+  await expect(page.locator("#view-position")).toHaveText("2 / 9");
   await page.keyboard.press("p");
   await expect(page.locator("#preview-heading")).toHaveText(
     "Retained sleep screen · 480 × 800",
@@ -54,7 +54,7 @@ test("runs the complete library, reader, sleep, wake, and resume loop", async ({
 
   await page.getByRole("button", { name: "Wake", exact: true }).click();
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
-  await expect(page.locator("#view-position")).toHaveText("2 / 2");
+  await expect(page.locator("#view-position")).toHaveText("2 / 9");
   await page.keyboard.press("Escape");
   await expect(page.locator("#preview-heading")).toHaveText("Library shelf · 480 × 800");
   await expect(page.locator("#selected-title")).toHaveText("Frankenstein");
@@ -140,7 +140,7 @@ test("opens files and applies reader typography settings", async ({ page }) => {
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
   await expect(page.locator("#preview-heading")).toHaveText("Reader settings · 480 × 800");
-  await expect(page.locator("#view-position")).toHaveText("BOOK");
+  await expect(page.locator("#view-position")).toHaveText("NOTO SERIF");
   await page.keyboard.press("ArrowRight");
   await expect(page.locator("#view-position")).toHaveText("COMPACT");
   await page.keyboard.press("ArrowDown");
@@ -219,17 +219,14 @@ test("captures the app-shell visual walkthrough", async ({ page }) => {
   await page.keyboard.press("Escape");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
-  await page.keyboard.press("ArrowRight");
-  await page.keyboard.press("ArrowDown");
-  await page.keyboard.press("ArrowRight");
-  await page.keyboard.press("ArrowDown");
-  await page.keyboard.press("ArrowRight");
-  await expect(page.locator("#view-position")).toHaveText("RELAXED");
+  await expect(page.locator("#view-position")).toHaveText("NOTO SERIF");
   await page.screenshot({
     path: path.join(walkthroughDirectory, "04-settings.png"),
     fullPage: true,
   });
 
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
   await page.keyboard.press("ArrowUp");

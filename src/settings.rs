@@ -1,7 +1,6 @@
 use embedded_graphics::{
     Drawable,
     geometry::{Point, Size as GraphicsSize},
-    mono_font::MonoTextStyle,
     pixelcolor::BinaryColor,
     prelude::Primitive,
     primitives::{PrimitiveStyle, Rectangle},
@@ -63,7 +62,6 @@ pub fn render_settings(
     .ok();
 
     let theme = ReaderTheme::from_preferences(state.draft());
-    let style = MonoTextStyle::new(theme.font(ReaderStyle::Body), BinaryColor::On);
     let line_height = theme.line_height(ReaderStyle::Body) as i32;
     for (index, line) in [
         "A reader should disappear",
@@ -73,14 +71,14 @@ pub fn render_settings(
     .into_iter()
     .enumerate()
     {
-        Text::with_baseline(
-            line,
-            Point::new(36, 506 + index as i32 * line_height),
-            style,
-            Baseline::Top,
-        )
-        .draw(&mut display)
-        .ok();
+        theme
+            .draw_text(
+                line,
+                ReaderStyle::Body,
+                Point::new(36, 492 + index as i32 * line_height),
+                &mut display,
+            )
+            .ok();
     }
 
     draw_footer_rule(target, 710);

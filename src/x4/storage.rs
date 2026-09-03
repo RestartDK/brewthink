@@ -32,6 +32,22 @@ const INITIALIZATION_FREQUENCY: Rate = Rate::from_khz(400);
 const TRANSFER_FREQUENCY: Rate = Rate::from_mhz(10);
 const DISPLAY_FREQUENCY: Rate = Rate::from_mhz(40);
 
+fn apply_sd_config(shared: &mut X4SharedSpi<'_>, clock: SdSpiClock) -> Result<(), X4StorageError> {
+    let frequency = match clock {
+        SdSpiClock::Initialization => INITIALIZATION_FREQUENCY,
+        SdSpiClock::Transfer => TRANSFER_FREQUENCY,
+    };
+    shared
+        .spi_mut()
+        .map_err(X4StorageError::Spi)?
+        .apply_config(
+            &Config::default()
+                .with_frequency(frequency)
+                .with_mode(Mode::_0),
+        )
+        .map_err(X4StorageError::Configuration)
+}
+
 pub type X4SharedSpi<'d> = SharedSpi<Spi<'d, Blocking>, Output<'d>, Output<'d>>;
 
 pub type X4SharedDisplayBus<'a, 'd> = SharedDisplayBus<
@@ -100,6 +116,8 @@ pub struct X4SharedSpiPeripherals<'d> {
 
 pub struct X4StorageHardware<'d> {
     shared: X4SharedSpi<'d>,
+    sd_clock: SdSpiClock,
+    sd_configured: bool,
     display_data_command: Output<'d>,
     display_reset: Output<'d>,
     display_busy: Input<'d>,
@@ -146,6 +164,8 @@ impl<'d> X4StorageHardware<'d> {
 
         Ok(Self {
             shared: SharedSpi::new(spi, display_chip_select, sd_chip_select),
+            sd_clock: SdSpiClock::Initialization,
+            sd_configured: true,
             display_data_command: Output::new(
                 peripherals.display_data_command,
                 Level::High,
@@ -171,6 +191,7 @@ impl<'d> X4StorageHardware<'d> {
                     .with_mode(Mode::_0),
             )
             .map_err(X4StorageError::Configuration)?;
+        self.sd_configured = false;
         Ok(SharedDisplayBus::new(
             &mut self.shared,
             &mut self.display_data_command,
@@ -351,19 +372,10 @@ impl ReadOnlySdSpi for X4StorageHardware<'_> {
     type Error = X4StorageError;
 
     fn set_clock(&mut self, clock: SdSpiClock) -> Result<(), Self::Error> {
-        let frequency = match clock {
-            SdSpiClock::Initialization => INITIALIZATION_FREQUENCY,
-            SdSpiClock::Transfer => TRANSFER_FREQUENCY,
-        };
-        self.shared
-            .spi_mut()
-            .map_err(X4StorageError::Spi)?
-            .apply_config(
-                &Config::default()
-                    .with_frequency(frequency)
-                    .with_mode(Mode::_0),
-            )
-            .map_err(X4StorageError::Configuration)
+        apply_sd_config(&mut self.shared, clock)?;
+        self.sd_clock = clock;
+        self.sd_configured = true;
+        Ok(())
     }
 
     fn idle_clocks(&mut self, byte_count: usize) -> Result<(), Self::Error> {
@@ -373,6 +385,10 @@ impl ReadOnlySdSpi for X4StorageHardware<'_> {
     }
 
     fn begin_sd(&mut self) -> Result<(), Self::Error> {
+        if !self.sd_configured {
+            apply_sd_config(&mut self.shared, self.sd_clock)?;
+            self.sd_configured = true;
+        }
         self.shared
             .begin(SharedSpiDevice::SdCard)
             .map_err(X4StorageError::Spi)

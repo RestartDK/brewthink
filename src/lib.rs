@@ -17,6 +17,7 @@ pub mod display;
 #[cfg(feature = "epub")]
 pub mod epub;
 pub mod files;
+mod fonts;
 pub mod home;
 pub mod image;
 pub mod input;

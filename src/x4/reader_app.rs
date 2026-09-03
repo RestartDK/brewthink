@@ -30,7 +30,7 @@ use crate::{
     bounded_xml::FixedString,
     cover::{
         COVER_BYTES, CoverDecodeWorkspace, JpegDecodeWorkspace, bitmap, decode_jpeg_cover,
-        decode_png_cover,
+        decode_png_cover, encoded_cover_fits,
     },
     device_epub::{
         DeviceEpub, DevicePackageScratch, MAX_DEVICE_PATH_BYTES, MAX_DEVICE_RESOURCE_BYTES,
@@ -57,6 +57,8 @@ use crate::{
 };
 
 const MAX_DEVICE_BOOKS: usize = 16;
+const MAX_CACHED_SPINE_PATHS: usize = 64;
+const MAX_CACHED_SPINE_PATH_BYTES: usize = 2 * 1024;
 const VISIBLE_COVER_SLOTS: usize = 4;
 const SHELF_COVER_WIDTH: usize = 88;
 const SHELF_COVER_HEIGHT: usize = 132;
@@ -97,6 +99,14 @@ struct DeviceLibrary {
     titles: [FixedString<192>; MAX_DEVICE_BOOKS],
     creators: [FixedString<128>; MAX_DEVICE_BOOKS],
     cover_paths: [Option<FixedString<MAX_DEVICE_PATH_BYTES>>; MAX_DEVICE_BOOKS],
+    book_spine_starts: [u8; MAX_DEVICE_BOOKS],
+    book_cached_spine_counts: [u8; MAX_DEVICE_BOOKS],
+    spine_counts: [u8; MAX_DEVICE_BOOKS],
+    spine_path_offsets: [u16; MAX_CACHED_SPINE_PATHS],
+    spine_path_lengths: [u8; MAX_CACHED_SPINE_PATHS],
+    spine_path_bytes: [u8; MAX_CACHED_SPINE_PATH_BYTES],
+    spine_path_count: u8,
+    spine_path_byte_length: u16,
     length: usize,
 }
 
@@ -107,6 +117,14 @@ impl DeviceLibrary {
             titles: [FixedString::new(); MAX_DEVICE_BOOKS],
             creators: [FixedString::new(); MAX_DEVICE_BOOKS],
             cover_paths: [None; MAX_DEVICE_BOOKS],
+            book_spine_starts: [0; MAX_DEVICE_BOOKS],
+            book_cached_spine_counts: [0; MAX_DEVICE_BOOKS],
+            spine_counts: [0; MAX_DEVICE_BOOKS],
+            spine_path_offsets: [0; MAX_CACHED_SPINE_PATHS],
+            spine_path_lengths: [0; MAX_CACHED_SPINE_PATHS],
+            spine_path_bytes: [0; MAX_CACHED_SPINE_PATH_BYTES],
+            spine_path_count: 0,
+            spine_path_byte_length: 0,
             length: 0,
         }
     }
@@ -132,6 +150,64 @@ impl DeviceLibrary {
             .get(book.index())
             .and_then(Option::as_ref)
             .map(FixedString::as_str)
+    }
+
+    fn spine_count(&self, book: BookId) -> usize {
+        self.spine_counts
+            .get(book.index())
+            .copied()
+            .map_or(0, usize::from)
+    }
+
+    fn cache_spine_paths(
+        &mut self,
+        book: BookId,
+        publication: &crate::device_epub::DevicePublication,
+    ) {
+        let start = usize::from(self.spine_path_count);
+        let mut cached = 0usize;
+        for spine_index in 0..publication.spine_len() {
+            let Some(item) = publication.spine_item(spine_index) else {
+                break;
+            };
+            let path = item.path().as_bytes();
+            let path_index = start + cached;
+            let byte_start = usize::from(self.spine_path_byte_length);
+            let Some(byte_end) = byte_start.checked_add(path.len()) else {
+                break;
+            };
+            if path_index >= self.spine_path_offsets.len() || byte_end > self.spine_path_bytes.len()
+            {
+                break;
+            }
+            let Ok(offset) = u16::try_from(byte_start) else {
+                break;
+            };
+            let Ok(length) = u8::try_from(path.len()) else {
+                break;
+            };
+            self.spine_path_bytes[byte_start..byte_end].copy_from_slice(path);
+            self.spine_path_offsets[path_index] = offset;
+            self.spine_path_lengths[path_index] = length;
+            self.spine_path_count = self.spine_path_count.saturating_add(1);
+            self.spine_path_byte_length = u16::try_from(byte_end).unwrap_or(u16::MAX);
+            cached += 1;
+        }
+        self.book_spine_starts[book.index()] = u8::try_from(start).unwrap_or(u8::MAX);
+        self.book_cached_spine_counts[book.index()] = u8::try_from(cached).unwrap_or(u8::MAX);
+    }
+
+    fn spine_path(&self, book: BookId, spine_index: usize) -> Option<&str> {
+        let cached = usize::from(*self.book_cached_spine_counts.get(book.index())?);
+        if spine_index >= cached {
+            return None;
+        }
+        let start = usize::from(*self.book_spine_starts.get(book.index())?);
+        let path_index = start.checked_add(spine_index)?;
+        let offset = usize::from(*self.spine_path_offsets.get(path_index)?);
+        let length = usize::from(*self.spine_path_lengths.get(path_index)?);
+        let end = offset.checked_add(length)?;
+        core::str::from_utf8(self.spine_path_bytes.get(offset..end)?).ok()
     }
 
     fn file_name(&self, book: BookId) -> &str {
@@ -348,7 +424,10 @@ pub async fn reader_app_task(
     if load_library(store, library, &mut workspaces).is_err() {
         stop("reader /BOOKS scan failed").await;
     }
-    info!("reader catalog ready: books={}", library.length);
+    info!(
+        "reader catalog ready: books={} cached_spines={} path_bytes={}",
+        library.length, library.spine_path_count, library.spine_path_byte_length
+    );
 
     let Some(profile) = X4DriveProfile::parse(X4_DRIVE_PROFILE) else {
         stop("reader X4 drive profile is invalid").await;
@@ -660,11 +739,17 @@ fn load_library(
             Ok(path) => path,
             Err(_) => continue,
         };
+        let Ok(spine_count) = u8::try_from(publication.spine_len()) else {
+            continue;
+        };
         let index = library.length;
+        let book_id = BookId::new(index);
+        library.cache_spine_paths(book_id, publication);
         library.files[index] = Some(file);
         library.titles[index] = title;
         library.creators[index] = creator;
         library.cover_paths[index] = cover_path;
+        library.spine_counts[index] = spine_count;
         library.length += 1;
     }
     Ok(())
@@ -716,6 +801,7 @@ fn run_effect(
             AppEffect::RenderLibrary => {
                 esp_println::println!("BREWCTL/1 LOG stage=render-library state=start");
                 render_library(app, library, store, workspaces)?;
+                esp_println::println!("BREWCTL/1 LOG stage=render-library state=frame-ready");
                 refresh(store, panel, workspaces.frame_codec.frame())?;
                 esp_println::println!("BREWCTL/1 LOG stage=render-library state=done");
                 info!(
@@ -841,18 +927,31 @@ fn load_chapter(
     let file = library.file(selected).ok_or(())?;
     let inflate = workspaces.frame_codec.prepare_inflate();
     let reader = store.open_reader(file).map_err(|_| ())?;
-    let book = DeviceEpub::open(
-        reader,
-        workspaces.zip,
-        workspaces.package,
-        inflate,
-        workspaces.resource,
-    )
-    .map_err(|_| ())?;
-    let spine_count = book.publication().spine_len();
-    let length = book
-        .read_spine(spine_index, workspaces.resource, inflate)
+    let (spine_count, length) = if let Some(path) = library.spine_path(selected, spine_index) {
+        let archive = StreamingZip::open(reader, workspaces.zip).map_err(|_| ())?;
+        let entry = archive.find(path).map_err(|_| ())?;
+        if entry.uncompressed_size() as usize > workspaces.resource.len() {
+            return Err(());
+        }
+        let length = archive
+            .read_entry(entry, workspaces.resource, inflate)
+            .map_err(|_| ())?;
+        (library.spine_count(selected), length)
+    } else {
+        let book = DeviceEpub::open(
+            reader,
+            workspaces.zip,
+            workspaces.package,
+            inflate,
+            workspaces.resource,
+        )
         .map_err(|_| ())?;
+        let spine_count = book.publication().spine_len();
+        let length = book
+            .read_spine(spine_index, workspaces.resource, inflate)
+            .map_err(|_| ())?;
+        (spine_count, length)
+    };
     Ok(LoadedChapter {
         book: selected,
         spine_index,
@@ -870,6 +969,10 @@ fn decode_book_cover(
     let Some(path) = library.cover_path(selected) else {
         return Ok(false);
     };
+    esp_println::println!(
+        "BREWCTL/1 LOG stage=cover state=start book={}",
+        selected.index()
+    );
     let file = library.file(selected).ok_or("reader book is missing")?;
     let inflate = workspaces.frame_codec.prepare_inflate();
     let reader = store
@@ -877,19 +980,46 @@ fn decode_book_cover(
         .map_err(|_| "reader cover file open failed")?;
     let archive = StreamingZip::open(reader, workspaces.zip)
         .map_err(|_| "reader cover archive open failed")?;
+    esp_println::println!(
+        "BREWCTL/1 LOG stage=cover state=archive-open book={}",
+        selected.index()
+    );
     let entry = archive
         .find(path)
         .map_err(|_| "reader cover entry is missing")?;
+    esp_println::println!(
+        "BREWCTL/1 LOG stage=cover state=entry-found book={} compressed={} uncompressed={}",
+        selected.index(),
+        entry.compressed_size(),
+        entry.uncompressed_size()
+    );
+    if !encoded_cover_fits(entry.compressed_size(), entry.uncompressed_size()) {
+        esp_println::println!(
+            "BREWCTL/1 LOG stage=cover state=skipped book={} reason=encoded-size",
+            selected.index()
+        );
+        return Ok(false);
+    }
     let length = archive
         .read_entry(entry, workspaces.resource, inflate)
         .map_err(|_| "reader cover read failed")?;
     let encoded = &workspaces.resource[..length];
     let output = &mut *workspaces.cover;
     let decoded = if encoded.starts_with(b"\x89PNG\r\n\x1a\n") {
+        esp_println::println!(
+            "BREWCTL/1 LOG stage=cover state=decode-start book={} format=png bytes={}",
+            selected.index(),
+            length
+        );
         workspaces
             .frame_codec
             .with_png(|png| decode_png_cover(encoded, output, png))
     } else if encoded.starts_with(&[0xFF, 0xD8]) {
+        esp_println::println!(
+            "BREWCTL/1 LOG stage=cover state=decode-start book={} format=jpeg bytes={}",
+            selected.index(),
+            length
+        );
         workspaces
             .frame_codec
             .with_jpeg(|jpeg| decode_jpeg_cover(encoded, output, jpeg))
@@ -897,6 +1027,10 @@ fn decode_book_cover(
         return Ok(false);
     };
     decoded.map_err(|_| "reader cover decode failed")?;
+    esp_println::println!(
+        "BREWCTL/1 LOG stage=cover state=done book={}",
+        selected.index()
+    );
     Ok(true)
 }
 

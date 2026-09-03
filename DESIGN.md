@@ -25,11 +25,11 @@ A one-pixel outline is neutral. A three or four-pixel outline is selected. Selec
 
 Reader typography is separate from application chrome. The settings are bounded choices:
 
-- Font is Book, Compact, or Mono.
+- Font is Noto Serif, Compact, or Mono.
 - Text size is Small, Medium, or Large.
 - Line spacing is Compact, Normal, or Relaxed.
 
-One resolved `ReaderTheme` supplies glyph metrics to both pagination and rendering. The default Book and Medium combination retains the existing `FONT_6X10` reader body.
+One resolved `ReaderTheme` supplies glyph metrics to both pagination and rendering. The default Noto Serif and Medium combination matches CrossPoint Reader's Noto Serif 14 pt default. The Brewthink wordmark and application chrome remain on their existing bitmap fonts.
 
 ## Simulator
 

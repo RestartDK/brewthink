@@ -56,7 +56,7 @@ The current host, WASM, and X4 paths provide:
 - Immediate conversion of decoded covers into 5,808-byte, 176 × 264 packed shelf bitmaps; no full-color frame is retained.
 - Shared Home, Books, Files, Settings, Reader, Error, and Sleep navigation and framebuffer rendering in ordinary Rust tests, WASM, and X4 firmware.
 - A shared battery indicator backed by a smoothed voltage estimate on X4 and a fake battery state in WASM.
-- Bounded reader typography choices whose resolved metrics drive both pagination and rendering.
+- Bounded reader typography choices whose resolved metrics drive both pagination and rendering. Noto Serif 14 pt is the default, matching CrossPoint Reader.
 - Read-only FAT `/Books` discovery, a seekable file adapter, bounded streaming ZIP/DEFLATE, fixed-memory XML, and page-at-a-time XHTML layout on the X4.
 - A normal X4 application loop connecting all seven controls, shelf, chapter/page navigation, SSD1677 refresh, retained sleep frame, GPIO3 deep sleep/wake, and checksummed book/chapter/page resume.
 - Synthetic EPUB, PNG-alpha, and JPEG fixtures plus private acceptance against every spine item and the cover in the Hamming EPUB.
@@ -105,7 +105,9 @@ The X4 path applies lower fixed limits:
 | Container XML | 2 KiB |
 | OPF package XML | 64 KiB |
 | Extracted resource | 140 KiB |
-| Linear spine items | 64 |
+| Encoded shelf cover | 128 KiB |
+| Linear spine items per book | 64 |
+| Cached catalog spine paths | 64 / 2 KiB total |
 | Manifest items | 512 |
 | Retained lines per page | 50 |
 | UTF-8 bytes per retained line | 320 |

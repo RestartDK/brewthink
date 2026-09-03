@@ -7,8 +7,8 @@ use embedded_graphics::{
     mono_font::{
         MonoFont, MonoTextStyle,
         ascii::{
-            FONT_4X6, FONT_5X7, FONT_6X9, FONT_6X10, FONT_6X12, FONT_7X13, FONT_7X14, FONT_9X15,
-            FONT_9X18_BOLD, FONT_10X20,
+            FONT_4X6, FONT_6X9, FONT_6X10, FONT_6X12, FONT_7X13, FONT_7X14, FONT_9X18_BOLD,
+            FONT_10X20,
         },
     },
     pixelcolor::BinaryColor,
@@ -19,6 +19,13 @@ use embedded_graphics::{
 
 use crate::{
     app::{ReaderFont, ReaderFontSize, ReaderPreferences, ReaderSpacing, ReadingLocation},
+    fonts::{
+        BitmapFont,
+        noto_serif::{
+            NOTO_SERIF_12_BOLD, NOTO_SERIF_12_REGULAR, NOTO_SERIF_14_BOLD, NOTO_SERIF_14_REGULAR,
+            NOTO_SERIF_16_BOLD, NOTO_SERIF_16_REGULAR,
+        },
+    },
     image::{MonochromeImage, Size},
     power::BatteryStatus,
     ui::draw_app_bar,
@@ -51,50 +58,151 @@ impl ReaderStyle {
 }
 
 #[derive(Clone, Copy)]
+enum ReaderFace {
+    Monospace(&'static MonoFont<'static>),
+    Bitmap(&'static BitmapFont),
+}
+
+impl ReaderFace {
+    fn character_width(self, character: char) -> usize {
+        match self {
+            Self::Monospace(font) => font.character_size.width as usize,
+            Self::Bitmap(font) => font.character_width(character),
+        }
+    }
+
+    fn text_width(self, text: &str) -> usize {
+        match self {
+            Self::Monospace(font) => text.chars().count() * font.character_size.width as usize,
+            Self::Bitmap(font) => font.text_width(text),
+        }
+    }
+
+    const fn line_height(self) -> usize {
+        match self {
+            Self::Monospace(font) => font.character_size.height as usize,
+            Self::Bitmap(font) => font.line_height(),
+        }
+    }
+
+    fn draw<D>(self, text: &str, position: Point, target: &mut D) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = BinaryColor>,
+    {
+        match self {
+            Self::Monospace(font) => Text::with_baseline(
+                text,
+                position,
+                MonoTextStyle::new(font, BinaryColor::On),
+                Baseline::Top,
+            )
+            .draw(target)
+            .map(|_| ()),
+            Self::Bitmap(font) => font.draw(text, position, target),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 pub struct ReaderTheme {
-    body: &'static MonoFont<'static>,
-    line_gap: usize,
+    body: ReaderFace,
+    heading: ReaderFace,
+    spacing: ReaderSpacing,
 }
 
 impl ReaderTheme {
     pub const fn from_preferences(preferences: ReaderPreferences) -> Self {
-        let body = match (preferences.font(), preferences.size()) {
-            (ReaderFont::Book, ReaderFontSize::Small) => &FONT_5X7,
-            (ReaderFont::Book, ReaderFontSize::Medium) => &FONT_6X10,
-            (ReaderFont::Book, ReaderFontSize::Large) => &FONT_9X15,
-            (ReaderFont::Compact, ReaderFontSize::Small) => &FONT_4X6,
-            (ReaderFont::Compact, ReaderFontSize::Medium) => &FONT_6X9,
-            (ReaderFont::Compact, ReaderFontSize::Large) => &FONT_7X13,
-            (ReaderFont::Mono, ReaderFontSize::Small) => &FONT_6X12,
-            (ReaderFont::Mono, ReaderFontSize::Medium) => &FONT_7X14,
-            (ReaderFont::Mono, ReaderFontSize::Large) => &FONT_10X20,
+        let (body, heading) = match (preferences.font(), preferences.size()) {
+            (ReaderFont::NotoSerif, ReaderFontSize::Small) => (
+                ReaderFace::Bitmap(&NOTO_SERIF_12_REGULAR),
+                ReaderFace::Bitmap(&NOTO_SERIF_12_BOLD),
+            ),
+            (ReaderFont::NotoSerif, ReaderFontSize::Medium) => (
+                ReaderFace::Bitmap(&NOTO_SERIF_14_REGULAR),
+                ReaderFace::Bitmap(&NOTO_SERIF_14_BOLD),
+            ),
+            (ReaderFont::NotoSerif, ReaderFontSize::Large) => (
+                ReaderFace::Bitmap(&NOTO_SERIF_16_REGULAR),
+                ReaderFace::Bitmap(&NOTO_SERIF_16_BOLD),
+            ),
+            (ReaderFont::Compact, ReaderFontSize::Small) => (
+                ReaderFace::Monospace(&FONT_4X6),
+                ReaderFace::Monospace(&FONT_9X18_BOLD),
+            ),
+            (ReaderFont::Compact, ReaderFontSize::Medium) => (
+                ReaderFace::Monospace(&FONT_6X9),
+                ReaderFace::Monospace(&FONT_9X18_BOLD),
+            ),
+            (ReaderFont::Compact, ReaderFontSize::Large) => (
+                ReaderFace::Monospace(&FONT_7X13),
+                ReaderFace::Monospace(&FONT_9X18_BOLD),
+            ),
+            (ReaderFont::Mono, ReaderFontSize::Small) => (
+                ReaderFace::Monospace(&FONT_6X12),
+                ReaderFace::Monospace(&FONT_9X18_BOLD),
+            ),
+            (ReaderFont::Mono, ReaderFontSize::Medium) => (
+                ReaderFace::Monospace(&FONT_7X14),
+                ReaderFace::Monospace(&FONT_9X18_BOLD),
+            ),
+            (ReaderFont::Mono, ReaderFontSize::Large) => (
+                ReaderFace::Monospace(&FONT_10X20),
+                ReaderFace::Monospace(&FONT_9X18_BOLD),
+            ),
         };
-        let line_gap = match preferences.spacing() {
-            ReaderSpacing::Compact => 1,
-            ReaderSpacing::Normal => 3,
-            ReaderSpacing::Relaxed => 6,
-        };
-        Self { body, line_gap }
+        Self {
+            body,
+            heading,
+            spacing: preferences.spacing(),
+        }
     }
 
-    pub const fn font(self, style: ReaderStyle) -> &'static MonoFont<'static> {
+    pub fn character_width(self, style: ReaderStyle, character: char) -> usize {
+        self.face(style).character_width(character)
+    }
+
+    pub fn text_width(self, style: ReaderStyle, text: &str) -> usize {
+        self.face(style).text_width(text)
+    }
+
+    pub const fn line_width(self, style: ReaderStyle) -> usize {
+        BODY_WIDTH_PIXELS - (style.left() - 18)
+    }
+
+    pub const fn line_height(self, style: ReaderStyle) -> usize {
+        let height = self.face(style).line_height();
+        match (self.body, self.spacing) {
+            (ReaderFace::Bitmap(_), ReaderSpacing::Compact) => height * 95 / 100,
+            (ReaderFace::Bitmap(_), ReaderSpacing::Normal) => height,
+            (ReaderFace::Bitmap(_), ReaderSpacing::Relaxed) => height * 110 / 100,
+            (ReaderFace::Monospace(_), ReaderSpacing::Compact) => height + 1,
+            (ReaderFace::Monospace(_), ReaderSpacing::Normal) => height + 3,
+            (ReaderFace::Monospace(_), ReaderSpacing::Relaxed) => height + 6,
+        }
+    }
+
+    pub fn draw_text<D>(
+        self,
+        text: &str,
+        style: ReaderStyle,
+        position: Point,
+        target: &mut D,
+    ) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = BinaryColor>,
+    {
+        self.face(style).draw(text, position, target)
+    }
+
+    const fn face(self, style: ReaderStyle) -> ReaderFace {
         match style {
-            ReaderStyle::Heading => &FONT_9X18_BOLD,
+            ReaderStyle::Heading => self.heading,
             ReaderStyle::Body
             | ReaderStyle::Quote
             | ReaderStyle::ListItem
             | ReaderStyle::Preformatted
             | ReaderStyle::Caption => self.body,
         }
-    }
-
-    pub const fn line_height(self, style: ReaderStyle) -> usize {
-        self.font(style).character_size.height as usize + self.line_gap
-    }
-
-    pub const fn characters_per_line(self, style: ReaderStyle) -> usize {
-        let inset = style.left() - 18;
-        (BODY_WIDTH_PIXELS - inset) / self.font(style).character_size.width as usize
     }
 }
 
@@ -204,15 +312,14 @@ pub fn render_reader(
         if y + height > BODY_BOTTOM {
             return Err(ReaderRenderError::ContentExceedsPage);
         }
-        let text_style = MonoTextStyle::new(theme.font(line.style), BinaryColor::On);
-        Text::with_baseline(
-            line.text,
-            Point::new(line.style.left() as i32, y as i32),
-            text_style,
-            Baseline::Top,
-        )
-        .draw(&mut display.clipped(&body_clip))
-        .ok();
+        theme
+            .draw_text(
+                line.text,
+                line.style,
+                Point::new(line.style.left() as i32, y as i32),
+                &mut display.clipped(&body_clip),
+            )
+            .ok();
         y += height;
     }
 
@@ -358,13 +465,23 @@ mod tests {
     use std::vec;
 
     use super::{
-        BODY_BOTTOM, BODY_TOP, ReaderLine, ReaderRenderError, ReaderStyle, ReaderView,
+        BODY_BOTTOM, BODY_TOP, ReaderLine, ReaderRenderError, ReaderStyle, ReaderTheme, ReaderView,
         render_reader,
     };
     use crate::{
-        app::{App, AppEffect, AppInput},
+        app::{App, AppEffect, AppInput, ReaderPreferences},
         image::{MonochromeImage, Size},
     };
+
+    #[test]
+    fn default_reader_uses_crosspoint_noto_serif_metrics() {
+        let theme = ReaderTheme::from_preferences(ReaderPreferences::default());
+
+        assert_eq!(theme.line_height(ReaderStyle::Body), 40);
+        assert!(
+            theme.text_width(ReaderStyle::Body, "iii") < theme.text_width(ReaderStyle::Body, "WWW")
+        );
+    }
 
     #[test]
     fn renders_a_reader_page_into_the_exact_x4_frame() {

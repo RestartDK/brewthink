@@ -233,6 +233,7 @@ struct PageSink<'a> {
     theme: ReaderTheme,
     page: &'a mut BoundedPage,
     current: FixedString<MAX_READER_LINE_BYTES>,
+    current_width: usize,
     style: ReaderStyle,
     pending_space: bool,
     emitted_any: bool,
@@ -251,6 +252,7 @@ impl<'a> PageSink<'a> {
             theme: ReaderTheme::from_preferences(preferences),
             page,
             current: FixedString::new(),
+            current_width: 0,
             style: ReaderStyle::Body,
             pending_space: false,
             emitted_any: false,
@@ -291,19 +293,24 @@ impl<'a> PageSink<'a> {
             self.pending_space = !self.current.is_empty();
             return Ok(());
         }
-        let width = self.theme.characters_per_line(self.style);
-        if self.pending_space {
-            if self.current.as_str().chars().count() + 1 > width {
+        let line_width = self.theme.line_width(self.style);
+        let character_width = self.theme.character_width(self.style, character);
+        if self.pending_space && !self.current.is_empty() {
+            let space_width = self.theme.character_width(self.style, ' ');
+            if self.current_width + space_width + character_width > line_width {
                 self.line_break(false).map_err(layout_to_xml)?;
-            } else if !self.current.is_empty() {
+            } else {
                 self.current.push(' ')?;
+                self.current_width += space_width;
             }
-            self.pending_space = false;
         }
-        if self.current.as_str().chars().count() == width {
+        self.pending_space = false;
+        if !self.current.is_empty() && self.current_width + character_width > line_width {
             self.line_break(false).map_err(layout_to_xml)?;
         }
-        self.current.push(character)
+        self.current.push(character)?;
+        self.current_width += character_width;
+        Ok(())
     }
 
     fn line_is_empty(&self) -> bool {
@@ -317,6 +324,7 @@ impl<'a> PageSink<'a> {
         }
         let line = self.current;
         self.current.clear();
+        self.current_width = 0;
         self.emit(line, self.style)?;
         Ok(true)
     }
