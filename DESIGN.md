@@ -19,7 +19,7 @@ The wordmark occupies the upper-left. The active section appears beneath it. A b
 
 ## Selection
 
-A one-pixel outline is neutral. A three or four-pixel outline is selected. Selection never depends on color. Up and Down move through vertical lists. Left and Right change settings values. Confirm opens or applies. Back returns to the parent screen.
+A one-pixel outline is neutral. A three or four-pixel outline is selected. Selection never depends on color. Up and Down move through vertical lists. Left and Right change settings values. Confirm opens or applies. Back returns to the parent screen. On X4 hardware, the buttons labeled Back and Confirm emit Up and Down. USB control keeps the semantic Back and Confirm inputs.
 
 ## Reader typography
 

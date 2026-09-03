@@ -75,8 +75,8 @@ const NAVIGATION_BANDS: [ButtonBand; 4] = [
     ButtonBand::new(0, 150, Button::Down),
 ];
 const PAGE_BANDS: [ButtonBand; 2] = [
-    ButtonBand::new(1_500, 1_800, Button::Back),
-    ButtonBand::new(0, 150, Button::Confirm),
+    ButtonBand::new(1_500, 1_800, Button::Up),
+    ButtonBand::new(0, 150, Button::Down),
 ];
 
 pub fn decode_buttons(sample: RawInputSample) -> Result<PressedButtons, X4ButtonDecodeError> {
@@ -336,8 +336,8 @@ mod tests {
             (1_985, 2_973, false, Button::Right),
             (1_110, 2_973, false, Button::Up),
             (3, 2_973, false, Button::Down),
-            (2_973, 1_655, false, Button::Back),
-            (2_973, 4, false, Button::Confirm),
+            (2_973, 1_655, false, Button::Up),
+            (2_973, 4, false, Button::Down),
             (2_973, 2_973, true, Button::Power),
         ];
 
@@ -356,7 +356,7 @@ mod tests {
         assert!(
             concurrent
                 .iter()
-                .eq([Button::Back, Button::Right, Button::Power])
+                .eq([Button::Right, Button::Up, Button::Power])
         );
     }
 
