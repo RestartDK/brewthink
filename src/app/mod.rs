@@ -1,7 +1,8 @@
-use crate::power::BatteryStatus;
+use crate::power::{BatteryLevel, BatteryStatus};
 
 const BOOKS_PER_SHELF_PAGE: usize = 4;
 const SHELF_COLUMNS: usize = 2;
+const BATTERY_REFRESH_PERCENT_DELTA: u8 = 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BookId(usize);
@@ -719,6 +720,46 @@ struct ReadingCheckpoint {
     preferences: ReaderPreferences,
 }
 
+fn battery_refresh_needed(previous: BatteryStatus, current: BatteryStatus) -> bool {
+    if previous.usb() != current.usb() {
+        return true;
+    }
+    match (previous.level(), current.level()) {
+        (BatteryLevel::Unknown, BatteryLevel::Unknown) => false,
+        (BatteryLevel::Percent(previous), BatteryLevel::Percent(current)) => {
+            previous.get().abs_diff(current.get()) >= BATTERY_REFRESH_PERCENT_DELTA
+        }
+        _ => true,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BatteryDisplayState {
+    current: BatteryStatus,
+    refresh_anchor: BatteryStatus,
+}
+
+impl BatteryDisplayState {
+    const fn new() -> Self {
+        Self {
+            current: BatteryStatus::unknown(),
+            refresh_anchor: BatteryStatus::unknown(),
+        }
+    }
+
+    fn update(&mut self, next: BatteryStatus) -> bool {
+        if self.current == next {
+            return false;
+        }
+        self.current = next;
+        if !battery_refresh_needed(self.refresh_anchor, next) {
+            return false;
+        }
+        self.refresh_anchor = next;
+        true
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct App {
     library: LibraryState,
@@ -726,7 +767,7 @@ pub struct App {
     home: HomeState,
     view: AppView,
     preferences: ReaderPreferences,
-    battery: BatteryStatus,
+    battery: BatteryDisplayState,
     pending: Option<PendingChapter>,
     reading_checkpoint: Option<ReadingCheckpoint>,
 }
@@ -751,7 +792,7 @@ impl App {
             home,
             view: AppView::Home(home),
             preferences,
-            battery: BatteryStatus::unknown(),
+            battery: BatteryDisplayState::new(),
             pending: None,
             reading_checkpoint: None,
         }
@@ -849,15 +890,27 @@ impl App {
     }
 
     pub const fn battery(self) -> BatteryStatus {
-        self.battery
+        self.battery.current
     }
 
-    pub fn set_battery(&mut self, battery: BatteryStatus) -> bool {
-        if self.battery == battery {
-            return false;
+    pub fn set_battery(&mut self, battery: BatteryStatus) -> AppEffect {
+        if !self.battery.update(battery) {
+            return AppEffect::None;
         }
-        self.battery = battery;
-        true
+        self.current_render_effect()
+    }
+
+    fn current_render_effect(&self) -> AppEffect {
+        match self.view {
+            AppView::Home(_) => AppEffect::RenderHome,
+            AppView::Library => AppEffect::RenderLibrary,
+            AppView::Files(_) => AppEffect::RenderFiles,
+            AppView::Settings(_) => AppEffect::RenderSettings,
+            AppView::Loading => AppEffect::None,
+            AppView::Reader(session) => AppEffect::RenderReader(session.location()),
+            AppView::Error { book, .. } => AppEffect::RenderError { book },
+            AppView::Sleeping { resume } => AppEffect::RenderSleep { resume },
+        }
     }
 
     pub fn resume_point(self) -> ResumePoint {
@@ -1476,11 +1529,21 @@ mod tests {
     }
 
     #[test]
-    fn battery_status_is_shared_application_state() {
+    fn battery_updates_refresh_meaningful_changes() {
         let mut app = App::new(0);
-        let status = BatteryStatus::from_percent(42, UsbState::Disconnected);
-        assert!(app.set_battery(status));
-        assert!(!app.set_battery(status));
-        assert_eq!(app.battery(), status);
+        let initial = BatteryStatus::from_percent(42, UsbState::Disconnected);
+        assert_eq!(app.set_battery(initial), AppEffect::RenderHome);
+        assert_eq!(app.set_battery(initial), AppEffect::None);
+
+        let small_change = BatteryStatus::from_percent(44, UsbState::Disconnected);
+        assert_eq!(app.set_battery(small_change), AppEffect::None);
+        assert_eq!(app.battery(), small_change);
+
+        let threshold_change = BatteryStatus::from_percent(47, UsbState::Disconnected);
+        assert_eq!(app.set_battery(threshold_change), AppEffect::RenderHome);
+
+        let usb_connected = BatteryStatus::from_percent(47, UsbState::Connected);
+        assert_eq!(app.set_battery(usb_connected), AppEffect::RenderHome);
+        assert_eq!(app.battery(), usb_connected);
     }
 }

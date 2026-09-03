@@ -105,7 +105,7 @@ ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/device-control.sh screen artifacts/de
 ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/device-control.sh monitor
 ```
 
-A USB tap enters the same `AppInput` path as a debounced physical press. `screen` reads the exact 48,000-byte monochrome frame last sent to the SSD1677, checks its CRC32, and writes a 480 × 800 PNG. The PNG proves what firmware generated, not what physically appeared on the panel. The CLI opens the port directly without changing DTR or RTS. A Power tap renders the sleep frame and enters deep sleep, which disconnects USB; waking still requires GPIO3 through the physical Power button.
+A USB tap enters the same `AppInput` path as a debounced physical press. `status` reports the current view plus battery percentage, measured millivolts, and USB presence. `screen` reads the exact 48,000-byte monochrome frame last sent to the SSD1677, checks its CRC32, and writes a 480 × 800 PNG. The PNG proves what firmware generated, not what physically appeared on the panel. The CLI opens the port directly without changing DTR or RTS. A Power tap renders the sleep frame and enters deep sleep, which disconnects USB; waking still requires GPIO3 through the physical Power button.
 
 Build a JPEG, PNG, BMP, or PNM into an app1 image with:
 

@@ -23,6 +23,12 @@ pub const CONTENT_WIDTH: u32 = 444;
 pub const APP_BAR_RULE_Y: i32 = 58;
 pub const CONTENT_TOP: usize = 72;
 
+const POWER_SYMBOL_X: usize = 386;
+const POWER_SYMBOL_Y: usize = 22;
+const POWER_SYMBOL_ROWS: [u8; 9] = [
+    0b00011, 0b00110, 0b01110, 0b11111, 0b00110, 0b01110, 0b01100, 0b11000, 0b10000,
+];
+
 pub const fn chrome_style() -> MonoTextStyle<'static, BinaryColor> {
     MonoTextStyle::new(&FONT_6X10, BinaryColor::On)
 }
@@ -92,7 +98,7 @@ fn draw_battery(target: &mut MonochromeImage<'_>, battery: BatteryStatus) {
         }
         BatteryLevel::Percent(percent) => {
             let fill = usize::from(percent.get()) * 23 / 100;
-            if fill > 0 {
+            if fill > 0 && !battery.usb().is_connected() {
                 Rectangle::new(Point::new(376, 22), GraphicsSize::new(fill as u32, 9))
                     .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
                     .draw(&mut display)
@@ -110,9 +116,22 @@ fn draw_battery(target: &mut MonochromeImage<'_>, battery: BatteryStatus) {
     .draw(&mut display)
     .ok();
     if battery.usb().is_connected() {
-        Text::with_baseline("U", Point::new(386, 21), chrome_style(), Baseline::Top)
-            .draw(&mut display)
-            .ok();
+        draw_external_power_symbol(target);
+    }
+}
+
+fn draw_external_power_symbol(target: &mut MonochromeImage<'_>) {
+    for y in POWER_SYMBOL_Y..POWER_SYMBOL_Y + POWER_SYMBOL_ROWS.len() {
+        for x in POWER_SYMBOL_X - 2..POWER_SYMBOL_X + 7 {
+            target.set_pixel(x, y, false);
+        }
+    }
+    for (row, pixels) in POWER_SYMBOL_ROWS.into_iter().enumerate() {
+        for column in 0..5 {
+            if pixels & (1 << (4 - column)) != 0 {
+                target.set_pixel(POWER_SYMBOL_X + column, POWER_SYMBOL_Y + row, true);
+            }
+        }
     }
 }
 
@@ -187,5 +206,74 @@ impl<const CAPACITY: usize> Write for FixedText<CAPACITY> {
         self.bytes[self.length..end].copy_from_slice(value.as_bytes());
         self.length = end;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use std::vec;
+
+    use super::draw_app_bar;
+    use crate::{
+        image::{MonochromeBitmap, MonochromeImage, Size},
+        input::UsbState,
+        power::BatteryStatus,
+    };
+
+    fn render_battery(percent: u8, usb: UsbState) -> std::vec::Vec<u8> {
+        let mut bytes = vec![0xFF; 480 * 800 / 8];
+        let mut image = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        draw_app_bar(
+            &mut image,
+            "HOME",
+            BatteryStatus::from_percent(percent, usb),
+        );
+        bytes
+    }
+
+    #[test]
+    fn external_power_hides_the_capacity_fill() {
+        let bytes = render_battery(100, UsbState::Connected);
+        let battery = MonochromeBitmap::new(Size::new(480, 800).unwrap(), &bytes).unwrap();
+
+        for y in 22..31 {
+            for x in (376..384).chain(393..399) {
+                assert!(
+                    !battery.pixel_is_black(x, y),
+                    "battery fill remained at ({x}, {y})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn external_power_symbol_stays_inside_the_battery() {
+        let size = Size::new(480, 800).unwrap();
+        for percent in [0, 50, 75, 100] {
+            let connected_bytes = render_battery(percent, UsbState::Connected);
+            let disconnected_bytes = render_battery(percent, UsbState::Disconnected);
+            let connected = MonochromeBitmap::new(size, &connected_bytes).unwrap();
+            let disconnected = MonochromeBitmap::new(size, &disconnected_bytes).unwrap();
+            let mut inside = 0;
+            let mut outside = 0;
+
+            for y in 0..800 {
+                for x in 0..480 {
+                    if connected.pixel_is_black(x, y) == disconnected.pixel_is_black(x, y) {
+                        continue;
+                    }
+                    if (375..400).contains(&x) && (21..32).contains(&y) {
+                        inside += 1;
+                    } else {
+                        outside += 1;
+                    }
+                }
+            }
+
+            assert!(inside > 0, "power symbol disappeared at {percent}%");
+            assert_eq!(outside, 0, "power symbol escaped the battery at {percent}%");
+        }
     }
 }

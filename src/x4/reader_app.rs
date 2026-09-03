@@ -47,7 +47,7 @@ use crate::{
         control::{ControlCommand, ControlLineBuffer},
     },
     library::{ShelfBook, render_shelf, render_shelf_cover},
-    power::{BatteryEstimator, BatteryStatus},
+    power::{BatteryEstimator, BatteryLevel, BatteryStatus},
     reader::{ReaderLine, ReaderStyle, ReaderView, render_reader, render_reader_error},
     settings::render_settings,
     sleep::{SleepView, render_sleep},
@@ -454,7 +454,7 @@ pub async fn reader_app_task(
         App::from_resume(library.length, retained.preferences, retained.resume)
             .unwrap_or((App::new(library.length), AppEffect::RenderHome));
     if let Some(status) = BATTERY_STATUS.try_take() {
-        app.set_battery(status);
+        let _ = app.set_battery(status);
     }
     let mut loaded = None;
     match run_effect(
@@ -485,7 +485,22 @@ pub async fn reader_app_task(
 
     loop {
         if let Some(status) = BATTERY_STATUS.try_take() {
-            app.set_battery(status);
+            let effect = app.set_battery(status);
+            match run_effect(
+                effect,
+                &mut app,
+                library,
+                store,
+                &mut panel,
+                &mut workspaces,
+                &mut loaded,
+            ) {
+                Ok(Some(resume)) => {
+                    enter_sleep(resume, app.preferences(), store, panel, low_power).await;
+                }
+                Ok(None) => {}
+                Err(status) => stop(status).await,
+            }
         }
         if let Some(button) = poll_control(
             &mut control,
@@ -688,6 +703,32 @@ fn write_control_status(app: &App) {
         AppView::Sleeping { .. } => {
             esp_println::println!("BREWCTL/1 STATUS view=sleeping");
         }
+    }
+    write_control_battery_status(app.battery());
+}
+
+fn write_control_battery_status(battery: BatteryStatus) {
+    match (battery.level(), battery.voltage()) {
+        (BatteryLevel::Unknown, None) => esp_println::println!(
+            "BREWCTL/1 BATTERY percent=unknown millivolts=unknown usb={}",
+            battery.usb().name()
+        ),
+        (BatteryLevel::Unknown, Some(voltage)) => esp_println::println!(
+            "BREWCTL/1 BATTERY percent=unknown millivolts={} usb={}",
+            voltage.millivolts().get(),
+            battery.usb().name()
+        ),
+        (BatteryLevel::Percent(percent), None) => esp_println::println!(
+            "BREWCTL/1 BATTERY percent={} millivolts=unknown usb={}",
+            percent.get(),
+            battery.usb().name()
+        ),
+        (BatteryLevel::Percent(percent), Some(voltage)) => esp_println::println!(
+            "BREWCTL/1 BATTERY percent={} millivolts={} usb={}",
+            percent.get(),
+            voltage.millivolts().get(),
+            battery.usb().name()
+        ),
     }
 }
 
