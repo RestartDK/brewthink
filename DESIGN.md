@@ -15,7 +15,7 @@ A reader uses Brewthink one-handed on a slow 480 × 800 monochrome e-paper displ
 
 ## Application bar
 
-The wordmark occupies the upper-left. The active section appears beneath it. A battery icon and percentage occupy the upper-right on Home, Books, Files, Settings, Reader, Error, and Sleep screens. USB presence may be marked, but it must not be described as charging.
+The wordmark occupies the upper-left. The active section appears beneath it. A battery icon and percentage occupy the upper-right on Home, Books, Files, Settings, Reader, Error, and Sleep screens. USB presence removes the capacity fill and adds a lightning bolt inside the outlined battery. The interface does not claim that charge current is flowing.
 
 ## Selection
 

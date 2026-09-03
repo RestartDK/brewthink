@@ -33,7 +33,7 @@ A reading checkpoint records the preferences used to derive its page. Reopening 
 
 ## Battery
 
-The application bar reserves the upper-right corner for a battery icon and percentage. The device estimates charge from smoothed GPIO0 samples and records USB presence separately. USB presence is not presented as proof of charging. Battery sampling updates cached state; display refresh remains tied to normal interaction and meaningful power-state changes.
+The application bar reserves the upper-right corner for a battery icon and percentage. USB power removes the capacity fill and adds a lightning bolt inside the outlined battery. GPIO20 detects USB presence, not active charge current. While USB is connected, the application preserves the last battery-only percentage because charging voltage would inflate the discharge estimate. It still records the measured voltage for diagnostics. USB transitions and five-point percentage changes refresh the display; smaller changes remain cached until the next application render.
 
 ## Persistence boundary
 

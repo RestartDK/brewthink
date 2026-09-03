@@ -34,6 +34,7 @@ pub enum BatteryLevel {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BatteryStatus {
     level: BatteryLevel,
+    voltage: Option<BatteryVoltage>,
     usb: UsbState,
 }
 
@@ -41,6 +42,7 @@ impl BatteryStatus {
     pub const fn unknown() -> Self {
         Self {
             level: BatteryLevel::Unknown,
+            voltage: None,
             usb: UsbState::Disconnected,
         }
     }
@@ -48,16 +50,39 @@ impl BatteryStatus {
     pub const fn from_percent(percent: u8, usb: UsbState) -> Self {
         Self {
             level: BatteryLevel::Percent(BatteryPercent::new(percent)),
+            voltage: None,
             usb,
         }
     }
 
     pub fn from_voltage(voltage: BatteryVoltage, usb: UsbState) -> Self {
-        Self::from_percent(estimate_percent(voltage.millivolts().get()), usb)
+        Self {
+            level: BatteryLevel::Percent(BatteryPercent::new(estimate_percent(
+                voltage.millivolts().get(),
+            ))),
+            voltage: Some(voltage),
+            usb,
+        }
+    }
+
+    const fn from_level_and_voltage(
+        level: BatteryLevel,
+        voltage: BatteryVoltage,
+        usb: UsbState,
+    ) -> Self {
+        Self {
+            level,
+            voltage: Some(voltage),
+            usb,
+        }
     }
 
     pub const fn level(self) -> BatteryLevel {
         self.level
+    }
+
+    pub const fn voltage(self) -> Option<BatteryVoltage> {
+        self.voltage
     }
 
     pub const fn usb(self) -> UsbState {
@@ -77,6 +102,7 @@ pub struct BatteryEstimator {
     samples: u8,
     usb: UsbState,
     last: BatteryStatus,
+    has_battery_only_estimate: bool,
 }
 
 impl BatteryEstimator {
@@ -86,33 +112,67 @@ impl BatteryEstimator {
             samples: 0,
             usb: UsbState::Disconnected,
             last: BatteryStatus::unknown(),
+            has_battery_only_estimate: false,
         }
     }
 
     pub fn observe(&mut self, voltage: BatteryVoltage, usb: UsbState) -> Option<BatteryStatus> {
+        let usb_changed = self.usb != usb;
+        if usb_changed {
+            self.reset_samples();
+        }
+        self.record(voltage);
+        self.usb = usb;
+
+        if usb_changed {
+            let next = if self.has_battery_only_estimate {
+                BatteryStatus::from_level_and_voltage(self.last.level(), voltage, usb)
+            } else {
+                BatteryStatus::from_voltage(voltage, usb)
+            };
+            return self.update(next);
+        }
+        if self.samples < ESTIMATOR_SAMPLES {
+            return None;
+        }
+
+        let average = BatteryVoltage::from_millivolts(crate::input::Millivolts::new(
+            (self.millivolts / u32::from(self.samples)).min(u32::from(u16::MAX)) as u16,
+        ));
+        self.reset_samples();
+        let next = if usb.is_connected() && self.has_battery_only_estimate {
+            BatteryStatus::from_level_and_voltage(self.last.level(), average, usb)
+        } else {
+            if !usb.is_connected() {
+                self.has_battery_only_estimate = true;
+            }
+            BatteryStatus::from_voltage(average, usb)
+        };
+        self.update(next)
+    }
+
+    pub const fn last(self) -> BatteryStatus {
+        self.last
+    }
+
+    fn record(&mut self, voltage: BatteryVoltage) {
         self.millivolts = self
             .millivolts
             .saturating_add(u32::from(voltage.millivolts().get()));
         self.samples = self.samples.saturating_add(1);
-        let usb_changed = self.usb != usb;
-        self.usb = usb;
-        if self.samples < ESTIMATOR_SAMPLES && !usb_changed {
-            return None;
-        }
-        let divisor = u32::from(self.samples.max(1));
-        let average = (self.millivolts / divisor).min(u32::from(u16::MAX)) as u16;
+    }
+
+    fn reset_samples(&mut self) {
         self.millivolts = 0;
         self.samples = 0;
-        let next = BatteryStatus::from_percent(estimate_percent(average), usb);
+    }
+
+    fn update(&mut self, next: BatteryStatus) -> Option<BatteryStatus> {
         if next == self.last {
             return None;
         }
         self.last = next;
         Some(next)
-    }
-
-    pub const fn last(self) -> BatteryStatus {
-        self.last
     }
 }
 
@@ -262,8 +322,61 @@ mod tests {
         }
         assert_eq!(
             estimator.observe(battery(3_900), UsbState::Disconnected),
-            Some(BatteryStatus::from_percent(55, UsbState::Disconnected))
+            Some(BatteryStatus::from_voltage(
+                battery(3_900),
+                UsbState::Disconnected
+            ))
         );
+    }
+
+    #[test]
+    fn usb_transition_discards_the_previous_voltage_window() {
+        let mut estimator = BatteryEstimator::new();
+        for _ in 0..15 {
+            assert_eq!(
+                estimator.observe(battery(3_400), UsbState::Disconnected),
+                None
+            );
+        }
+
+        let status = estimator
+            .observe(battery(4_200), UsbState::Connected)
+            .expect("USB transition should emit a status");
+        assert_eq!(
+            status.level(),
+            BatteryStatus::from_percent(100, UsbState::Connected).level()
+        );
+        assert_eq!(status.usb(), UsbState::Connected);
+    }
+
+    #[test]
+    fn connected_voltage_does_not_replace_the_last_battery_only_estimate() {
+        let mut estimator = BatteryEstimator::new();
+        for _ in 0..15 {
+            assert_eq!(
+                estimator.observe(battery(3_900), UsbState::Disconnected),
+                None
+            );
+        }
+        let disconnected = estimator
+            .observe(battery(3_900), UsbState::Disconnected)
+            .expect("sixteen samples should emit a status");
+        assert_eq!(
+            disconnected.level(),
+            BatteryStatus::from_percent(55, UsbState::Disconnected).level()
+        );
+
+        let connected = estimator
+            .observe(battery(4_200), UsbState::Connected)
+            .expect("USB transition should emit a status");
+        assert_eq!(connected.level(), disconnected.level());
+        assert_eq!(connected.voltage(), Some(battery(4_200)));
+        assert_eq!(connected.usb(), UsbState::Connected);
+
+        for _ in 0..15 {
+            assert_eq!(estimator.observe(battery(4_200), UsbState::Connected), None);
+        }
+        assert_eq!(estimator.last().level(), disconnected.level());
     }
 
     #[test]
