@@ -1,5 +1,7 @@
-use core::{cell::Cell, fmt, ops::ControlFlow};
+use core::{fmt, ops::ControlFlow};
 
+#[cfg(feature = "device-reader")]
+use core::cell::Cell;
 use embedded_sdmmc::{BlockDevice, Error, LfnBuffer, Mode, TimeSource, VolumeIdx, VolumeManager};
 #[cfg(feature = "device-reader")]
 use embedded_sdmmc::{File, Volume};
