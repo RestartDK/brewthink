@@ -1,11 +1,12 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
-import { stat, utimes } from "node:fs/promises";
+import { mkdir, stat, utimes } from "node:fs/promises";
 import path from "node:path";
 
 const fixturePath = path.resolve("tests/fixtures/minimal.epub");
 const noCoverFixturePath = path.resolve("tests/fixtures/no-cover.epub");
 const configuredEpub = process.env.BREWTHINK_TEST_EPUB;
+const walkthroughDirectory = process.env.BREWTHINK_WALKTHROUGH_DIR;
 
 test.use({ viewport: { width: 1440, height: 1000 } });
 
@@ -22,12 +23,15 @@ test("runs the complete library, reader, sleep, wake, and resume loop", async ({
   await page.goto("/");
   await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
   await expect(page.locator("#display-placeholder")).toBeHidden();
-  await expect(page.locator("#selected-title")).toHaveText("A Study in Scarlet");
-  await expect(page.locator("#selected-creator")).toHaveText("Arthur Conan Doyle");
-  await expect(page.locator("#selection-position")).toHaveText("1 / 4");
+  await expect(page.locator("#preview-heading")).toHaveText("Home menu · 480 × 800");
+  await expect(page.locator("#selected-title")).toHaveText("BOOKS");
+  await expect(page.locator("#selected-creator")).toHaveText("Primary menu");
+  await expect(page.locator("#selection-position")).toHaveText("1 / 3");
   await expect(page.locator("#display")).toHaveAttribute("width", "480");
   await expect(page.locator("#display")).toHaveAttribute("height", "800");
 
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#selected-title")).toHaveText("A Study in Scarlet");
   await page.getByRole("button", { name: "Move right" }).click();
   await expect(page.locator("#selected-title")).toHaveText("Pride and Prejudice");
   await page.keyboard.press("ArrowDown");
@@ -37,10 +41,10 @@ test("runs the complete library, reader, sleep, wake, and resume loop", async ({
   await page.keyboard.press("Enter");
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
   await expect(page.locator("#selection-position")).toHaveText("Chapter 1 / 3");
-  await expect(page.locator("#view-position")).toHaveText("1 / 2");
+  await expect(page.locator("#view-position")).toHaveText("1 / 9");
 
   await page.keyboard.press("ArrowRight");
-  await expect(page.locator("#view-position")).toHaveText("2 / 2");
+  await expect(page.locator("#view-position")).toHaveText("2 / 9");
   await page.keyboard.press("p");
   await expect(page.locator("#preview-heading")).toHaveText(
     "Retained sleep screen · 480 × 800",
@@ -50,10 +54,12 @@ test("runs the complete library, reader, sleep, wake, and resume loop", async ({
 
   await page.getByRole("button", { name: "Wake", exact: true }).click();
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
-  await expect(page.locator("#view-position")).toHaveText("2 / 2");
+  await expect(page.locator("#view-position")).toHaveText("2 / 9");
   await page.keyboard.press("Escape");
   await expect(page.locator("#preview-heading")).toHaveText("Library shelf · 480 × 800");
   await expect(page.locator("#selected-title")).toHaveText("Frankenstein");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#preview-heading")).toHaveText("Home menu · 480 × 800");
 
   const accessibility = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
@@ -68,6 +74,8 @@ test("parses an EPUB, renders its cover, and opens its spine text", async ({ pag
   await page.locator("#epub-file").setInputFiles(configuredEpub ?? fixturePath);
 
   await expect(page.locator("#display-placeholder")).toBeHidden();
+  await expect(page.locator("#preview-heading")).toHaveText("Home menu · 480 × 800");
+  await page.keyboard.press("Enter");
   if (configuredEpub === undefined) {
     await expect(page.locator("#selected-title")).toHaveText("Synthetic & Safe");
     await expect(page.locator("#selected-creator")).toHaveText("Fixture Author");
@@ -85,7 +93,7 @@ test("parses an EPUB, renders its cover, and opens its spine text", async ({ pag
   await page.getByRole("button", { name: "Confirm" }).click();
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
   await expect(page.locator("#selection-position")).toContainText("Chapter 1 /");
-  await expect(page.locator("#message")).toContainText("semantic");
+  await expect(page.locator("#message")).toContainText("saved progress");
 
   const screenshotPath = process.env.BREWTHINK_SCREENSHOT;
   if (screenshotPath !== undefined) {
@@ -99,6 +107,7 @@ test("uses a shelf placeholder when a valid EPUB has no cover", async ({ page })
   await page.locator("#epub-file").setInputFiles(noCoverFixturePath);
 
   await expect(page.locator("#display-placeholder")).toBeHidden();
+  await page.keyboard.press("Enter");
   await expect(page.locator("#selected-title")).toHaveText("Words Without a Cover");
   await expect(page.locator("#selected-creator")).toHaveText("Fixture Author");
   await page.keyboard.press("Enter");
@@ -114,15 +123,59 @@ test("reports invalid EPUB input without losing the simulator", async ({ page })
   await expect(page.locator("#message")).toContainText("InvalidZip");
   await expect(page.locator("#display-placeholder")).toBeVisible();
   await page.getByRole("button", { name: "Reset sample" }).click();
-  await expect(page.locator("#selected-title")).toHaveText("A Study in Scarlet");
+  await expect(page.locator("#selected-title")).toHaveText("BOOKS");
   await expect(page.locator("#display-placeholder")).toBeHidden();
+});
+
+test("opens files and applies reader typography settings", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
+
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#preview-heading")).toHaveText("File browser · 480 × 800");
+  await expect(page.locator("#selected-title")).toHaveText("study-in-scarlet.epub");
+  await page.keyboard.press("Escape");
+
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#preview-heading")).toHaveText("Reader settings · 480 × 800");
+  await expect(page.locator("#view-position")).toHaveText("NOTO SERIF");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator("#view-position")).toHaveText("COMPACT");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator("#view-position")).toHaveText("LARGE");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator("#view-position")).toHaveText("RELAXED");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#preview-heading")).toHaveText("Home menu · 480 × 800");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#view-position")).toHaveText("COMPACT");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
+  await expect(page.locator("#view-position")).toHaveText("1 / 3");
+
+  await page.reload();
+  await expect(page.locator("#preview-heading")).toHaveText("Home menu · 480 × 800");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#view-position")).toHaveText("COMPACT");
 });
 
 test("keeps the reader simulator usable at a narrow viewport", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
   await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
-  await expect(page.locator("#selected-title")).toHaveText("A Study in Scarlet");
+  await expect(page.locator("#selected-title")).toHaveText("BOOKS");
+  await page.keyboard.press("Enter");
   await page.keyboard.press("Enter");
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
   await expect(page.locator("#display")).toBeVisible();
@@ -132,6 +185,68 @@ test("keeps the reader simulator usable at a narrow viewport", async ({ page }) 
     content: document.documentElement.scrollWidth,
   }));
   expect(dimensions.content).toBeLessThanOrEqual(dimensions.viewport);
+});
+
+test("captures the app-shell visual walkthrough", async ({ page }) => {
+  test.skip(walkthroughDirectory === undefined, "BREWTHINK_WALKTHROUGH_DIR is not set");
+  if (walkthroughDirectory === undefined) {
+    return;
+  }
+  await mkdir(walkthroughDirectory, { recursive: true });
+  await page.goto("/");
+  await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
+  await page.screenshot({
+    path: path.join(walkthroughDirectory, "01-home.png"),
+    fullPage: true,
+  });
+
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#preview-heading")).toHaveText("Library shelf · 480 × 800");
+  await page.screenshot({
+    path: path.join(walkthroughDirectory, "02-books.png"),
+    fullPage: true,
+  });
+
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#preview-heading")).toHaveText("File browser · 480 × 800");
+  await page.screenshot({
+    path: path.join(walkthroughDirectory, "03-files.png"),
+    fullPage: true,
+  });
+
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#view-position")).toHaveText("NOTO SERIF");
+  await page.screenshot({
+    path: path.join(walkthroughDirectory, "04-settings.png"),
+    fullPage: true,
+  });
+
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
+  await page.screenshot({
+    path: path.join(walkthroughDirectory, "05-reader.png"),
+    fullPage: true,
+  });
+
+  await page.keyboard.press("p");
+  await expect(page.locator("#preview-heading")).toHaveText(
+    "Retained sleep screen · 480 × 800",
+  );
+  await page.screenshot({
+    path: path.join(walkthroughDirectory, "06-sleep.png"),
+    fullPage: true,
+  });
 });
 
 test("rebuilds WASM and reloads after a Rust change", async ({ page }) => {

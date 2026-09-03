@@ -141,7 +141,7 @@ Core tasks:
   - [x] Enter → Confirm.
   - [x] Escape → Back.
   - [x] P or Space → Power/action as appropriate.
-- [ ] Add fake battery state.
+- [x] Add fake battery state.
 - [x] Add a synthetic public-domain catalog and browser-provided EPUB source.
 - [x] Add browser file picker and drag-and-drop for EPUB shelf testing.
 - [x] Keep app logic host-testable with normal Rust tests.
@@ -178,8 +178,8 @@ Goal: collect user input and power state.
 - [x] Read GPIO0 battery ADC through the 2 × 10 kΩ divider.
 - [x] Convert ADC readings to battery millivolts without overflow.
 - [x] Verify battery-only execution and reset-free USB disconnect/reconnect reporting.
-- [ ] Estimate battery percentage conservatively.
-- [ ] Render application UI showing the last button event and battery state.
+- [x] Estimate battery percentage conservatively.
+- [x] Render application UI showing battery state in the shared application bar.
 
 ## Milestone 8 — Local image browser
 
@@ -223,7 +223,7 @@ Goal: move from diagnostics to the EPUB-first reader application.
 - [x] Store checksummed book/chapter/page resume state across deep sleep.
 - [x] Connect the X4 shelf, chapter pagination, controls, display refresh, and sleep/wake loop.
 - [ ] Add recently opened items.
-- [ ] Add simple settings.
+- [x] Add simple reader font, text-size, and line-spacing settings.
 - [ ] Keep rendering/layout logic testable off-device.
 
 ## Milestone 11 — Reading formats

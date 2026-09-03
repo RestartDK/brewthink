@@ -1,6 +1,7 @@
 use std::{env, error::Error, fs};
 
 use brewthink::{
+    app::ReaderPreferences,
     bounded_layout::layout_xhtml_page,
     cover::{COVER_BYTES, CoverDecodeWorkspace, decode_png_cover},
     device_epub::{DeviceEpub, DevicePackageScratch, MAX_DEVICE_RESOURCE_BYTES},
@@ -66,10 +67,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         let length = book
             .read_spine(index, &mut resource[..], &mut inflater)
             .map_err(|error| format!("{error:?}"))?;
-        let first = layout_xhtml_page(&resource[..length], 0)
+        let first = layout_xhtml_page(&resource[..length], 0, ReaderPreferences::default())
             .map_err(|error| format!("spine {index} layout: {error:?}"))?;
-        let last = layout_xhtml_page(&resource[..length], first.page_count() - 1)
-            .map_err(|error| format!("spine {index} last page: {error:?}"))?;
+        let last = layout_xhtml_page(
+            &resource[..length],
+            first.page_count() - 1,
+            ReaderPreferences::default(),
+        )
+        .map_err(|error| format!("spine {index} last page: {error:?}"))?;
         println!(
             "spine-{index}: {length} bytes, {} pages, {}",
             first.page_count(),

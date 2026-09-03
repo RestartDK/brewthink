@@ -8,6 +8,8 @@ pub const COVER_WIDTH: usize = 176;
 pub const COVER_HEIGHT: usize = 264;
 pub const COVER_BYTES: usize = COVER_WIDTH * COVER_HEIGHT / 8;
 pub const MAX_COVER_DIMENSION: usize = 1_536;
+pub const MAX_ENCODED_COVER_BYTES: u32 = 128 * 1024;
+const MAX_DECODED_COVER_PIXELS: usize = 1_024 * 1_536;
 const DEFLATE_WINDOW_BYTES: usize = 32 * 1024;
 const MAX_SCANLINE_BYTES: usize = MAX_COVER_DIMENSION * 4;
 const JPEG_WORKSPACE_BYTES: usize = 35_000;
@@ -56,6 +58,10 @@ pub enum CoverDecodeError {
     DimensionsOutOfRange,
 }
 
+pub const fn encoded_cover_fits(compressed: u32, uncompressed: u32) -> bool {
+    compressed <= MAX_ENCODED_COVER_BYTES && uncompressed <= MAX_ENCODED_COVER_BYTES
+}
+
 pub fn decode_png_cover(
     encoded: &[u8],
     output: &mut [u8; COVER_BYTES],
@@ -69,6 +75,9 @@ pub fn decode_png_cover(
         || source_height == 0
         || source_width > MAX_COVER_DIMENSION
         || source_height > MAX_COVER_DIMENSION
+        || source_width
+            .checked_mul(source_height)
+            .is_none_or(|pixels| pixels > MAX_DECODED_COVER_PIXELS)
     {
         return Err(CoverDecodeError::DimensionsOutOfRange);
     }
@@ -115,7 +124,12 @@ pub fn decode_jpeg_cover(
     let scale = jpeg_scale(usize::from(decoder.width()), usize::from(decoder.height()));
     let source_width = usize::from(decoder.width()) >> scale.shift();
     let source_height = usize::from(decoder.height()) >> scale.shift();
-    if source_width == 0 || source_height == 0 {
+    if source_width == 0
+        || source_height == 0
+        || source_width
+            .checked_mul(source_height)
+            .is_none_or(|pixels| pixels > MAX_DECODED_COVER_PIXELS)
+    {
         return Err(CoverDecodeError::DimensionsOutOfRange);
     }
     let crop = cover_crop(source_width, source_height);
@@ -249,7 +263,8 @@ mod tests {
     use std::boxed::Box;
 
     use super::{
-        COVER_BYTES, CoverDecodeWorkspace, JpegDecodeWorkspace, decode_jpeg_cover, decode_png_cover,
+        COVER_BYTES, CoverDecodeWorkspace, JpegDecodeWorkspace, decode_jpeg_cover,
+        decode_png_cover, encoded_cover_fits,
     };
     use crate::{
         device_epub::{DeviceEpub, DevicePackageScratch, MAX_DEVICE_RESOURCE_BYTES},
@@ -274,6 +289,13 @@ mod tests {
     }
 
     #[test]
+    fn bounds_encoded_cover_work() {
+        assert!(encoded_cover_fits(128 * 1024, 128 * 1024));
+        assert!(!encoded_cover_fits(128 * 1024 + 1, 1));
+        assert!(!encoded_cover_fits(1, 128 * 1024 + 1));
+    }
+
+    #[test]
     fn composites_transparent_png_pixels_onto_white() {
         let encoded = include_bytes!("../web/tests/fixtures/transparent.png");
         let mut output = Box::new([0; COVER_BYTES]);
@@ -294,6 +316,24 @@ mod tests {
 
         assert!(output.iter().any(|byte| *byte != 0xFF));
         assert!(output.iter().any(|byte| *byte != 0x00));
+    }
+
+    #[test]
+    fn rejects_jpeg_work_above_the_decoded_pixel_budget() {
+        let mut encoded = include_bytes!("../web/tests/fixtures/cover.jpg").to_vec();
+        let start = encoded
+            .windows(2)
+            .position(|marker| marker == [0xFF, 0xC0])
+            .unwrap();
+        encoded[start + 5..start + 7].copy_from_slice(&u16::MAX.to_be_bytes());
+        encoded[start + 7..start + 9].copy_from_slice(&u16::MAX.to_be_bytes());
+        let mut output = Box::new([0; COVER_BYTES]);
+        let mut workspace = Box::new(JpegDecodeWorkspace::new());
+
+        assert_eq!(
+            decode_jpeg_cover(&encoded, &mut output, &mut workspace),
+            Err(super::CoverDecodeError::DimensionsOutOfRange)
+        );
     }
 
     #[test]

@@ -1,5 +1,7 @@
 use core::{fmt, ops::ControlFlow};
 
+#[cfg(feature = "device-reader")]
+use core::cell::Cell;
 use embedded_sdmmc::{BlockDevice, Error, LfnBuffer, Mode, TimeSource, VolumeIdx, VolumeManager};
 #[cfg(feature = "device-reader")]
 use embedded_sdmmc::{File, Volume};
@@ -139,6 +141,7 @@ pub struct FatBookReader<
     T: TimeSource,
 {
     file: File<'store, D, T, MAX_DIRS, MAX_FILES, MAX_VOLUMES>,
+    next_offset: Cell<Option<u32>>,
     _volume: Volume<'store, D, T, MAX_DIRS, MAX_FILES, MAX_VOLUMES>,
 }
 
@@ -156,8 +159,18 @@ where
     }
 
     fn read_at(&self, offset: u32, output: &mut [u8]) -> Result<usize, Self::Error> {
-        self.file.seek_from_start(offset)?;
-        self.file.read(output)
+        if self.next_offset.get() != Some(offset) {
+            self.next_offset.set(None);
+            self.file.seek_from_start(offset)?;
+        }
+        self.next_offset.set(None);
+        let count = self.file.read(output)?;
+        self.next_offset.set(
+            u32::try_from(count)
+                .ok()
+                .and_then(|count| offset.checked_add(count)),
+        );
+        Ok(count)
     }
 }
 
@@ -221,6 +234,7 @@ where
         drop(root);
         Ok(FatBookReader {
             file,
+            next_offset: Cell::new(None),
             _volume: volume,
         })
     }
