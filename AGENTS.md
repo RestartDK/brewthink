@@ -62,7 +62,7 @@ The partition table was extracted from flash offset `0x8000` and decoded. Its in
 | `spiffs`   | data / spiffs subtype | `0xC90000` | `0x360000` | `0xC90000–0xFEFFFF` |
 | `coredump` | data / coredump       | `0xFF0000` | `0x010000` | `0xFF0000–0xFFFFFF` |
 
-Current stock contents:
+Contents of the original stock backup, not the live development image:
 
 - `app0` contains valid stock firmware and is selected by valid OTA sequence `1`.
 - `app1` is fully erased and contains no valid image.
@@ -73,8 +73,9 @@ Current stock contents:
 Important consequence:
 
 - `app0` is the known-good stock slot.
-- `app1` is the likely future development slot.
-- Writing `app1` and changing `otadata` are separate operations and should stay separate until a safe workflow exists.
+- `app1` is the current development slot. An earlier approved workflow selected it with OTA sequence `2`.
+- Writing `app1` and changing `otadata` are separate operations. Normal guarded app1 updates must not change boot selection.
+- Read `checkpoint.md` for current firmware, verification gaps, and worktree state. Do not treat historical stock contents as live device status.
 
 ## Important GPIO / board mapping
 
@@ -168,17 +169,18 @@ Builds, flashes, and serial monitors run in dedicated herdr tabs. Past sessions 
 
 Local docs first:
 
+- `checkpoint.md`
 - `docs/notes.md`
 - `docs/plan.md`
 - `todo.md`
 
 Known useful upstream references:
 
-- MarigoldOS: X4-aware Rust firmware reference
-- OpenX4 community SDK: display/controller reference
+- Existing X4-aware Rust firmware implementations
+- Community SSD1677 display-driver implementations
 - Xteink X4 community schematic
 - SSD1677 datasheet/guide
 - ESP32-C3 datasheet and TRM
 - ESP-IDF partition-table documentation
 
-Use those projects as references and test oracles. Do not blindly port a whole SDK before Brewthink has working hardware-driven APIs.
+Use external implementations as anonymous references and test oracles. Keep measured behavior and hardware datasheet citations in the notes, not firmware-project research or comparison links. Do not blindly port a whole SDK.

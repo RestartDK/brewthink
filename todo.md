@@ -2,14 +2,20 @@
 
 Goal: build an EPUB-first Rust reader for the Xteink X4 while preserving stock recovery and learning each constrained hardware subsystem deliberately.
 
+## Current status
+
+Updated 2026-09-06. Storage [PR #8](https://github.com/RestartDK/brewthink/pull/8) is merged as `1481f89`. Local `main` is at that commit. At 20:04 UTC, the UI-refactor worktree had staged integration changes and no unmerged Git paths. Its code has not been reviewed or tested in this session. The final storage reader's physical wake check remains pending.
+
+See [checkpoint.md](checkpoint.md) for the last verified firmware, evidence, worktree state, and next actions. Completed diagnostic tests do not imply that every later reader build has passed the same hardware checks.
+
 ## Safety baseline
 
 - [x] Full 16 MiB stock flash backup exists under ignored `backup/`.
 - [x] Backup checksum verifies.
 - [x] Second private backup copy exists at `$HOME/X4-backups/brewthink-stock/`.
 - [x] Stock partition table decoded and committed as `docs/x4-stock-partition-table.csv`.
-- [x] Stock `app0` is valid and selected.
-- [x] Stock `app1` is empty.
+- [x] Stock backup records valid `app0` selected and an empty `app1`.
+- [x] Preserve stock `app0` as the recovery slot while running Brewthink from `app1`.
 - [x] Secure Boot and Flash Encryption are disabled.
 - [x] Physical flash identified as Puya JEDEC `85 20 18`.
 - [x] Generic `cargo run` flashing runner disabled.
@@ -17,17 +23,7 @@ Goal: build an EPUB-first Rust reader for the Xteink X4 while preserving stock r
 - [ ] Do not erase flash.
 - [ ] Do not burn eFuses.
 - [ ] Do not overwrite bootloader, partition table, NVS, filesystem, or stock `app0`.
-- [ ] Do not switch OTA boot target until a tested `app1` image and recovery flow exist.
-
-## Milestone 1 — Reference study before writing firmware
-
-- [ ] Study MarigoldOS firmware entry point.
-- [x] Study MarigoldOS X4 pin definitions.
-- [x] Study MarigoldOS SSD1677 display path.
-- [ ] Study MarigoldOS shared SPI/SD session handling.
-- [ ] Study MarigoldOS OTA/update flow.
-- [x] Study OpenX4/community SSD1677 initialization sequence.
-- [ ] Record the minimum required X4 boot/display behavior in `docs/plan.md`.
+- [ ] Keep normal firmware writes separate from OTA boot-selection changes. The tested development workflow already selects `app1`.
 
 ## Milestone 2 — Safe app1 build/flash workflow
 
@@ -188,9 +184,9 @@ Goal: scroll between selected images with buttons and show battery percentage.
 - [x] Add exclusive shared SPI2 display/SD sessions.
 - [x] Add CRC-protected read-only SD initialization and sector reads over SPI.
 - [x] Verify display CS and SD CS never assert together.
-- [ ] Mount/read filesystem from microSD.
-- [ ] List image files from a known directory.
-- [ ] Show first image.
+- [x] Mount/read FAT32 from microSD.
+- [x] List `/files` images alongside books in Files.
+- [x] Open and render all six requested images on the physical X4.
 - [ ] Use buttons to move next/previous.
 - [ ] Show battery percentage overlay/status.
 - [ ] Handle missing SD card gracefully.
@@ -206,7 +202,8 @@ Goal: turn on/off safely and preserve battery.
 - [ ] Disable radios before sleep when added later.
 - [x] Configure GPIO3 as the active-low RTC-IO wake source.
 - [x] Enter ESP32-C3 deep sleep.
-- [x] Wake reliably with the power button and reopen USB without host reset controls.
+- [x] Verify Power-button wake and reset-free USB re-enumeration in the 2026-08-30 diagnostic.
+- [ ] Verify physical wake and USB re-enumeration on the final storage reader build.
 - [x] Render and retain a diagnostic sleep screen before sleeping.
 - [x] Hardware-reset the SSD1677 out of deep sleep and refresh after wake.
 - [x] Add Custom Image, Book Cover, and context-sensitive Automatic sleep modes.
@@ -214,7 +211,9 @@ Goal: turn on/off safely and preserve battery.
 - [x] Add transactional named-image USB uploads with a shared transport-independent transfer core.
 - [x] List, preview, and select multiple `/files` images from Files.
 - [x] Define the future Wi-Fi HTTP upload boundary without starting a network stack.
-- [ ] Verify all three sleep modes and USB upload on the physical X4.
+- [x] Upload all six requested images with CRC and SD readback verification on the physical X4.
+- [x] Verify custom-image selection persists across reboot and renders during real sleep.
+- [ ] Verify all three sleep modes end to end on the physical X4.
 - [ ] Measure or estimate current draw if possible.
 
 ## Milestone 10 — Offline-first library app
@@ -224,6 +223,9 @@ Goal: move from diagnostics to the EPUB-first reader application.
 - [x] Define host-testable library selection and paging state.
 - [x] Define the initial title, creator, and cover shelf item model.
 - [x] Scan read-only local storage for EPUB books.
+- [x] Create `/books`, `/files`, `/brew/cache`, and `/brew/bookmark` without replacing existing books.
+- [x] Diagnose the startup stack overflow through read-only SD exports and compiled stack frames.
+- [x] Fix forced inlining and add the compiled reader-stack regression check to builds and CI.
 - [ ] Add writable VFAT long-filename support, preserve lowercase names, and migrate `/brew` to `/.brew`.
 - [x] Create the shared 2 × 2 cover library screen.
 - [x] Store checksummed book/chapter/page resume state across deep sleep.
@@ -288,9 +290,13 @@ Goal: sync useful content while staying offline-first.
 
 ## Current immediate next steps
 
-- [x] Define host-testable library selection, paging, and shelf item state.
-- [x] Render the first 2 × 2, 480 × 800 library screen in the simulator with fixture items.
-- [ ] Add a normal-firmware, read-only FAT32 catalog for `/books`.
-- [ ] Show real SD files and explicit empty, missing-card, and unsupported-file states.
-- [ ] Open the first bounded-memory content format from the library.
-- [ ] Reuse the verified power-button sleep path from the library application.
+- [x] Merge storage PR #8 with passing CI as `1481f89`.
+- [x] Bring local `main` to the merged storage commit without duplicate uncommitted storage code.
+- [ ] Review the UI worktree's staged integration against merged storage and sleep behavior. Git reports no unmerged paths at the 20:04 UTC check.
+- [ ] Independently review the UI refactor. No UI code review or verification has been completed in this session.
+- [ ] Run combined host/embedded checks, UI frame contracts, and the full simulator walkthrough before opening its PR.
+- [ ] Verify physical wake, persisted selected-image state, and existing EPUB pagination on the final storage reader build.
+- [ ] Complete remaining hardware sleep-mode, physical image-navigation, missing-card, and unsupported-file checks.
+- [ ] Verify any final UI build on the X4, then merge the UI PR after review and passing checks.
+
+The storage merge is complete. Hardware wake remains an outstanding test, not a reason to defer read-only UI review. Recheck worktree ownership before editing its unfinished integration.
