@@ -4,114 +4,116 @@ on:
   push:
     branches:
       - main
-    paths-ignore:
-      - "**/README.md"
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   rust-checks:
-    name: Rust Checks
+    name: Rust (${{ matrix.name }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        action:
-          - command: build
-            args: --release
-          - command: fmt
-            args: --all -- --check
-          - command: clippy
-            args: --lib --bin brewthink -- -D warnings
-          - command: clippy
-            args: --features host-image-tools --bin prepare-image --target x86_64-unknown-linux-gnu -- -D warnings
-          - command: test
-            args: --lib --target x86_64-unknown-linux-gnu
-          - command: test
-            args: --lib --features sd-write-diagnostic --target x86_64-unknown-linux-gnu
-          - command: clippy
-            args: --lib --bin brewthink --features sd-write-diagnostic -- -D warnings
-          - command: test
-            args: --lib --features device-reader --target x86_64-unknown-linux-gnu
-          - command: test
-            args: --features device-control --bin device-control --target x86_64-unknown-linux-gnu
-          - command: clippy
-            args: --lib --bin brewthink --features device-reader -- -D warnings
-          - command: clippy
-            args: --lib --bin brewthink --features sd-diagnostic -- -D warnings
-          - command: check
-            args: --lib --target wasm32-unknown-unknown
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@v1
-        with:
-          target: riscv32imc-unknown-none-elf,wasm32-unknown-unknown
-          toolchain: stable
-          components: rust-src, rustfmt, clippy
-      - name: Enable caching
-        uses: Swatinem/rust-cache@v2
-      - name: Run command
-        run: cargo ${{ matrix.action.command }} ${{ matrix.action.args }}
-
-  reader-stack:
-    name: Reader stack budget
-    runs-on: ubuntu-latest
+        include:
+          - name: format
+            command: fmt --all -- --check
+          - name: host tests
+            command: test --locked --lib --target x86_64-unknown-linux-gnu
+          - name: reader and EPUB tests
+            command: test --locked --lib --features device-reader,sd-write-diagnostic,epub --target x86_64-unknown-linux-gnu
+          - name: device control tests
+            command: test --locked --features device-control --bin device-control --target x86_64-unknown-linux-gnu
+          - name: host tools Clippy
+            command: clippy --locked --features host-image-tools,device-control,device-reader,epub --lib --bin prepare-image --bin device-control --bin inspect-epub --bin inspect-device-epub --target x86_64-unknown-linux-gnu -- -D warnings
+          - name: firmware Clippy
+            command: clippy --locked --lib --bin brewthink -- -D warnings
+          - name: SD write Clippy
+            command: clippy --locked --lib --bin brewthink --features sd-write-diagnostic -- -D warnings
+          - name: SD diagnostic Clippy
+            command: clippy --locked --lib --bin brewthink --features sd-diagnostic -- -D warnings
+          - name: reader Clippy
+            command: clippy --locked --lib --bin brewthink --features device-reader -- -D warnings
+          - name: WASM library
+            command: check --locked --lib --target wasm32-unknown-unknown
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@v1
-        with:
-          target: riscv32imc-unknown-none-elf
-          toolchain: stable
+      - name: Install the pinned Rust toolchain
+        run: rustup show active-toolchain
       - uses: Swatinem/rust-cache@v2
-      - run: sudo apt-get update && sudo apt-get install -y llvm
+      - run: cargo ${{ matrix.command }}
+
+  firmware:
+    name: Firmware images and reader stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install the pinned Rust toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y llvm libudev-dev
+      - run: cargo install espflash --version 4.5.0 --locked
+      - run: python3 -m pip install esptool==5.3.1
       - run: python3 -m unittest discover -s scripts -p 'test_*.py'
-      - run: cargo build --release --bin brewthink --features device-reader
-        env:
-          BREWTHINK_DIAGNOSTIC_STAGE: reader-app
-      - run: python3 scripts/check-reader-stack.py target/riscv32imc-unknown-none-elf/release/brewthink
+      - run: scripts/check-firmware.sh
+      - name: Save image inspection reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-image-reports
+          path: artifacts/ci/*.txt
+          if-no-files-found: error
 
   web-simulator:
     name: Web simulator
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@v1
-        with:
-          target: wasm32-unknown-unknown
-          toolchain: stable
-          components: rust-src
-      - name: Enable Rust caching
-        uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@v6
+      - name: Install the pinned Rust toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
       - name: Install wasm-bindgen CLI
         run: cargo install wasm-bindgen-cli --version 0.2.121 --locked
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.13
       - name: Install web dependencies
         working-directory: web
         run: bun install --frozen-lockfile
-      - name: Build simulator
+      - name: Build production assets
         working-directory: web
         run: bun run build
       - name: Install Chromium
         working-directory: web
         run: bunx playwright install --with-deps chromium
-      - name: Test simulator
+      - name: Test production assets
         working-directory: web
         run: bun run test:e2e
         env:
           BREWTHINK_WALKTHROUGH_DIR: ../artifacts/walkthrough
-      - name: Save simulator screenshots
+      - name: Test development reload
+        working-directory: web
+        run: bun run test:e2e:dev
+      - name: Save browser evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: simulator-walkthrough
-          path: artifacts/walkthrough
+          name: simulator-browser-evidence
+          path: |
+            artifacts/walkthrough
+            web/test-results

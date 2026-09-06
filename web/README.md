@@ -19,9 +19,12 @@ The built-in catalog uses public-domain titles and generated covers. Choose or d
 ```bash
 bun run build
 bun run test:e2e
+bun run test:e2e:dev
 ```
 
-The browser tests cover Home, Books, Files, reader settings and reflow, the shared 2 × 2 shelf, directional navigation, synthetic EPUB metadata and cover parsing, sleep and resume, invalid input, narrow layouts, WCAG AA rules, and Rust-triggered WASM reloads.
+`test:e2e` starts a production preview of the assets from `bun run build` on port 4173. It refuses to reuse an existing server. The tests cover Home, Books, Files, reader settings and reflow, the shared 2 × 2 shelf, directional navigation, synthetic EPUB metadata and cover parsing, sleep and resume, invalid input, narrow layouts, and WCAG AA rules.
+
+`test:e2e:dev` starts a separate development server on port 4174 and checks Rust-triggered WASM reloads. Both commands stop their servers when the tests finish. Set `BREWTHINK_TEST_PORT` to use a different port when another worktree has a server running. Set `BREWTHINK_WALKTHROUGH_DIR` to save the screenshot walkthrough.
 
 A private acceptance EPUB can be supplied without adding it to the repository:
 

@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
-import { mkdir, stat, utimes } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
 const fixturePath = path.resolve("tests/fixtures/minimal.epub");
@@ -9,6 +9,13 @@ const configuredEpub = process.env.BREWTHINK_TEST_EPUB;
 const walkthroughDirectory = process.env.BREWTHINK_WALKTHROUGH_DIR;
 
 test.use({ viewport: { width: 1440, height: 1000 } });
+
+test("serves production assets without the Vite development client", async ({ page }) => {
+  await page.goto("/");
+  const modules = page.locator('script[type="module"][src]');
+  await expect(modules).toHaveCount(1);
+  await expect(modules).toHaveAttribute("src", /^\/assets\/.+\.js$/);
+});
 
 test("runs the complete library, reader, sleep, wake, and resume loop", async ({
   page,
@@ -294,34 +301,4 @@ test("captures the app-shell visual walkthrough", async ({ page }) => {
     path: path.join(walkthroughDirectory, "06-sleep.png"),
     fullPage: true,
   });
-});
-
-test("rebuilds WASM and reloads after a Rust change", async ({ page }) => {
-  const consoleErrors: string[] = [];
-  page.on("console", (entry) => {
-    if (entry.type() === "error") {
-      consoleErrors.push(entry.text());
-    }
-  });
-
-  await page.goto("/");
-  await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
-  await page.evaluate(() => sessionStorage.setItem("wasm-reload-probe", "preserved"));
-  const initialTimeOrigin = await page.evaluate(() => performance.timeOrigin);
-  const rustSource = path.resolve("../src/bin/web-sim.rs");
-  const sourceMetadata = await stat(rustSource);
-  const changedTime = new Date(Math.max(Date.now(), sourceMetadata.mtimeMs + 1_000));
-
-  await utimes(rustSource, sourceMetadata.atime, changedTime);
-  await page.waitForFunction(
-    (previousTimeOrigin) => performance.timeOrigin !== previousTimeOrigin,
-    initialTimeOrigin,
-    { timeout: 30_000 },
-  );
-
-  await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
-  expect(await page.evaluate(() => sessionStorage.getItem("wasm-reload-probe"))).toBe(
-    "preserved",
-  );
-  expect(consoleErrors).toEqual([]);
 });

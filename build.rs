@@ -39,6 +39,12 @@ fn main() {
 }
 
 fn validate_build_selection() {
+    assert!(
+        !(env::var("TARGET").as_deref() == Ok("riscv32imc-unknown-none-elf")
+            && env::var("BREWTHINK_DIAGNOSTIC_STAGE").as_deref() == Ok(stage_names::READER_APP)
+            && env::var("BREWTHINK_PREVIOUS_FRAME_STORAGE").as_deref() == Ok("host-ram")),
+        "reader-app requires controller-ram previous-frame storage; host-ram leaves insufficient stack"
+    );
     if let Ok(stage) = env::var("BREWTHINK_DIAGNOSTIC_STAGE") {
         assert!(
             stage_names::ALL_STAGES.contains(&stage.as_str()),
