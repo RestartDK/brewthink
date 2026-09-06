@@ -34,6 +34,14 @@ jobs:
             args: --lib --features sd-write-diagnostic --target x86_64-unknown-linux-gnu
           - command: clippy
             args: --lib --bin brewthink --features sd-write-diagnostic -- -D warnings
+          - command: test
+            args: --lib --features device-reader --target x86_64-unknown-linux-gnu
+          - command: test
+            args: --features device-control --bin device-control --target x86_64-unknown-linux-gnu
+          - command: clippy
+            args: --lib --bin brewthink --features device-reader -- -D warnings
+          - command: clippy
+            args: --lib --bin brewthink --features sd-diagnostic -- -D warnings
           - command: check
             args: --lib --target wasm32-unknown-unknown
     steps:
@@ -49,6 +57,23 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: Run command
         run: cargo ${{ matrix.action.command }} ${{ matrix.action.args }}
+
+  reader-stack:
+    name: Reader stack budget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          target: riscv32imc-unknown-none-elf
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y llvm
+      - run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - run: cargo build --release --bin brewthink --features device-reader
+        env:
+          BREWTHINK_DIAGNOSTIC_STAGE: reader-app
+      - run: python3 scripts/check-reader-stack.py target/riscv32imc-unknown-none-elf/release/brewthink
 
   web-simulator:
     name: Web simulator
@@ -82,3 +107,11 @@ jobs:
       - name: Test simulator
         working-directory: web
         run: bun run test:e2e
+        env:
+          BREWTHINK_WALKTHROUGH_DIR: ../artifacts/walkthrough
+      - name: Save simulator screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulator-walkthrough
+          path: artifacts/walkthrough

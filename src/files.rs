@@ -24,11 +24,12 @@ use crate::{
 pub struct FileItem<'a> {
     name: &'a str,
     size: u32,
+    kind: FileKind,
 }
 
 impl<'a> FileItem<'a> {
-    pub const fn new(name: &'a str, size: u32) -> Self {
-        Self { name, size }
+    pub const fn new(name: &'a str, size: u32, kind: FileKind) -> Self {
+        Self { name, size, kind }
     }
 
     pub const fn name(self) -> &'a str {
@@ -37,6 +38,27 @@ impl<'a> FileItem<'a> {
 
     pub const fn size(self) -> u32 {
         self.size
+    }
+
+    pub const fn kind(self) -> FileKind {
+        self.kind
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FileKind {
+    Epub,
+    Jpeg,
+    Png,
+}
+
+impl FileKind {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Epub => "EPUB",
+            Self::Jpeg => "JPEG IMAGE",
+            Self::Png => "PNG IMAGE",
+        }
     }
 }
 
@@ -59,15 +81,15 @@ pub fn render_files(
             actual: target.size(),
         });
     }
-    if state.book_count() != files.len() {
+    if state.file_count() != files.len() {
         return Err(FilesRenderError::CatalogLengthMismatch {
-            state: state.book_count(),
+            state: state.file_count(),
             files: files.len(),
         });
     }
 
     target.clear_white();
-    draw_app_bar(target, "FILES  /BOOKS", battery);
+    draw_app_bar(target, "FILES", battery);
     if files.is_empty() {
         draw_empty_state(target);
         return Ok(());
@@ -112,7 +134,7 @@ pub fn render_files(
         .draw(&mut display)
         .ok();
         Text::with_baseline(
-            "EPUB",
+            files[index].kind.label(),
             Point::new(32, top + 39),
             chrome_style(),
             Baseline::Top,
@@ -145,7 +167,7 @@ pub fn render_files(
 fn draw_empty_state(target: &mut MonochromeImage<'_>) {
     let mut display = FrameTarget::new(target);
     Text::with_baseline(
-        "NO EPUB FILES",
+        "NO EPUB OR IMAGE FILES",
         Point::new(166, 326),
         brand_style(),
         Baseline::Top,
@@ -153,7 +175,7 @@ fn draw_empty_state(target: &mut MonochromeImage<'_>) {
     .draw(&mut display)
     .ok();
     Text::with_baseline(
-        "Add DRM-free EPUB files to /Books",
+        "Add EPUBs to /books or images to /files",
         Point::new(135, 368),
         chrome_style(),
         Baseline::Top,
@@ -175,7 +197,7 @@ fn draw_empty_state(target: &mut MonochromeImage<'_>) {
 mod tests {
     extern crate std;
 
-    use super::{FileItem, render_files};
+    use super::{FileItem, FileKind, render_files};
     use crate::{
         app::FilesState,
         image::{MonochromeImage, Size},
@@ -190,8 +212,8 @@ mod tests {
         render_files(
             FilesState::new(2),
             &[
-                FileItem::new("alice.epub", 12_000),
-                FileItem::new("walden.epub", 24_000),
+                FileItem::new("alice.epub", 12_000, FileKind::Epub),
+                FileItem::new("cover.jpg", 24_000, FileKind::Jpeg),
             ],
             BatteryStatus::from_percent(42, UsbState::Disconnected),
             &mut image,

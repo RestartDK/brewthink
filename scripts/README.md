@@ -86,26 +86,29 @@ scripts/build-sleep-wake-app1.sh
 
 On an ordinary boot, this stage refreshes the orientation pattern, sends the SSD1677 deep-sleep command and check code, verifies both shared-SPI chip selects high, then enters ESP32-C3 deep sleep with active-low GPIO3 as the only wake source. Waking with the power button causes a fresh boot, hardware-resets the display out of deep sleep, refreshes it white, and holds without sleeping again. GPIO13 is not initialized. The stage has no SD write capability.
 
-## Read-only EPUB reader image
+## EPUB reader image
 
 ```bash
 scripts/build-reader-app1.sh
 ```
 
-This builds the normal X4 reader behind `device-reader`. It scans up to sixteen DRM-free EPUBs from `/Books`, validates each package with bounded fixed-memory ZIP/XML parsing, renders PNG or baseline-JPEG covers, paginates XHTML, handles all seven controls, and retains a checksummed book/chapter/page resume record in RTC fast memory across GPIO3 deep sleep. EPUB and FAT access expose no successful write path, and the decoder workspace is statically allocated and phase-overlaid to preserve the runtime stack reserve. Building the image is local and read-only; copying a book to microSD and flashing the guarded `app1` image each require separate explicit approval.
+This builds the normal X4 reader behind `device-reader`. It scans up to sixteen DRM-free EPUBs from `/books`, validates each package with bounded fixed-memory ZIP/XML parsing, renders PNG or baseline-JPEG covers, paginates XHTML, handles all seven controls, and retains a checksummed book/chapter/page resume record in RTC fast memory across GPIO3 deep sleep. Book access remains read-only. Firmware creates the 8.3-compatible `/brew`, `/brew/cache`, `/brew/bookmark`, and `/files` directories. Fixed application records live under `/brew`; transactional image uploads install named files under `/files`. The decoder workspace is statically allocated and phase-overlaid to preserve the runtime stack reserve. Building the image is local and does not touch hardware; copying a book to microSD and flashing the guarded `app1` image each require separate explicit approval.
+
+The reader build checks its compiled stack frames with `check-reader-stack.py`. The development shell provides Python and LLVM for this check. See [SD recovery](../docs/sd-recovery.md) for read-only USB sector exports that bypass reader startup and FAT mounting.
 
 ### USB reader control
 
-The Rust `device-control` host binary sends typed input commands through native USB Serial/JTAG while the reader is awake. Its launcher always builds for the host target, so it cannot invoke the embedded Cargo runner:
+The Rust `device-control` host binary sends typed input commands through native USB Serial/JTAG while the reader is awake. Its launcher always builds for the host target, so it cannot invoke the embedded Cargo runner. `put-image` writes a named image on microSD under `/files`. Button taps can change settings, persist the selected sleep image, refresh the display, or enter deep sleep. These commands do not write firmware flash, OTA data, NVS, or eFuses.
 
 ```bash
 ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/device-control.sh status
 ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/device-control.sh tap right
 ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/device-control.sh screen artifacts/device-screen.png
+ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/device-control.sh put-image ~/Pictures/sleep.png
 ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/device-control.sh monitor
 ```
 
-A USB tap enters the same `AppInput` path as a debounced physical press. `status` reports the current view plus battery percentage, measured millivolts, and USB presence. `screen` reads the exact 48,000-byte monochrome frame last sent to the SSD1677, checks its CRC32, and writes a 480 × 800 PNG. The PNG proves what firmware generated, not what physically appeared on the panel. The CLI opens the port directly without changing DTR or RTS. A Power tap renders the sleep frame and enters deep sleep, which disconnects USB; waking still requires GPIO3 through the physical Power button.
+A USB tap enters the same `AppInput` path as a debounced physical press. `status` reports the current view plus battery percentage, measured millivolts, and USB presence. `screen` reads the exact 48,000-byte monochrome frame last sent to the SSD1677, checks its CRC32, and writes a 480 × 800 PNG. The PNG proves what firmware generated, not what physically appeared on the panel. `put-image` accepts JPEG or PNG input, normalizes oversized or unsupported sources into a bounded 480 × 800 baseline JPEG, sends 4 KiB acknowledged chunks, and requires matching stream and SD-readback CRC32 values before commit. The host preserves a valid 8.3 stem or rewrites an incompatible source name to a deterministic form such as `SUM~8A2F.JPG`. Files lists up to sixteen images from `/files`. Open one to view it, then press Confirm to select it for Custom Image and Automatic sleep modes. The CLI opens the port directly without changing DTR or RTS. A Power tap renders the sleep frame and enters deep sleep, which disconnects USB; waking still requires GPIO3 through the physical Power button.
 
 Build a JPEG, PNG, BMP, or PNM into an app1 image with:
 

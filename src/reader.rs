@@ -505,7 +505,7 @@ mod tests {
                 "Chapter one",
                 &lines,
                 location,
-                app.preferences(),
+                app.reader_preferences(),
                 app.battery(),
             ),
             &mut frame,
@@ -525,7 +525,7 @@ mod tests {
             panic!("reader effect expected");
         };
         let line = ReaderLine::new("line", ReaderStyle::Body);
-        let theme = super::ReaderTheme::from_preferences(app.preferences());
+        let theme = super::ReaderTheme::from_preferences(app.reader_preferences());
         let lines = vec![line; (BODY_BOTTOM - BODY_TOP) / theme.line_height(line.style()) + 1];
         let mut bytes = vec![0xFF; 48_000];
         let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
@@ -537,7 +537,7 @@ mod tests {
                     "Chapter",
                     &lines,
                     location,
-                    app.preferences(),
+                    app.reader_preferences(),
                     app.battery(),
                 ),
                 &mut frame

@@ -1,3 +1,4 @@
+#[cfg(feature = "device-reader")]
 pub mod control;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

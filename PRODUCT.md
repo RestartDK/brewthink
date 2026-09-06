@@ -10,7 +10,7 @@ Brewthink's simulator is for firmware developers and contributors working on the
 
 ## Product Purpose
 
-The simulator shortens the feedback loop between shared Rust rendering code and the physical X4. It should make differences between browser output and e-paper output obvious, produce X4-ready packed frames, and grow into a file-transfer tool without changing the rendering model.
+The simulator shortens the feedback loop between shared Rust rendering code and the physical X4. It makes differences between browser output and e-paper output obvious, produces X4-ready packed frames, and previews application behavior before the same typed transfer and rendering models reach hardware.
 
 ## Brand Personality
 

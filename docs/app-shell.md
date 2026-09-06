@@ -1,6 +1,6 @@
 # Application shell
 
-Brewthink opens on a three-item home menu. Books is the primary path, Files exposes the readable EPUB files on the card, and Settings controls reader typography. Back returns to the parent screen. Power retains the active screen and reading location.
+Brewthink opens on a three-item home menu. Books is the primary path, Files exposes readable EPUBs and selectable sleep images on the card, and Settings controls reader typography and the sleep screen. Back returns to the parent screen. Power retains the active screen and reading location.
 
 ```text
 physical or web input
@@ -21,9 +21,9 @@ shared 480 x 800 monochrome renderer
 
 ## State ownership
 
-`App` owns navigation, selection, committed reader preferences, settings drafts, reading checkpoints, and the latest battery status. Platform adapters own files, EPUB bytes, display I/O, and battery sampling. Inputs mutate `App` and return typed effects. Renderers receive immutable views.
+`App` owns navigation, selection, committed application preferences, settings drafts, reading checkpoints, sleep-source resolution, and the latest battery status. Platform adapters own files, EPUB bytes, custom-image bytes, display I/O, and battery sampling. Inputs mutate `App` and return typed effects. Renderers receive immutable views.
 
-Books and Files refer to the same catalog by `BookId`. Books presents covers and metadata. Files presents source filenames and sizes. Opening either route enters the same reader and remembers which route Back should restore.
+Books presents EPUB covers and metadata from `/books`. Files combines that EPUB catalog with the bounded image catalog under `/files`. Opening an EPUB enters the reader. Opening an image enters the full-screen viewer; Confirm selects it for sleep and Back returns to Files.
 
 ## Typography
 
@@ -37,4 +37,4 @@ The application bar reserves the upper-right corner for a battery icon and perce
 
 ## Persistence boundary
 
-The X4 retains the active screen, reader location, and preferences in checksummed RTC fast memory across deep sleep. The browser stores applied reader preferences in versioned local storage. Durable device writes require a separate, restricted application-data store and explicit removable-media review. No stock flash, NVS, or firmware partition is used.
+The X4 retains the active screen, reader location, and application preferences in checksummed RTC fast memory across deep sleep. Applied preferences also use checksummed primary and backup records under `/brew`. The browser stores applied preferences in versioned local storage. Named image uploads can write only to `/files`; their transaction records remain under `/brew`. Firmware creates `/brew`, `/brew/cache`, `/brew/bookmark`, and `/files` when missing. No stock flash, NVS, or firmware partition is used.

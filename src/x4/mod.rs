@@ -8,6 +8,10 @@ mod board;
 mod reader_app;
 #[cfg(target_arch = "riscv32")]
 mod storage;
+#[cfg(all(target_arch = "riscv32", feature = "sd-diagnostic"))]
+mod storage_diagnostic;
+#[cfg(all(target_arch = "riscv32", feature = "sd-diagnostic"))]
+pub use storage_diagnostic::storage_diagnostic_task;
 
 #[cfg(target_arch = "riscv32")]
 pub use board::SharedSpiChipSelects;
@@ -16,7 +20,7 @@ pub use input::{InputReadError, X4InputHardware, X4InputPeripherals};
 pub use input::{X4ButtonDecodeError, decode_buttons};
 #[cfg(all(target_arch = "riscv32", feature = "device-reader"))]
 pub use reader_app::{reader_app_task, reader_input_task};
-#[cfg(all(target_arch = "riscv32", feature = "sd-write-diagnostic"))]
+#[cfg(all(target_arch = "riscv32", feature = "sd-card-write"))]
 pub use storage::X4FatBlockDevice;
 #[cfg(all(target_arch = "riscv32", feature = "sd-card"))]
 pub use storage::{X4FatBlockDeviceError, X4ReadOnlyFatBlockDevice};

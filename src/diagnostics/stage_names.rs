@@ -3,6 +3,7 @@ pub const INPUTS_RAW: &str = "inputs-raw";
 pub const INPUTS_EVENTS: &str = "inputs-events";
 pub const POWER_USB: &str = "power-usb";
 pub const STORAGE_READONLY: &str = "storage-readonly";
+pub const STORAGE_USB: &str = "storage-usb";
 pub const STORAGE_WRITE_TEST: &str = "storage-write-test";
 pub const INTEGRATED_DEVICE: &str = "integrated-device";
 pub const SLEEP_WAKE: &str = "sleep-wake";
@@ -22,6 +23,7 @@ pub const ALL_STAGES: &[&str] = &[
     INPUTS_EVENTS,
     POWER_USB,
     STORAGE_READONLY,
+    STORAGE_USB,
     STORAGE_WRITE_TEST,
     INTEGRATED_DEVICE,
     SLEEP_WAKE,

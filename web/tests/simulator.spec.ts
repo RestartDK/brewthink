@@ -150,6 +150,10 @@ test("opens files and applies reader typography settings", async ({ page }) => {
   await page.keyboard.press("ArrowRight");
   await expect(page.locator("#view-position")).toHaveText("RELAXED");
   await page.keyboard.press("ArrowDown");
+  await expect(page.locator("#view-position")).toHaveText("AUTOMATIC");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator("#view-position")).toHaveText("CUSTOM IMAGE");
+  await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
   await expect(page.locator("#preview-heading")).toHaveText("Home menu · 480 × 800");
   await page.keyboard.press("Enter");
@@ -168,6 +172,48 @@ test("opens files and applies reader typography settings", async ({ page }) => {
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
   await expect(page.locator("#view-position")).toHaveText("COMPACT");
+});
+
+test("opens and selects images from Files", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
+
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  for (let index = 0; index < 5; index += 1) {
+    await page.keyboard.press("ArrowDown");
+  }
+  await expect(page.locator("#selected-title")).toHaveText("AYA.JPG");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#preview-heading")).toHaveText("Image viewer · 480 × 800");
+  await expect(page.locator("#selected-creator")).toHaveText("Confirm to select for sleep");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#selected-creator")).toHaveText("Selected for sleep");
+
+  await page.reload();
+  await page.keyboard.press("p");
+  await expect(page.locator("#selected-title")).toHaveText("AYA.JPG");
+});
+
+test("uses custom sleep away from reading and a cover inside the reader", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
+
+  await page.keyboard.press("p");
+  await expect(page.locator("#preview-heading")).toHaveText(
+    "Retained sleep screen · 480 × 800",
+  );
+  await expect(page.locator("#selected-title")).toHaveText("ANOTHE.JPG");
+  await page.keyboard.press("p");
+
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
+  await page.keyboard.press("p");
+  await expect(page.locator("#preview-heading")).toHaveText(
+    "Retained sleep screen · 480 × 800",
+  );
+  await expect(page.locator("#selected-title")).toHaveText("A Study in Scarlet");
 });
 
 test("keeps the reader simulator usable at a narrow viewport", async ({ page }) => {
@@ -225,6 +271,7 @@ test("captures the app-shell visual walkthrough", async ({ page }) => {
     fullPage: true,
   });
 
+  await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");

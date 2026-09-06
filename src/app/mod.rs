@@ -18,6 +18,32 @@ impl BookId {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ImageId(usize);
+
+impl ImageId {
+    pub const fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    pub const fn index(self) -> usize {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileId(usize);
+
+impl FileId {
+    pub const fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    pub const fn index(self) -> usize {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Direction {
     Left,
     Right,
@@ -182,40 +208,40 @@ impl Default for HomeState {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FilesState {
-    book_count: usize,
-    selected: Option<BookId>,
+    file_count: usize,
+    selected: Option<FileId>,
 }
 
 impl FilesState {
-    pub const fn new(book_count: usize) -> Self {
+    pub const fn new(file_count: usize) -> Self {
         Self {
-            book_count,
-            selected: if book_count == 0 {
+            file_count,
+            selected: if file_count == 0 {
                 None
             } else {
-                Some(BookId(0))
+                Some(FileId(0))
             },
         }
     }
 
     pub const fn with_selected(
-        book_count: usize,
+        file_count: usize,
         selected: usize,
     ) -> Result<Self, SelectionOutOfBounds> {
-        if selected >= book_count {
+        if selected >= file_count {
             return Err(SelectionOutOfBounds);
         }
         Ok(Self {
-            book_count,
-            selected: Some(BookId(selected)),
+            file_count,
+            selected: Some(FileId(selected)),
         })
     }
 
-    pub const fn book_count(self) -> usize {
-        self.book_count
+    pub const fn file_count(self) -> usize {
+        self.file_count
     }
 
-    pub const fn selected(self) -> Option<BookId> {
+    pub const fn selected(self) -> Option<FileId> {
         self.selected
     }
 
@@ -227,12 +253,12 @@ impl FilesState {
     }
 
     pub const fn page_count(self) -> usize {
-        self.book_count.div_ceil(8)
+        self.file_count.div_ceil(8)
     }
 
     pub fn visible_range(self) -> core::ops::Range<usize> {
         let start = self.page() * 8;
-        start..(start + 8).min(self.book_count)
+        start..(start + 8).min(self.file_count)
     }
 
     fn move_selection(&mut self, direction: Direction) -> bool {
@@ -241,13 +267,22 @@ impl FilesState {
         };
         let next = match direction {
             Direction::Up | Direction::Left => selected.index().saturating_sub(1),
-            Direction::Down | Direction::Right => (selected.index() + 1).min(self.book_count - 1),
+            Direction::Down | Direction::Right => (selected.index() + 1).min(self.file_count - 1),
         };
         if next == selected.index() {
             return false;
         }
-        self.selected = Some(BookId(next));
+        self.selected = Some(FileId(next));
         true
+    }
+
+    fn replace_count(&mut self, file_count: usize) {
+        self.file_count = file_count;
+        self.selected = match (self.selected, file_count) {
+            (_, 0) => None,
+            (Some(selected), count) => Some(FileId(selected.index().min(count - 1))),
+            (None, _) => Some(FileId(0)),
+        };
     }
 }
 
@@ -436,15 +471,109 @@ impl Default for ReaderPreferences {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
+pub enum SleepScreenMode {
+    Automatic,
+    Custom,
+    BookCover,
+}
+
+impl SleepScreenMode {
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+
+    pub const fn from_index(index: usize) -> Option<Self> {
+        match index {
+            0 => Some(Self::Automatic),
+            1 => Some(Self::Custom),
+            2 => Some(Self::BookCover),
+            _ => None,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Automatic => "AUTOMATIC",
+            Self::Custom => "CUSTOM IMAGE",
+            Self::BookCover => "BOOK COVER",
+        }
+    }
+
+    const fn next(self, direction: Direction) -> Self {
+        let index = cycle_index(self.index(), 3, direction);
+        Self::from_index(index).expect("sleep screen mode index is bounded")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AppPreferences {
+    reader: ReaderPreferences,
+    sleep_screen: SleepScreenMode,
+}
+
+impl AppPreferences {
+    pub const fn new(reader: ReaderPreferences, sleep_screen: SleepScreenMode) -> Self {
+        Self {
+            reader,
+            sleep_screen,
+        }
+    }
+
+    pub const fn reader(self) -> ReaderPreferences {
+        self.reader
+    }
+
+    pub const fn sleep_screen(self) -> SleepScreenMode {
+        self.sleep_screen
+    }
+
+    pub const fn packed(self) -> u32 {
+        self.reader.packed() | (self.sleep_screen.index() as u32) << 24
+    }
+
+    pub const fn from_packed(value: u32) -> Option<Self> {
+        let Some(reader) = ReaderPreferences::from_packed(value & 0x00FF_FFFF) else {
+            return None;
+        };
+        let Some(sleep_screen) = SleepScreenMode::from_index((value >> 24) as usize) else {
+            return None;
+        };
+        Some(Self::new(reader, sleep_screen))
+    }
+
+    const fn with_reader(self, reader: ReaderPreferences) -> Self {
+        Self::new(reader, self.sleep_screen)
+    }
+
+    const fn with_sleep_screen(self, sleep_screen: SleepScreenMode) -> Self {
+        Self::new(self.reader, sleep_screen)
+    }
+}
+
+impl Default for AppPreferences {
+    fn default() -> Self {
+        Self::new(ReaderPreferences::default(), SleepScreenMode::Automatic)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
 pub enum SettingsItem {
     Font,
     Size,
     Spacing,
+    SleepScreen,
     Apply,
 }
 
 impl SettingsItem {
-    pub const ALL: [Self; 4] = [Self::Font, Self::Size, Self::Spacing, Self::Apply];
+    pub const ALL: [Self; 5] = [
+        Self::Font,
+        Self::Size,
+        Self::Spacing,
+        Self::SleepScreen,
+        Self::Apply,
+    ];
 
     pub const fn index(self) -> usize {
         self as usize
@@ -455,7 +584,8 @@ impl SettingsItem {
             0 => Some(Self::Font),
             1 => Some(Self::Size),
             2 => Some(Self::Spacing),
-            3 => Some(Self::Apply),
+            3 => Some(Self::SleepScreen),
+            4 => Some(Self::Apply),
             _ => None,
         }
     }
@@ -465,6 +595,7 @@ impl SettingsItem {
             Self::Font => "FONT",
             Self::Size => "TEXT SIZE",
             Self::Spacing => "LINE SPACING",
+            Self::SleepScreen => "SLEEP SCREEN",
             Self::Apply => "APPLY SETTINGS",
         }
     }
@@ -473,18 +604,18 @@ impl SettingsItem {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SettingsState {
     selected: SettingsItem,
-    draft: ReaderPreferences,
+    draft: AppPreferences,
 }
 
 impl SettingsState {
-    pub const fn new(preferences: ReaderPreferences) -> Self {
+    pub const fn new(preferences: AppPreferences) -> Self {
         Self {
             selected: SettingsItem::Font,
             draft: preferences,
         }
     }
 
-    pub const fn with_state(selected: SettingsItem, draft: ReaderPreferences) -> Self {
+    pub const fn with_state(selected: SettingsItem, draft: AppPreferences) -> Self {
         Self { selected, draft }
     }
 
@@ -492,7 +623,7 @@ impl SettingsState {
         self.selected
     }
 
-    pub const fn draft(self) -> ReaderPreferences {
+    pub const fn draft(self) -> AppPreferences {
         self.draft
     }
 
@@ -511,16 +642,26 @@ impl SettingsState {
                 true
             }
             Direction::Left | Direction::Right => {
+                let reader = self.draft.reader;
                 let next = match self.selected {
-                    SettingsItem::Font => {
-                        Self::with_font(self.draft, self.draft.font.next(direction))
-                    }
-                    SettingsItem::Size => {
-                        Self::with_size(self.draft, self.draft.size.next(direction))
-                    }
-                    SettingsItem::Spacing => {
-                        Self::with_spacing(self.draft, self.draft.spacing.next(direction))
-                    }
+                    SettingsItem::Font => self.draft.with_reader(ReaderPreferences::new(
+                        reader.font.next(direction),
+                        reader.size,
+                        reader.spacing,
+                    )),
+                    SettingsItem::Size => self.draft.with_reader(ReaderPreferences::new(
+                        reader.font,
+                        reader.size.next(direction),
+                        reader.spacing,
+                    )),
+                    SettingsItem::Spacing => self.draft.with_reader(ReaderPreferences::new(
+                        reader.font,
+                        reader.size,
+                        reader.spacing.next(direction),
+                    )),
+                    SettingsItem::SleepScreen => self
+                        .draft
+                        .with_sleep_screen(self.draft.sleep_screen.next(direction)),
                     SettingsItem::Apply => return false,
                 };
                 if next == self.draft {
@@ -530,21 +671,6 @@ impl SettingsState {
                 true
             }
         }
-    }
-
-    const fn with_font(preferences: ReaderPreferences, font: ReaderFont) -> ReaderPreferences {
-        ReaderPreferences::new(font, preferences.size, preferences.spacing)
-    }
-
-    const fn with_size(preferences: ReaderPreferences, size: ReaderFontSize) -> ReaderPreferences {
-        ReaderPreferences::new(preferences.font, size, preferences.spacing)
-    }
-
-    const fn with_spacing(
-        preferences: ReaderPreferences,
-        spacing: ReaderSpacing,
-    ) -> ReaderPreferences {
-        ReaderPreferences::new(preferences.font, preferences.size, spacing)
     }
 }
 
@@ -644,17 +770,20 @@ pub enum ResumePoint {
         selected: Option<BookId>,
     },
     Files {
-        selected: Option<BookId>,
+        selected: Option<FileId>,
     },
     Settings {
         selected: SettingsItem,
-        draft: ReaderPreferences,
+        draft: AppPreferences,
     },
     Reader {
         book: BookId,
         spine_index: usize,
         page_index: usize,
         origin: BookOrigin,
+    },
+    Image {
+        image: ImageId,
     },
 }
 
@@ -666,8 +795,86 @@ pub enum AppView {
     Settings(SettingsState),
     Loading,
     Reader(ReadingSession),
+    Image(ImageId),
     Error { book: BookId, origin: BookOrigin },
     Sleeping { resume: ResumePoint },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SleepScreenSource {
+    CustomImage(ImageId),
+    BookCover(BookId),
+    BuiltIn,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SleepScreenPlan {
+    sources: [SleepScreenSource; 2],
+    length: usize,
+}
+
+impl SleepScreenPlan {
+    pub const fn resolve(
+        mode: SleepScreenMode,
+        resume: ResumePoint,
+        selected_image: Option<ImageId>,
+        book_count: usize,
+    ) -> Self {
+        let associated_book = match resume {
+            ResumePoint::Reader { book, .. } => Some(book),
+            ResumePoint::Books { selected } => selected,
+            ResumePoint::Files {
+                selected: Some(file),
+            } if file.index() < book_count => Some(BookId::new(file.index())),
+            ResumePoint::Home { .. }
+            | ResumePoint::Files { .. }
+            | ResumePoint::Settings { .. }
+            | ResumePoint::Image { .. } => None,
+        };
+        let custom = match selected_image {
+            Some(image) => Self {
+                sources: [
+                    SleepScreenSource::CustomImage(image),
+                    SleepScreenSource::BuiltIn,
+                ],
+                length: 2,
+            },
+            None => Self {
+                sources: [SleepScreenSource::BuiltIn, SleepScreenSource::BuiltIn],
+                length: 1,
+            },
+        };
+        match mode {
+            SleepScreenMode::Custom => custom,
+            SleepScreenMode::BookCover => match associated_book {
+                Some(book) => Self {
+                    sources: [
+                        SleepScreenSource::BookCover(book),
+                        SleepScreenSource::BuiltIn,
+                    ],
+                    length: 2,
+                },
+                None => Self {
+                    sources: [SleepScreenSource::BuiltIn, SleepScreenSource::BuiltIn],
+                    length: 1,
+                },
+            },
+            SleepScreenMode::Automatic => match resume {
+                ResumePoint::Reader { book, .. } => Self {
+                    sources: [
+                        SleepScreenSource::BookCover(book),
+                        SleepScreenSource::BuiltIn,
+                    ],
+                    length: 2,
+                },
+                _ => custom,
+            },
+        }
+    }
+
+    pub fn sources(self) -> impl Iterator<Item = SleepScreenSource> {
+        self.sources.into_iter().take(self.length)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -683,6 +890,7 @@ pub enum AppEffect {
         target: PageTarget,
     },
     RenderReader(ReadingLocation),
+    RenderImage(ImageId),
     RenderError {
         book: BookId,
     },
@@ -697,6 +905,7 @@ pub enum AppEffect {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AppStateError {
     BookOutOfBounds,
+    ImageOutOfBounds,
     SpineOutOfBounds,
     EmptyChapter,
     UnexpectedChapter,
@@ -766,7 +975,9 @@ pub struct App {
     files: FilesState,
     home: HomeState,
     view: AppView,
-    preferences: ReaderPreferences,
+    preferences: AppPreferences,
+    image_count: usize,
+    selected_sleep_image: Option<ImageId>,
     battery: BatteryDisplayState,
     pending: Option<PendingChapter>,
     reading_checkpoint: Option<ReadingCheckpoint>,
@@ -776,22 +987,41 @@ impl App {
     pub const fn new(book_count: usize) -> Self {
         Self::with_preferences(
             book_count,
-            ReaderPreferences::new(
-                ReaderFont::NotoSerif,
-                ReaderFontSize::Medium,
-                ReaderSpacing::Normal,
+            AppPreferences::new(
+                ReaderPreferences::new(
+                    ReaderFont::NotoSerif,
+                    ReaderFontSize::Medium,
+                    ReaderSpacing::Normal,
+                ),
+                SleepScreenMode::Automatic,
             ),
         )
     }
 
-    pub const fn with_preferences(book_count: usize, preferences: ReaderPreferences) -> Self {
+    pub const fn with_preferences(book_count: usize, preferences: AppPreferences) -> Self {
+        Self::with_catalog(book_count, 0, None, preferences)
+    }
+
+    pub const fn with_catalog(
+        book_count: usize,
+        image_count: usize,
+        selected_sleep_image: Option<ImageId>,
+        preferences: AppPreferences,
+    ) -> Self {
         let home = HomeState::new();
+        let selected_sleep_image = match selected_sleep_image {
+            Some(image) if image.index() < image_count => Some(image),
+            _ if image_count > 0 => Some(ImageId::new(0)),
+            _ => None,
+        };
         Self {
             library: LibraryState::new(book_count),
-            files: FilesState::new(book_count),
+            files: FilesState::new(book_count + image_count),
             home,
             view: AppView::Home(home),
             preferences,
+            image_count,
+            selected_sleep_image,
             battery: BatteryDisplayState::new(),
             pending: None,
             reading_checkpoint: None,
@@ -800,10 +1030,22 @@ impl App {
 
     pub fn from_resume(
         book_count: usize,
-        preferences: ReaderPreferences,
+        preferences: AppPreferences,
         resume: ResumePoint,
     ) -> Result<(Self, AppEffect), AppStateError> {
-        let mut app = Self::with_preferences(book_count, preferences);
+        Self::from_resume_with_catalog(book_count, 0, None, preferences, resume)
+    }
+
+    pub fn from_resume_with_catalog(
+        book_count: usize,
+        image_count: usize,
+        selected_sleep_image: Option<ImageId>,
+        preferences: AppPreferences,
+        resume: ResumePoint,
+    ) -> Result<(Self, AppEffect), AppStateError> {
+        let mut app =
+            Self::with_catalog(book_count, image_count, selected_sleep_image, preferences);
+        let file_count = book_count + image_count;
         let effect = match resume {
             ResumePoint::Home { selected } => {
                 app.home = HomeState::with_selected(selected);
@@ -826,15 +1068,15 @@ impl App {
                 app.view = AppView::Library;
                 AppEffect::RenderLibrary
             }
-            ResumePoint::Files { selected: None } if book_count == 0 => {
+            ResumePoint::Files { selected: None } if file_count == 0 => {
                 app.view = AppView::Files(app.files);
                 AppEffect::RenderFiles
             }
             ResumePoint::Files {
                 selected: Some(selected),
             } => {
-                app.files = FilesState::with_selected(book_count, selected.index())
-                    .map_err(|_| AppStateError::BookOutOfBounds)?;
+                app.files = FilesState::with_selected(file_count, selected.index())
+                    .map_err(|_| AppStateError::ImageOutOfBounds)?;
                 app.view = AppView::Files(app.files);
                 AppEffect::RenderFiles
             }
@@ -861,9 +1103,15 @@ impl App {
                     spine_index,
                     page_index,
                     page_count: page_index + 1,
-                    preferences,
+                    preferences: preferences.reader(),
                 });
                 app.request_chapter(book, spine_index, PageTarget::Index(page_index), origin)
+            }
+            ResumePoint::Image { image } => {
+                app.validate_image(image)?;
+                app.view = AppView::Image(image);
+                app.files.selected = Some(FileId::new(book_count + image.index()));
+                AppEffect::RenderImage(image)
             }
         };
         Ok((app, effect))
@@ -885,8 +1133,29 @@ impl App {
         self.view
     }
 
-    pub const fn preferences(self) -> ReaderPreferences {
+    pub const fn preferences(self) -> AppPreferences {
         self.preferences
+    }
+
+    pub const fn reader_preferences(self) -> ReaderPreferences {
+        self.preferences.reader()
+    }
+
+    pub const fn image_count(self) -> usize {
+        self.image_count
+    }
+
+    pub const fn selected_sleep_image(self) -> Option<ImageId> {
+        self.selected_sleep_image
+    }
+
+    pub const fn sleep_screen_plan(self, resume: ResumePoint) -> SleepScreenPlan {
+        SleepScreenPlan::resolve(
+            self.preferences.sleep_screen(),
+            resume,
+            self.selected_sleep_image,
+            self.library.book_count(),
+        )
     }
 
     pub const fn battery(self) -> BatteryStatus {
@@ -908,6 +1177,7 @@ impl App {
             AppView::Settings(_) => AppEffect::RenderSettings,
             AppView::Loading => AppEffect::None,
             AppView::Reader(session) => AppEffect::RenderReader(session.location()),
+            AppView::Image(image) => AppEffect::RenderImage(image),
             AppView::Error { book, .. } => AppEffect::RenderError { book },
             AppView::Sleeping { resume } => AppEffect::RenderSleep { resume },
         }
@@ -934,6 +1204,7 @@ impl App {
                 page_index: session.location.page_index,
                 origin: session.origin,
             },
+            AppView::Image(image) => ResumePoint::Image { image },
             AppView::Sleeping { resume } => resume,
             AppView::Loading => self.pending.map_or(
                 ResumePoint::Home {
@@ -993,7 +1264,7 @@ impl App {
                 self.view = AppView::Files(files);
                 AppEffect::RenderFiles
             }
-            (AppView::Files(_), AppInput::Confirm) => self.open_selected(BookOrigin::Files),
+            (AppView::Files(_), AppInput::Confirm) => self.open_file(),
             (AppView::Files(_), AppInput::Back) => self.return_home(HomeItem::Files),
             (AppView::Settings(mut settings), AppInput::Move(direction)) => {
                 if !settings.input(direction) {
@@ -1020,6 +1291,14 @@ impl App {
                 self.previous_page(session)
             }
             (AppView::Reader(session), AppInput::Back) => self.return_to_origin(session.origin),
+            (AppView::Image(image), AppInput::Confirm) => {
+                self.selected_sleep_image = Some(image);
+                AppEffect::RenderImage(image)
+            }
+            (AppView::Image(_), AppInput::Back) => {
+                self.view = AppView::Files(self.files);
+                AppEffect::RenderFiles
+            }
             (AppView::Loading, AppInput::Back) => {
                 let origin = self
                     .pending
@@ -1073,7 +1352,7 @@ impl App {
             spine_index: location.spine_index,
             page_index: location.page_index,
             page_count: location.page_count,
-            preferences: self.preferences,
+            preferences: self.preferences.reader(),
         });
         Ok(AppEffect::RenderReader(location))
     }
@@ -1115,8 +1394,11 @@ impl App {
                 AppEffect::RenderLibrary
             }
             ResumePoint::Files { selected } => {
-                if let Some(selected) = selected {
-                    self.select_book(selected);
+                if let Some(selected) = selected
+                    && let Ok(files) =
+                        FilesState::with_selected(self.files.file_count, selected.index())
+                {
+                    self.files = files;
                 }
                 self.view = AppView::Files(self.files);
                 AppEffect::RenderFiles
@@ -1132,28 +1414,44 @@ impl App {
                 page_index,
                 origin,
             } => self.request_chapter(book, spine_index, PageTarget::Index(page_index), origin),
+            ResumePoint::Image { image } => {
+                self.view = AppView::Image(image);
+                AppEffect::RenderImage(image)
+            }
         }
     }
 
     fn open_selected(&mut self, origin: BookOrigin) -> AppEffect {
-        let selected = match origin {
-            BookOrigin::Books => self.library.selected,
-            BookOrigin::Files => self.files.selected,
-        };
-        let Some(book) = selected else {
+        self.library
+            .selected
+            .map_or(AppEffect::None, |book| self.open_book(book, origin))
+    }
+
+    fn open_file(&mut self) -> AppEffect {
+        let Some(file) = self.files.selected else {
             return AppEffect::None;
         };
+        if file.index() < self.library.book_count {
+            return self.open_book(BookId::new(file.index()), BookOrigin::Files);
+        }
+        let image = ImageId::new(file.index() - self.library.book_count);
+        self.view = AppView::Image(image);
+        AppEffect::RenderImage(image)
+    }
+
+    fn open_book(&mut self, book: BookId, origin: BookOrigin) -> AppEffect {
         self.select_book(book);
         match self
             .reading_checkpoint
             .filter(|checkpoint| checkpoint.book == book)
         {
-            Some(checkpoint) if checkpoint.preferences == self.preferences => self.request_chapter(
-                book,
-                checkpoint.spine_index,
-                PageTarget::Index(checkpoint.page_index),
-                origin,
-            ),
+            Some(checkpoint) if checkpoint.preferences == self.preferences.reader() => self
+                .request_chapter(
+                    book,
+                    checkpoint.spine_index,
+                    PageTarget::Index(checkpoint.page_index),
+                    origin,
+                ),
             Some(checkpoint) => self.request_chapter(
                 book,
                 checkpoint.spine_index,
@@ -1214,7 +1512,7 @@ impl App {
             spine_index: location.spine_index,
             page_index: location.page_index,
             page_count: location.page_count,
-            preferences: self.preferences,
+            preferences: self.preferences.reader(),
         });
         AppEffect::RenderReader(location)
     }
@@ -1276,9 +1574,30 @@ impl App {
         if let Ok(library) = LibraryState::with_selected(self.library.book_count, book.index()) {
             self.library = library;
         }
-        if let Ok(files) = FilesState::with_selected(self.files.book_count, book.index()) {
+        if let Ok(files) = FilesState::with_selected(self.files.file_count, book.index()) {
             self.files = files;
         }
+    }
+
+    pub fn replace_image_catalog(
+        &mut self,
+        image_count: usize,
+        selected_sleep_image: Option<ImageId>,
+    ) -> AppEffect {
+        self.image_count = image_count;
+        self.selected_sleep_image = match selected_sleep_image {
+            Some(image) if image.index() < image_count => Some(image),
+            _ if image_count > 0 => Some(ImageId::new(0)),
+            _ => None,
+        };
+        self.files
+            .replace_count(self.library.book_count + self.image_count);
+        if let AppView::Image(image) = self.view
+            && image.index() >= image_count
+        {
+            self.view = AppView::Files(self.files);
+        }
+        self.current_render_effect()
     }
 
     fn validate_book(&self, book: BookId) -> Result<(), AppStateError> {
@@ -1286,6 +1605,14 @@ impl App {
             Ok(())
         } else {
             Err(AppStateError::BookOutOfBounds)
+        }
+    }
+
+    fn validate_image(&self, image: ImageId) -> Result<(), AppStateError> {
+        if image.index() < self.image_count {
+            Ok(())
+        } else {
+            Err(AppStateError::ImageOutOfBounds)
         }
     }
 }
@@ -1299,10 +1626,13 @@ fn remap_page(page_index: usize, old_count: usize, new_count: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::{
-        App, AppEffect, AppInput, AppView, BookOrigin, Direction, FilesState, HomeItem,
-        LibraryState, PageTarget, ReaderFont, ReaderFontSize, ReaderPreferences, ReaderSpacing,
-        ResumePoint, SettingsItem,
+        App, AppEffect, AppInput, AppPreferences, AppView, BookOrigin, Direction, FilesState,
+        HomeItem, ImageId, LibraryState, PageTarget, ReaderFont, ReaderFontSize, ReaderPreferences,
+        ReaderSpacing, ResumePoint, SettingsItem, SleepScreenMode, SleepScreenPlan,
+        SleepScreenSource,
     };
     use crate::{input::UsbState, power::BatteryStatus};
 
@@ -1334,6 +1664,13 @@ mod tests {
             Some(preferences)
         );
         assert_eq!(ReaderPreferences::from_packed(0xFF00_0000), None);
+
+        let preferences = AppPreferences::new(preferences, SleepScreenMode::BookCover);
+        assert_eq!(
+            AppPreferences::from_packed(preferences.packed()),
+            Some(preferences)
+        );
+        assert_eq!(AppPreferences::from_packed(0x0300_0000), None);
     }
 
     #[test]
@@ -1390,9 +1727,9 @@ mod tests {
         app.input(AppInput::Move(Direction::Down));
         app.input(AppInput::Confirm);
         app.input(AppInput::Move(Direction::Right));
-        assert_eq!(app.preferences(), ReaderPreferences::default());
+        assert_eq!(app.preferences(), AppPreferences::default());
         app.input(AppInput::Back);
-        assert_eq!(app.preferences(), ReaderPreferences::default());
+        assert_eq!(app.preferences(), AppPreferences::default());
 
         app.input(AppInput::Confirm);
         app.input(AppInput::Move(Direction::Right));
@@ -1401,6 +1738,7 @@ mod tests {
         app.input(AppInput::Move(Direction::Down));
         app.input(AppInput::Move(Direction::Right));
         app.input(AppInput::Move(Direction::Down));
+        app.input(AppInput::Move(Direction::Down));
         assert!(matches!(
             app.view(),
             AppView::Settings(settings) if settings.selected() == SettingsItem::Apply
@@ -1408,10 +1746,13 @@ mod tests {
         assert_eq!(app.input(AppInput::Confirm), AppEffect::RenderHome);
         assert_eq!(
             app.preferences(),
-            ReaderPreferences::new(
-                ReaderFont::Compact,
-                ReaderFontSize::Large,
-                ReaderSpacing::Relaxed,
+            AppPreferences::new(
+                ReaderPreferences::new(
+                    ReaderFont::Compact,
+                    ReaderFontSize::Large,
+                    ReaderSpacing::Relaxed,
+                ),
+                SleepScreenMode::Automatic,
             )
         );
     }
@@ -1431,6 +1772,24 @@ mod tests {
         assert!(
             matches!(app.view(), AppView::Files(files) if files.selected().unwrap().index() == 1)
         );
+    }
+
+    #[test]
+    fn files_open_images_and_confirm_selects_the_sleep_image() {
+        let mut app = App::with_catalog(1, 2, Some(ImageId::new(1)), AppPreferences::default());
+        app.input(AppInput::Move(Direction::Down));
+        app.input(AppInput::Confirm);
+        app.input(AppInput::Move(Direction::Down));
+        assert_eq!(
+            app.input(AppInput::Confirm),
+            AppEffect::RenderImage(ImageId::new(0))
+        );
+        assert_eq!(
+            app.input(AppInput::Confirm),
+            AppEffect::RenderImage(ImageId::new(0))
+        );
+        assert_eq!(app.selected_sleep_image(), Some(ImageId::new(0)));
+        assert_eq!(app.input(AppInput::Back), AppEffect::RenderFiles);
     }
 
     #[test]
@@ -1471,6 +1830,7 @@ mod tests {
         app.input(AppInput::Move(Direction::Down));
         app.input(AppInput::Move(Direction::Down));
         app.input(AppInput::Move(Direction::Down));
+        app.input(AppInput::Move(Direction::Down));
         app.input(AppInput::Confirm);
         app.input(AppInput::Move(Direction::Up));
         app.input(AppInput::Move(Direction::Up));
@@ -1495,10 +1855,13 @@ mod tests {
 
     #[test]
     fn sleep_and_wake_restore_settings_and_reader_origins() {
-        let preferences = ReaderPreferences::new(
-            ReaderFont::Mono,
-            ReaderFontSize::Large,
-            ReaderSpacing::Compact,
+        let preferences = AppPreferences::new(
+            ReaderPreferences::new(
+                ReaderFont::Mono,
+                ReaderFontSize::Large,
+                ReaderSpacing::Compact,
+            ),
+            SleepScreenMode::Custom,
         );
         let resume = ResumePoint::Reader {
             book: super::BookId::new(1),
@@ -1526,6 +1889,71 @@ mod tests {
         app.chapter_loaded(4, 7).unwrap();
         assert_eq!(app.input(AppInput::Back), AppEffect::RenderFiles);
         assert_eq!(app.preferences(), preferences);
+    }
+
+    #[test]
+    fn sleep_screen_plans_are_context_sensitive_and_exhaustive() {
+        let book = super::BookId::new(2);
+        let image = ImageId::new(1);
+        let reader = ResumePoint::Reader {
+            book,
+            spine_index: 0,
+            page_index: 0,
+            origin: BookOrigin::Books,
+        };
+        let home = ResumePoint::Home {
+            selected: HomeItem::Books,
+        };
+
+        assert_eq!(
+            SleepScreenPlan::resolve(SleepScreenMode::Automatic, reader, Some(image), 4)
+                .sources()
+                .collect::<std::vec::Vec<_>>(),
+            std::vec![
+                SleepScreenSource::BookCover(book),
+                SleepScreenSource::BuiltIn
+            ]
+        );
+        assert_eq!(
+            SleepScreenPlan::resolve(SleepScreenMode::Automatic, home, Some(image), 4)
+                .sources()
+                .collect::<std::vec::Vec<_>>(),
+            std::vec![
+                SleepScreenSource::CustomImage(image),
+                SleepScreenSource::BuiltIn
+            ]
+        );
+        assert_eq!(
+            SleepScreenPlan::resolve(SleepScreenMode::Custom, reader, Some(image), 4)
+                .sources()
+                .collect::<std::vec::Vec<_>>(),
+            std::vec![
+                SleepScreenSource::CustomImage(image),
+                SleepScreenSource::BuiltIn
+            ]
+        );
+        assert_eq!(
+            SleepScreenPlan::resolve(
+                SleepScreenMode::BookCover,
+                ResumePoint::Books {
+                    selected: Some(book)
+                },
+                Some(image),
+                4,
+            )
+            .sources()
+            .collect::<std::vec::Vec<_>>(),
+            std::vec![
+                SleepScreenSource::BookCover(book),
+                SleepScreenSource::BuiltIn
+            ]
+        );
+        assert_eq!(
+            SleepScreenPlan::resolve(SleepScreenMode::BookCover, home, Some(image), 4)
+                .sources()
+                .collect::<std::vec::Vec<_>>(),
+            std::vec![SleepScreenSource::BuiltIn]
+        );
     }
 
     #[test]

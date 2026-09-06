@@ -23,27 +23,71 @@ const COVER_WIDTH: usize = 176;
 const COVER_HEIGHT: usize = 264;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CustomSleepImageStatus {
+    Missing,
+    Ready,
+    Invalid,
+}
+
+impl CustomSleepImageStatus {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Missing => "NO IMAGE",
+            Self::Ready => "IMAGE READY",
+            Self::Invalid => "INVALID IMAGE",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SleepScreenContent<'a> {
+    CustomImage(MonochromeBitmap<'a>),
+    BookCover(MonochromeBitmap<'a>),
+    BuiltIn,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SleepView<'a> {
     title: &'a str,
     creator: &'a str,
     status: &'a str,
-    cover: Option<MonochromeBitmap<'a>>,
+    content: SleepScreenContent<'a>,
     battery: BatteryStatus,
 }
 
 impl<'a> SleepView<'a> {
-    pub const fn new(
+    pub const fn custom(image: MonochromeBitmap<'a>, battery: BatteryStatus) -> Self {
+        Self {
+            title: "",
+            creator: "",
+            status: "",
+            content: SleepScreenContent::CustomImage(image),
+            battery,
+        }
+    }
+
+    pub const fn book_cover(
         title: &'a str,
         creator: &'a str,
         status: &'a str,
-        cover: Option<MonochromeBitmap<'a>>,
+        cover: MonochromeBitmap<'a>,
         battery: BatteryStatus,
     ) -> Self {
         Self {
             title,
             creator,
             status,
-            cover,
+            content: SleepScreenContent::BookCover(cover),
+            battery,
+        }
+    }
+
+    pub const fn built_in(status: &'a str, battery: BatteryStatus) -> Self {
+        Self {
+            title: "BREWTHINK",
+            creator: "",
+            status,
+            content: SleepScreenContent::BuiltIn,
             battery,
         }
     }
@@ -52,6 +96,7 @@ impl<'a> SleepView<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SleepRenderError {
     WrongFrameSize { actual: Size },
+    ImageSizeMismatch { actual: Size },
     CoverSizeMismatch { actual: Size },
 }
 
@@ -59,27 +104,52 @@ pub fn render_sleep(
     view: SleepView<'_>,
     target: &mut MonochromeImage<'_>,
 ) -> Result<(), SleepRenderError> {
-    let expected =
+    let frame_size =
         Size::new(FRAME_WIDTH, FRAME_HEIGHT).expect("sleep frame dimensions are non-zero");
-    if target.size() != expected {
+    if target.size() != frame_size {
         return Err(SleepRenderError::WrongFrameSize {
             actual: target.size(),
         });
     }
-    if let Some(cover) = view.cover
-        && cover.size() != Size::new(COVER_WIDTH, COVER_HEIGHT).unwrap()
-    {
-        return Err(SleepRenderError::CoverSizeMismatch {
-            actual: cover.size(),
-        });
-    }
 
+    match view.content {
+        SleepScreenContent::CustomImage(image) => {
+            if image.size() != frame_size {
+                return Err(SleepRenderError::ImageSizeMismatch {
+                    actual: image.size(),
+                });
+            }
+            for y in 0..FRAME_HEIGHT {
+                for x in 0..FRAME_WIDTH {
+                    target.set_pixel(x, y, image.pixel_is_black(x, y));
+                }
+            }
+        }
+        SleepScreenContent::BookCover(cover) => {
+            let cover_size = Size::new(COVER_WIDTH, COVER_HEIGHT).unwrap();
+            if cover.size() != cover_size {
+                return Err(SleepRenderError::CoverSizeMismatch {
+                    actual: cover.size(),
+                });
+            }
+            render_composed(view, Some(cover), target);
+        }
+        SleepScreenContent::BuiltIn => render_composed(view, None, target),
+    }
+    Ok(())
+}
+
+fn render_composed(
+    view: SleepView<'_>,
+    cover: Option<MonochromeBitmap<'_>>,
+    target: &mut MonochromeImage<'_>,
+) {
     target.clear_white();
     draw_app_bar(target, "SLEEP", view.battery);
     let small = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
     let heading = MonoTextStyle::new(&FONT_9X18_BOLD, BinaryColor::On);
 
-    match view.cover {
+    match cover {
         Some(cover) => {
             for y in 0..COVER_HEIGHT {
                 for x in 0..COVER_WIDTH {
@@ -89,11 +159,11 @@ pub fn render_sleep(
         }
         None => {
             let mut display = FrameTarget::new(target);
-            Rectangle::new(Point::new(152, 145), GraphicsSize::new(176, 264))
-                .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 2))
+            Rectangle::new(Point::new(92, 190), GraphicsSize::new(296, 160))
+                .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 3))
                 .draw(&mut display)
                 .ok();
-            Text::with_baseline("NO COVER", Point::new(214, 272), small, Baseline::Top)
+            Text::with_baseline("BREWTHINK", Point::new(178, 257), heading, Baseline::Top)
                 .draw(&mut display)
                 .ok();
         }
@@ -123,7 +193,6 @@ pub fn render_sleep(
     )
     .draw(&mut display)
     .ok();
-    Ok(())
 }
 
 struct FrameTarget<'target, 'bytes> {
@@ -171,31 +240,56 @@ mod tests {
 
     use std::vec;
 
-    use super::{SleepView, render_sleep};
+    use super::{SleepRenderError, SleepView, render_sleep};
     use crate::{
         image::{MonochromeBitmap, MonochromeImage, Size},
         power::BatteryStatus,
     };
 
     #[test]
-    fn renders_a_retained_sleep_cover_frame() {
+    fn renders_book_cover_and_builtin_frames() {
         let cover_bytes = vec![0xAA; 176 * 264 / 8];
         let cover = MonochromeBitmap::new(Size::new(176, 264).unwrap(), &cover_bytes).unwrap();
         let mut bytes = vec![0xFF; 48_000];
         let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
 
         render_sleep(
-            SleepView::new(
+            SleepView::book_cover(
                 "A Small Book",
                 "An Author",
                 "PAGE 3",
-                Some(cover),
+                cover,
                 BatteryStatus::default(),
             ),
             &mut frame,
         )
         .unwrap();
-
         assert!(bytes.iter().any(|byte| *byte != 0xFF));
+
+        let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        render_sleep(
+            SleepView::built_in("HOME POSITION SAVED", BatteryStatus::default()),
+            &mut frame,
+        )
+        .unwrap();
+        assert!(bytes.iter().any(|byte| *byte != 0xFF));
+    }
+
+    #[test]
+    fn custom_image_requires_an_exact_frame() {
+        let image_bytes = vec![0xAA; 176 * 264 / 8];
+        let image = MonochromeBitmap::new(Size::new(176, 264).unwrap(), &image_bytes).unwrap();
+        let mut bytes = vec![0xFF; 48_000];
+        let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+
+        assert_eq!(
+            render_sleep(
+                SleepView::custom(image, BatteryStatus::default()),
+                &mut frame
+            ),
+            Err(SleepRenderError::ImageSizeMismatch {
+                actual: Size::new(176, 264).unwrap()
+            })
+        );
     }
 }

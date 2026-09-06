@@ -4,7 +4,7 @@ Brewthink is an EPUB-first reader. The target is content-complete, readable refl
 
 ## Product contract
 
-Brewthink opens on Home with Books, Files, and Settings. Books contains the 2 × 2 cover shelf. Four covers occupy most of the 480 × 800 frame. The selected book has a stronger border, and its title and creator appear in the footer. Files shows the source EPUB names and sizes. Settings changes reader font, text size, and line spacing without changing the Brewthink wordmark or application chrome.
+Brewthink opens on Home with Books, Files, and Settings. Books contains the 2 × 2 cover shelf. Four covers occupy most of the 480 × 800 frame. The selected book has a stronger border, and its title and creator appear in the footer. Files shows source EPUBs from `/books` plus named JPEG and PNG images from `/files`. Settings changes reader font, text size, line spacing, and sleep-screen mode without changing the Brewthink wordmark or application chrome.
 
 A complete reader must preserve:
 
@@ -57,7 +57,7 @@ The current host, WASM, and X4 paths provide:
 - Shared Home, Books, Files, Settings, Reader, Error, and Sleep navigation and framebuffer rendering in ordinary Rust tests, WASM, and X4 firmware.
 - A shared battery indicator backed by a smoothed voltage estimate on X4 and a fake battery state in WASM.
 - Bounded reader typography choices whose resolved metrics drive both pagination and rendering. Noto Serif 14 pt is the default, matching CrossPoint Reader.
-- Read-only FAT `/Books` discovery, a seekable file adapter, bounded streaming ZIP/DEFLATE, fixed-memory XML, and page-at-a-time XHTML layout on the X4.
+- Read-only FAT `/books` discovery, a seekable file adapter, bounded streaming ZIP/DEFLATE, fixed-memory XML, and page-at-a-time XHTML layout on the X4.
 - A normal X4 application loop connecting all seven controls, shelf, chapter/page navigation, SSD1677 refresh, retained sleep frame, GPIO3 deep sleep/wake, and checksummed book/chapter/page resume.
 - Synthetic EPUB, PNG-alpha, and JPEG fixtures plus private acceptance against every spine item and the cover in the Hamming EPUB.
 
@@ -69,7 +69,7 @@ The ESP32-C3 has no PSRAM. Code running on the X4 must not retain an entire EPUB
 
 The device path uses:
 
-1. A seekable, read-only FAT file capability rooted at `/Books`.
+1. A seekable, read-only FAT file capability rooted at `/books`.
 2. Repeated bounded central-directory scans that retain no archive-wide heap index.
 3. Incremental stored/DEFLATE reads with CRC checks and output limits.
 4. Pull-based XML tokenization into fixed-capacity publication and page state.
@@ -119,7 +119,25 @@ A limit failure becomes a visible, recoverable book error or a cover placeholder
 
 A durable reading location is semantic: book identity, spine resource, and source/token position. Page numbers are derived and can change with fonts or layout settings.
 
-Normal book access stays read-only. The current resume record is versioned by magic and checksummed in RTC fast memory; it stores the active screen, reader preferences, catalog index, spine index, and page index. When typography changes, Brewthink maps the saved chapter progress into the new page count. Durable storage must eventually use stable book identity plus semantic source/token position so reflow can return to the exact paragraph. Any future SD writes go through a separate `AppDataStore` restricted to Brewthink-owned files under `/Brewthink`; the general book/file capability must not expose arbitrary writes.
+Normal book access stays read-only. The current resume record is versioned by magic and checksummed in RTC fast memory; it stores the active screen, application preferences, catalog index, spine index, and page index. When typography changes, Brewthink maps the saved chapter progress into the new page count. Application preferences also use checksummed primary and backup records under `/brew`. Durable reading progress still needs stable book identity plus semantic source/token position so reflow can return to the exact paragraph.
+
+All firmware-initiated filesystem writes pass through `AppDataStore`. Fixed application records and upload transaction files live under `/brew`; completed images live under `/files`. Firmware creates the 8.3-compatible `/brew`, `/brew/cache`, `/brew/bookmark`, and `/files` directories when missing. The general book/file capability exposes no arbitrary write path.
+
+## Sleep screens
+
+Settings exposes one exhaustive mode:
+
+| Mode | Primary source | Fallback |
+| --- | --- | --- |
+| Custom Image | Image selected from Files | Built-in screen |
+| Book Cover | Cover associated with the current reader or selected book | Built-in screen |
+| Automatic | Reader cover only when sleep starts in Reader; custom image everywhere else | Built-in screen |
+
+Files lists up to sixteen uppercase 8.3 JPEG or PNG names from `/files` alongside EPUBs. Opening an image renders a contained full-screen preview. Confirm selects it as the custom sleep source and persists the filename in a checksummed primary and backup record. Sleep rendering center-crops the selected image into the 480 × 800 frame. Missing or invalid selections fall back safely.
+
+The host command accepts ordinary JPEG or PNG sources. Files already within the 96 KiB decoder boundary upload unchanged. Oversized PNGs and progressive JPEGs are resized and converted to bounded baseline JPEGs before transfer. The transfer state machine accepts a typed image name, declared length, format, checksum, and bounded chunks. USB Serial/JTAG supplies the first adapter through `scripts/device-control.sh put-image`. The device writes `UPLOAD.TMP`, verifies it, records `UPLOAD.TXN`, copies to a new named target, verifies SD readback, then removes the transaction. A retry cleans interrupted copies and treats an identical existing target as success; it refuses to overwrite a different file.
+
+`transfer::wifi` defines the future `PUT /api/files/images` request boundary; it does not start a network stack or expose an HTTP server yet.
 
 ## Acceptance matrix
 
@@ -134,8 +152,9 @@ The private Hamming EPUB is an acceptance target, not a repository fixture.
 | Chapter text | Every spine document read and first/last page-count consistency checked | Read and turn physical pages |
 | 286 PNG images | All fit the current extracted-resource bound | Add inline figures and image viewer |
 | Tables and footnotes | Text and alternatives survive fallback layout | Add semantic overlays and dedicated viewers |
-| Sleep cover | X4 app renders a retained cover frame and stores checksummed resume state | Verify deep sleep, GPIO3 wake, and exact physical resume |
+| Sleep screens | Shared resolver and simulator cover Custom, Book Cover, and Automatic modes; X4 falls back to the built-in screen after missing or invalid assets | Verify all modes, deep sleep, GPIO3 wake, and exact physical resume |
+| USB upload | Chunked protocol, CRC32, SD readback, and incomplete-transfer cleanup are host-tested | Upload a JPEG and PNG to physical `/files` and verify sleep rendering |
 
 ## Next vertical slice
 
-Copy the private acceptance EPUB into `/Books` only after explicit removable-media approval, then flash the locally checked reader image only after separate guarded-`app1` approval. Verify shelf → open → page/chapter navigation → retained sleep frame → GPIO3 deep-sleep wake → exact resume one physical action at a time. Inline figures, image/table viewers, links, footnotes, and semantic source checkpoints remain subsequent reader-engine work.
+Copy the private acceptance EPUB into `/books` only after explicit removable-media approval, then flash the locally checked reader image only after separate guarded-`app1` approval. Verify shelf → open → page/chapter navigation → retained sleep frame → GPIO3 deep-sleep wake → exact resume one physical action at a time. Inline figures, image/table viewers, links, footnotes, and semantic source checkpoints remain subsequent reader-engine work.
