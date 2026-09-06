@@ -53,8 +53,8 @@ impl FileKind {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Epub => "EPUB",
-            Self::Jpeg => "JPEG IMAGE",
-            Self::Png => "PNG IMAGE",
+            Self::Jpeg => "JPEG image",
+            Self::Png => "PNG image",
         }
     }
 }
@@ -89,11 +89,11 @@ pub fn render_files(
     let mut display = FrameTarget::new(target);
     if files.is_empty() {
         ui!(
-            AppBar::new("FILES", battery),
-            Label::new("NO EPUB OR IMAGE FILES", TextRole::Heading).at(Point::new(166, 326)),
+            AppBar::new("Files", battery),
+            Label::new("No books or images", TextRole::Heading).at(Point::new(90, 326)),
             Label::new("Add EPUBs to /books or images to /files", TextRole::Body)
-                .at(Point::new(135, 368)),
-            CommandBar::new("BACK  HOME"),
+                .at(Point::new(90, 368)),
+            CommandBar::new(["Home", "", "", ""]),
         )
         .draw(&mut display)
         .ok();
@@ -101,12 +101,12 @@ pub fn render_files(
     }
 
     let range = state.visible_range();
-    let mut row_views = [FileRow::new("", 0, "", Selection::Idle); 8];
+    let mut row_views = [FileRow::new("", 0, FileKind::Epub, Selection::Idle); 8];
     for (row, index) in range.clone().enumerate() {
         row_views[row] = FileRow::new(
             files[index].name(),
             files[index].size(),
-            files[index].kind().label(),
+            files[index].kind(),
             Selection::from_selected(
                 state
                     .selected()
@@ -122,16 +122,17 @@ pub fn render_files(
     let mut footer = FixedText::<64>::new();
     write!(
         footer,
-        "{}-{} / {}     CONFIRM  OPEN     BACK  HOME",
+        "{}-{} / {}",
         range.start + 1,
         range.end,
         files.len()
     )
     .ok();
     ui!(
-        AppBar::new("FILES", battery),
+        AppBar::new("Files", battery),
         rows,
-        CommandBar::new(footer.as_str()),
+        Label::new(footer.as_str(), TextRole::Metadata).at(Point::new(CONTENT_LEFT, 714)),
+        CommandBar::new(["Home", "Open", "Previous", "Next"]),
     )
     .draw(&mut display)
     .ok();
@@ -164,7 +165,8 @@ mod tests {
             &mut image,
         )
         .unwrap();
-        assert!(image.pixel_is_black(18, 86));
-        assert!(image.pixel_is_black(18, 148));
+        assert!(image.pixel_is_black(24, 100));
+        assert!(!image.pixel_is_black(18, 86));
+        assert!(!image.pixel_is_black(24, 176));
     }
 }

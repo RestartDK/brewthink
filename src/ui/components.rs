@@ -6,16 +6,20 @@ use embedded_graphics::{
     geometry::{Dimensions, Point, Size},
     pixelcolor::BinaryColor,
     prelude::{DrawTarget, Primitive},
-    primitives::{PrimitiveStyle, Rectangle},
+    primitives::{PrimitiveStyle, Rectangle, RoundedRectangle},
     text::{Baseline, Text},
 };
 use embedded_layout::View;
 
-use crate::power::{BatteryLevel, BatteryStatus};
+use crate::{
+    app::SettingsItem,
+    files::FileKind,
+    power::{BatteryLevel, BatteryStatus},
+};
 
 use super::{
     APP_BAR_RULE_Y, CONTENT_LEFT, CONTENT_WIDTH, FOOTER_RULE_Y, FOOTER_TEXT_Y, FRAME_WIDTH,
-    FixedText, TextRole, text_style,
+    FixedText, Icon, TextRole, text_style,
 };
 
 const POWER_SYMBOL_X: i32 = 386;
@@ -49,6 +53,7 @@ pub struct Label<'a> {
     role: TextRole,
     top_left: Point,
     clip: Option<Size>,
+    color: BinaryColor,
 }
 
 impl<'a> Label<'a> {
@@ -58,11 +63,17 @@ impl<'a> Label<'a> {
             role,
             top_left: Point::zero(),
             clip: None,
+            color: BinaryColor::On,
         }
     }
 
     pub const fn at(mut self, top_left: Point) -> Self {
         self.top_left = top_left;
+        self
+    }
+
+    pub const fn color(mut self, color: BinaryColor) -> Self {
+        self.color = color;
         self
     }
 
@@ -101,12 +112,9 @@ impl Drawable for Label<'_> {
     where
         D: DrawTarget<Color = Self::Color>,
     {
-        let text = Text::with_baseline(
-            self.text,
-            self.top_left,
-            text_style(self.role),
-            Baseline::Top,
-        );
+        let mut style = text_style(self.role);
+        style.text_color = Some(self.color);
+        let text = Text::with_baseline(self.text, self.top_left, style, Baseline::Top);
         match self.clip {
             Some(size) => text
                 .draw(&mut target.clipped(&Rectangle::new(self.top_left, size)))
@@ -154,26 +162,18 @@ impl Drawable for AppBar<'_> {
     where
         D: DrawTarget<Color = Self::Color>,
     {
-        Label::new("BREWTHINK", TextRole::Brand)
-            .at(self.top_left + Point::new(CONTENT_LEFT, 14))
-            .draw(target)?;
         Label::new(self.section, TextRole::Section)
-            .at(self.top_left + Point::new(CONTENT_LEFT, 39))
-            .clipped_to(Size::new(330, 12))
+            .at(self.top_left + Point::new(CONTENT_LEFT, 20))
+            .clipped_to(Size::new(302, 22))
             .draw(target)?;
-        Rectangle::new(
-            self.top_left + Point::new(CONTENT_LEFT, APP_BAR_RULE_Y),
-            Size::new(CONTENT_WIDTH, 2),
-        )
-        .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
-        .draw(target)?;
+        Icon::WifiOff.draw(target, self.top_left + Point::new(334, 15), BinaryColor::On)?;
         draw_battery(target, self.top_left, self.battery)
     }
 }
 
 #[derive(Clone, Copy)]
 pub struct CommandBar<'a> {
-    text: &'a str,
+    actions: [&'a str; 4],
     left: i32,
     width: u32,
     rule_y: i32,
@@ -181,22 +181,14 @@ pub struct CommandBar<'a> {
 }
 
 impl<'a> CommandBar<'a> {
-    pub const fn new(text: &'a str) -> Self {
+    pub const fn new(actions: [&'a str; 4]) -> Self {
         Self {
-            text,
+            actions,
             left: CONTENT_LEFT,
             width: CONTENT_WIDTH,
             rule_y: FOOTER_RULE_Y,
             text_y: FOOTER_TEXT_Y,
         }
-    }
-
-    pub const fn at(mut self, left: i32, width: u32, rule_y: i32, text_y: i32) -> Self {
-        self.left = left;
-        self.width = width;
-        self.rule_y = rule_y;
-        self.text_y = text_y;
-        self
     }
 }
 
@@ -226,25 +218,37 @@ impl Drawable for CommandBar<'_> {
         Rectangle::new(Point::new(self.left, self.rule_y), Size::new(self.width, 1))
             .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
             .draw(target)?;
-        Label::new(self.text, TextRole::CommandHint)
-            .at(Point::new(self.left, self.text_y))
-            .draw(target)
+        let icons = [Icon::Back, Icon::Confirm, Icon::Left, Icon::Right];
+        let column = self.width / 4;
+        for (index, (icon, action)) in icons.into_iter().zip(self.actions).enumerate() {
+            let center = self.left + column as i32 * index as i32 + column as i32 / 2;
+            icon.draw(
+                target,
+                Point::new(center - 12, self.rule_y + 8),
+                BinaryColor::On,
+            )?;
+            Label::new(action, TextRole::CommandHint)
+                .at(Point::new(center - action.len() as i32 * 3, self.text_y))
+                .clipped_to(Size::new(column, 10))
+                .draw(target)?;
+        }
+        Ok(())
     }
 }
 
 #[derive(Clone, Copy)]
 pub struct MenuRow<'a> {
     title: &'a str,
-    detail: &'a str,
+    icon: Icon,
     selection: Selection,
     top_left: Point,
 }
 
 impl<'a> MenuRow<'a> {
-    pub const fn new(title: &'a str, detail: &'a str, selection: Selection) -> Self {
+    pub const fn new(title: &'a str, icon: Icon, selection: Selection) -> Self {
         Self {
             title,
-            detail,
+            icon,
             selection,
             top_left: Point::zero(),
         }
@@ -257,7 +261,7 @@ impl View for MenuRow<'_> {
     }
 
     fn bounds(&self) -> Rectangle {
-        Rectangle::new(self.top_left, Size::new(CONTENT_WIDTH, 92))
+        Rectangle::new(self.top_left, Size::new(CONTENT_WIDTH, 76))
     }
 }
 
@@ -269,33 +273,28 @@ impl Drawable for MenuRow<'_> {
     where
         D: DrawTarget<Color = Self::Color>,
     {
-        self.bounds()
-            .into_styled(PrimitiveStyle::with_stroke(
-                BinaryColor::On,
-                self.selection.stroke(1, 4),
-            ))
-            .draw(target)?;
+        let color = draw_selection(target, self.bounds(), self.selection)?;
+        self.icon
+            .draw(target, self.top_left + Point::new(20, 26), color)?;
         Label::new(self.title, TextRole::ControlLabel)
-            .at(self.top_left + Point::new(24, 22))
-            .draw(target)?;
-        Label::new(self.detail, TextRole::Metadata)
-            .at(self.top_left + Point::new(24, 55))
+            .color(color)
+            .at(self.top_left + Point::new(68, 29))
             .draw(target)
     }
 }
 
 #[derive(Clone, Copy)]
 pub struct SettingsRow<'a> {
-    label: &'a str,
+    item: SettingsItem,
     value: Option<&'a str>,
     selection: Selection,
     top_left: Point,
 }
 
 impl<'a> SettingsRow<'a> {
-    pub const fn new(label: &'a str, value: Option<&'a str>, selection: Selection) -> Self {
+    pub const fn new(item: SettingsItem, value: Option<&'a str>, selection: Selection) -> Self {
         Self {
-            label,
+            item,
             value,
             selection,
             top_left: Point::zero(),
@@ -323,7 +322,7 @@ impl Drawable for SettingsRow<'_> {
         D: DrawTarget<Color = Self::Color>,
     {
         let (top, height, role, label_y) = match self.value {
-            Some(_) => (self.top_left, 46, TextRole::Body, 14),
+            Some(_) => (self.top_left, 46, TextRole::ControlLabel, 14),
             None => (
                 self.top_left + Point::new(0, 10),
                 64,
@@ -331,18 +330,27 @@ impl Drawable for SettingsRow<'_> {
                 20,
             ),
         };
-        Rectangle::new(top, Size::new(CONTENT_WIDTH, height))
-            .into_styled(PrimitiveStyle::with_stroke(
-                BinaryColor::On,
-                self.selection.stroke(1, 3),
-            ))
-            .draw(target)?;
-        Label::new(self.label, role)
-            .at(top + Point::new(16, label_y))
+        let color = draw_selection(
+            target,
+            Rectangle::new(top, Size::new(CONTENT_WIDTH, height)),
+            self.selection,
+        )?;
+        let icon = match self.item {
+            SettingsItem::Font => Icon::Font,
+            SettingsItem::Size => Icon::TextSize,
+            SettingsItem::Spacing => Icon::Spacing,
+            SettingsItem::SleepScreen => Icon::Moon,
+            SettingsItem::Apply => Icon::Confirm,
+        };
+        icon.draw(target, top + Point::new(20, label_y - 3), color)?;
+        Label::new(self.item.label(), role)
+            .color(color)
+            .at(top + Point::new(68, label_y))
             .draw(target)?;
         if let Some(value) = self.value {
             Label::new(value, TextRole::Body)
-                .at(top + Point::new(312, 14))
+                .color(color)
+                .at(top + Point::new(268, 14))
                 .draw(target)?;
         }
         Ok(())
@@ -353,13 +361,13 @@ impl Drawable for SettingsRow<'_> {
 pub struct FileRow<'a> {
     name: &'a str,
     size: u32,
-    kind: &'a str,
+    kind: FileKind,
     selection: Selection,
     top_left: Point,
 }
 
 impl<'a> FileRow<'a> {
-    pub const fn new(name: &'a str, size: u32, kind: &'a str, selection: Selection) -> Self {
+    pub const fn new(name: &'a str, size: u32, kind: FileKind, selection: Selection) -> Self {
         Self {
             name,
             size,
@@ -388,24 +396,47 @@ impl Drawable for FileRow<'_> {
     where
         D: DrawTarget<Color = Self::Color>,
     {
-        self.bounds()
-            .into_styled(PrimitiveStyle::with_stroke(
-                BinaryColor::On,
-                self.selection.stroke(1, 3),
-            ))
-            .draw(target)?;
+        let color = draw_selection(target, self.bounds(), self.selection)?;
+        let icon = match self.kind {
+            FileKind::Epub => Icon::Book,
+            FileKind::Jpeg | FileKind::Png => Icon::Image,
+        };
+        icon.draw(target, self.top_left + Point::new(16, 19), color)?;
         Label::new(self.name, TextRole::ControlLabel)
-            .at(self.top_left + Point::new(14, 12))
-            .clipped_to(Size::new(330, 18))
+            .color(color)
+            .at(self.top_left + Point::new(58, 12))
+            .clipped_to(Size::new(370, 18))
             .draw(target)?;
-        let mut size = FixedText::<24>::new();
-        write!(size, "{} KiB", self.size.div_ceil(1024)).ok();
+        let mut size = FixedText::<32>::new();
+        write!(
+            size,
+            "{}  {} KiB",
+            self.kind.label(),
+            self.size.div_ceil(1024)
+        )
+        .ok();
         Label::new(size.as_str(), TextRole::Metadata)
-            .at(self.top_left + Point::new(364, 20))
-            .draw(target)?;
-        Label::new(self.kind, TextRole::Metadata)
-            .at(self.top_left + Point::new(14, 39))
+            .color(color)
+            .at(self.top_left + Point::new(58, 38))
             .draw(target)
+    }
+}
+
+pub(super) fn draw_selection<D>(
+    target: &mut D,
+    bounds: Rectangle,
+    selection: Selection,
+) -> Result<BinaryColor, D::Error>
+where
+    D: DrawTarget<Color = BinaryColor>,
+{
+    if selection == Selection::Selected {
+        RoundedRectangle::with_equal_corners(bounds, Size::new(8, 8))
+            .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+            .draw(target)?;
+        Ok(BinaryColor::Off)
+    } else {
+        Ok(BinaryColor::On)
     }
 }
 

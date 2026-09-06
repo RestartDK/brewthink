@@ -280,6 +280,9 @@ impl WebLibrary {
                 )
             }
             AppView::Reader(session) => self.render_reader(session.location(), &mut frame)?,
+            AppView::ReaderDrawer(drawer) => {
+                self.render_reader(drawer.session().location(), &mut frame)?
+            }
             AppView::Image(image) => self.render_image(image, &mut frame)?,
             AppView::Sleeping { resume } => self.render_sleep(resume, &mut frame)?,
             AppView::Error { book, .. } => {
@@ -461,11 +464,7 @@ impl WebLibrary {
         target: &mut MonochromeImage<'_>,
     ) -> Result<FrameMetadata, JsValue> {
         let image = &self.images[image.index()];
-        render_app(
-            AppFrame::Sleep(SleepView::custom(image.bitmap(), self.app.battery())),
-            target,
-        )
-        .map_err(js_error)?;
+        render_app(AppFrame::Sleep(SleepView::custom(image.bitmap())), target).map_err(js_error)?;
         render_image_viewer(
             &image.name,
             self.app.selected_sleep_image() == Some(ImageId::new(image.index)),
@@ -499,19 +498,14 @@ impl WebLibrary {
             .iter()
             .map(|line| ReaderLine::new(&line.text, line.style))
             .collect::<Vec<_>>();
-        render_app(
-            AppFrame::Reader(ReaderView::new(
-                &book.title,
-                &chapter.title,
-                &lines,
-                location,
-                self.app.reader_preferences(),
-                self.app.battery(),
-            )),
-            target,
-        )
-        .map_err(js_error)?;
-        Ok(FrameMetadata {
+        let mut view = ReaderView::new(
+            &book.title,
+            &chapter.title,
+            &lines,
+            self.app.reader_preferences(),
+            self.app.battery(),
+        );
+        let mut metadata = FrameMetadata {
             screen: "reader",
             title: book.title.clone(),
             creator: book.creator.clone(),
@@ -521,7 +515,16 @@ impl WebLibrary {
             page_count: location.page_count(),
             chapter: location.spine_index(),
             chapter_count: location.spine_count(),
-        })
+        };
+        if let AppView::ReaderDrawer(drawer) = self.app.view() {
+            view = view.with_drawer(drawer);
+            metadata.screen = "reader-drawer";
+            metadata.creator = drawer.selected().label().into();
+            metadata.page = drawer.page();
+            metadata.chapter = drawer.chapter();
+        }
+        render_app(AppFrame::Reader(view), target).map_err(js_error)?;
+        Ok(metadata)
     }
 
     fn render_sleep(
@@ -535,26 +538,23 @@ impl WebLibrary {
                 page_index,
                 ..
             } => format!(
-                "CHAPTER {} · PAGE {} · POSITION SAVED",
+                "Chapter {} · page {} · position saved",
                 spine_index + 1,
                 page_index + 1
             ),
-            ResumePoint::Home { .. } => "HOME POSITION SAVED".into(),
-            ResumePoint::Books { .. } => "BOOKS POSITION SAVED".into(),
-            ResumePoint::Files { .. } => "FILES POSITION SAVED".into(),
-            ResumePoint::Settings { .. } => "SETTINGS POSITION SAVED".into(),
-            ResumePoint::Image { .. } => "IMAGE POSITION SAVED".into(),
+            ResumePoint::Home { .. } => "Home position saved".into(),
+            ResumePoint::Books { .. } => "Books position saved".into(),
+            ResumePoint::Files { .. } => "Files position saved".into(),
+            ResumePoint::Settings { .. } => "Settings position saved".into(),
+            ResumePoint::Image { .. } => "Image position saved".into(),
         };
 
         for source in self.app.sleep_screen_plan(resume).sources() {
             match source {
                 SleepScreenSource::CustomImage(image_id) => {
                     let image = &self.images[image_id.index()];
-                    render_app(
-                        AppFrame::Sleep(SleepView::custom(image.bitmap(), self.app.battery())),
-                        target,
-                    )
-                    .map_err(js_error)?;
+                    render_app(AppFrame::Sleep(SleepView::custom(image.bitmap())), target)
+                        .map_err(js_error)?;
                     return Ok(FrameMetadata::selection(
                         "sleep",
                         &image.name,
@@ -568,17 +568,8 @@ impl WebLibrary {
                     let Some(cover) = book.cover.as_ref().map(OwnedCover::bitmap) else {
                         continue;
                     };
-                    render_app(
-                        AppFrame::Sleep(SleepView::book_cover(
-                            &book.title,
-                            &book.creator,
-                            &status,
-                            cover,
-                            self.app.battery(),
-                        )),
-                        target,
-                    )
-                    .map_err(js_error)?;
+                    render_app(AppFrame::Sleep(SleepView::book_cover(cover)), target)
+                        .map_err(js_error)?;
                     let mut metadata = FrameMetadata::book("sleep", book);
                     metadata.selected = book_id.index();
                     return Ok(metadata);
@@ -864,7 +855,9 @@ fn push_line(
     theme: ReaderTheme,
 ) {
     let height = theme.line_height(line.style);
-    if *used_height + height > PAGE_HEIGHT && !lines.is_empty() {
+    if (*used_height + height > PAGE_HEIGHT || lines.len() == brewthink::reader::MAX_PAGE_LINES)
+        && !lines.is_empty()
+    {
         pages.push(OwnedPage {
             lines: std::mem::take(lines),
         });

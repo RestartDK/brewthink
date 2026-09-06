@@ -1,13 +1,17 @@
 mod app;
 mod components;
 mod frame;
+mod icons;
 mod layout;
+mod reader_drawer;
 mod theme;
 
 pub use app::{AppFrame, AppRenderError, render_app};
 pub use components::{AppBar, CommandBar, FileRow, Label, MenuRow, Selection, SettingsRow};
 pub use frame::{FixedText, FrameTarget};
+pub use icons::Icon;
 pub(crate) use layout::{ui, ui_column};
+pub use reader_drawer::draw_reader_drawer;
 pub use theme::{
     APP_BAR_RULE_Y, CONTENT_LEFT, CONTENT_TOP, CONTENT_WIDTH, FOOTER_RULE_Y, FOOTER_TEXT_Y,
     FRAME_HEIGHT, FRAME_WIDTH, TextRole, text_style,

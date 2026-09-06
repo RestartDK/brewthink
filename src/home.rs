@@ -6,8 +6,8 @@ use crate::{
     image::{MonochromeImage, Size},
     power::BatteryStatus,
     ui::{
-        AppBar, CONTENT_LEFT, CommandBar, FRAME_HEIGHT, FRAME_WIDTH, FrameTarget, Label, MenuRow,
-        Selection, TextRole, ui, ui_column,
+        AppBar, CONTENT_LEFT, CommandBar, FRAME_HEIGHT, FRAME_WIDTH, FrameTarget, Icon, MenuRow,
+        Selection, ui, ui_column,
     },
 };
 
@@ -32,31 +32,30 @@ pub fn render_home(
     target.clear_white();
     let selected = state.selected();
     let rows = ui_column!(
-        40;
+        4;
         menu_row(HomeItem::Books, selected),
         menu_row(HomeItem::Files, selected),
         menu_row(HomeItem::Settings, selected),
     )
-    .translate(Point::new(CONTENT_LEFT, 150));
+    .translate(Point::new(CONTENT_LEFT, 106));
     let screen = ui!(
-        AppBar::new("HOME", battery),
-        Label::new("CHOOSE WHERE TO GO", TextRole::Body).at(Point::new(CONTENT_LEFT, 92)),
+        AppBar::new("Home", battery),
         rows,
-        CommandBar::new("UP/DOWN  MOVE     CONFIRM  OPEN"),
+        CommandBar::new(["", "Open", "Previous", "Next"]),
     );
     screen.draw(&mut FrameTarget::new(target)).ok();
     Ok(())
 }
 
 fn menu_row(item: HomeItem, selected: HomeItem) -> MenuRow<'static> {
-    let detail = match item {
-        HomeItem::Books => "COVERS AND READING PROGRESS",
-        HomeItem::Files => "EPUB FILES ON MICROSD",
-        HomeItem::Settings => "FONT, SIZE, AND SPACING",
+    let icon = match item {
+        HomeItem::Books => Icon::Book,
+        HomeItem::Files => Icon::Folder,
+        HomeItem::Settings => Icon::Settings,
     };
     MenuRow::new(
         item.label(),
-        detail,
+        icon,
         Selection::from_selected(item == selected),
     )
 }
@@ -83,7 +82,8 @@ mod tests {
             &mut image,
         )
         .unwrap();
-        assert!(image.pixel_is_black(18, 58));
-        assert!(image.pixel_is_black(18, 150));
+        assert!(!image.pixel_is_black(18, 58));
+        assert!(image.pixel_is_black(24, 120));
+        assert!(!image.pixel_is_black(24, 200));
     }
 }

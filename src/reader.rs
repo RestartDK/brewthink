@@ -1,5 +1,3 @@
-use core::fmt::Write;
-
 use embedded_graphics::{
     Drawable,
     draw_target::DrawTargetExt,
@@ -15,7 +13,7 @@ use embedded_graphics::{
 };
 
 use crate::{
-    app::{ReaderFont, ReaderFontSize, ReaderPreferences, ReaderSpacing, ReadingLocation},
+    app::{ReaderDrawer, ReaderFont, ReaderFontSize, ReaderPreferences, ReaderSpacing},
     fonts::{
         BitmapFont,
         noto_serif::{
@@ -25,15 +23,16 @@ use crate::{
     },
     image::{MonochromeImage, Size},
     power::BatteryStatus,
-    ui::{AppBar, CommandBar, FixedText, FrameTarget, Label, TextRole, ui},
+    ui::{AppBar, CommandBar, FrameTarget, Label, TextRole, draw_reader_drawer, ui},
 };
 use embedded_layout::View;
 
 pub const FRAME_WIDTH: usize = 480;
 pub const FRAME_HEIGHT: usize = 800;
 pub const BODY_WIDTH_PIXELS: usize = 444;
-pub const BODY_TOP: usize = 92;
-pub const BODY_BOTTOM: usize = 736;
+pub const BODY_TOP: usize = 24;
+pub const BODY_BOTTOM: usize = 776;
+pub const MAX_PAGE_LINES: usize = 50;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReaderStyle {
@@ -229,9 +228,9 @@ pub struct ReaderView<'a> {
     book_title: &'a str,
     chapter_title: &'a str,
     lines: &'a [ReaderLine<'a>],
-    location: ReadingLocation,
     preferences: ReaderPreferences,
     battery: BatteryStatus,
+    drawer: Option<ReaderDrawer>,
 }
 
 impl<'a> ReaderView<'a> {
@@ -239,7 +238,6 @@ impl<'a> ReaderView<'a> {
         book_title: &'a str,
         chapter_title: &'a str,
         lines: &'a [ReaderLine<'a>],
-        location: ReadingLocation,
         preferences: ReaderPreferences,
         battery: BatteryStatus,
     ) -> Self {
@@ -247,10 +245,15 @@ impl<'a> ReaderView<'a> {
             book_title,
             chapter_title,
             lines,
-            location,
             preferences,
             battery,
+            drawer: None,
         }
+    }
+
+    pub const fn with_drawer(mut self, drawer: ReaderDrawer) -> Self {
+        self.drawer = Some(drawer);
+        self
     }
 }
 
@@ -272,6 +275,9 @@ pub fn render_reader(
         });
     }
 
+    if view.lines.len() > MAX_PAGE_LINES {
+        return Err(ReaderRenderError::ContentExceedsPage);
+    }
     let theme = ReaderTheme::from_preferences(view.preferences);
     let mut height = BODY_TOP;
     for line in view.lines {
@@ -281,22 +287,23 @@ pub fn render_reader(
         }
     }
 
-    let mut progress = FixedText::<64>::new();
-    write!(
-        progress,
-        "PAGE {} / {}     LEFT/RIGHT  TURN     BACK  LIBRARY",
-        view.location.page_index() + 1,
-        view.location.page_count()
-    )
-    .ok();
     target.clear_white();
-    ui!(
-        AppBar::new(view.book_title, view.battery),
-        ReaderContent::new(view, theme),
-        CommandBar::new(progress.as_str()),
-    )
-    .draw(&mut FrameTarget::new(target))
-    .ok();
+    let mut display = FrameTarget::new(target);
+    let mut content = ReaderContent::new(view, theme);
+    if view.drawer.is_some() {
+        content.origin.y = 44;
+    }
+    content.draw(&mut display).ok();
+    if let Some(drawer) = view.drawer {
+        draw_reader_drawer(
+            &mut display,
+            drawer,
+            view.book_title,
+            view.chapter_title,
+            view.battery,
+        )
+        .ok();
+    }
     Ok(())
 }
 
@@ -316,14 +323,14 @@ pub fn render_reader_error(
     target.clear_white();
     ui!(
         AppBar::new(book_title, battery),
-        Label::new("BOOK ERROR", TextRole::Error).at(Point::new(176, 280)),
+        Label::new("Cannot open book", TextRole::Error).at(Point::new(48, 280)),
         Label::new(book_title, TextRole::Body)
             .at(Point::new(48, 330))
             .clipped_to(GraphicsSize::new(384, 22)),
         Label::new(message, TextRole::Body)
             .at(Point::new(48, 380))
             .clipped_to(GraphicsSize::new(384, 48)),
-        Label::new("PRESS BACK TO RETURN TO LIBRARY", TextRole::Body).at(Point::new(144, 500)),
+        CommandBar::new(["Back", "", "", ""]),
     )
     .draw(&mut FrameTarget::new(target))
     .ok();
@@ -354,8 +361,8 @@ impl View for ReaderContent<'_> {
 
     fn bounds(&self) -> Rectangle {
         Rectangle::new(
-            self.origin + Point::new(18, 70),
-            GraphicsSize::new(BODY_WIDTH_PIXELS as u32, (BODY_BOTTOM - 70) as u32),
+            self.origin + Point::new(18, BODY_TOP as i32),
+            GraphicsSize::new(BODY_WIDTH_PIXELS as u32, (BODY_BOTTOM - BODY_TOP) as u32),
         )
     }
 }
@@ -368,22 +375,6 @@ impl Drawable for ReaderContent<'_> {
     where
         D: DrawTarget<Color = Self::Color>,
     {
-        let mut chapter = FixedText::<48>::new();
-        write!(
-            chapter,
-            "CHAPTER {}/{}",
-            self.view.location.spine_index() + 1,
-            self.view.location.spine_count()
-        )
-        .ok();
-        Label::new(chapter.as_str(), TextRole::Metadata)
-            .at(self.origin + Point::new(378, 70))
-            .draw(target)?;
-        Label::new(self.view.chapter_title, TextRole::Metadata)
-            .at(self.origin + Point::new(18, 70))
-            .clipped_to(GraphicsSize::new(340, 15))
-            .draw(target)?;
-
         let body_clip = Rectangle::new(
             self.origin + Point::new(18, BODY_TOP as i32),
             GraphicsSize::new(BODY_WIDTH_PIXELS as u32, (BODY_BOTTOM - BODY_TOP) as u32),
@@ -413,7 +404,7 @@ mod tests {
         render_reader,
     };
     use crate::{
-        app::{App, AppEffect, AppInput, AppView, ReaderPreferences},
+        app::{App, AppEffect, AppInput, ReaderPreferences},
         image::{MonochromeImage, Size},
     };
 
@@ -433,10 +424,6 @@ mod tests {
         app.input(AppInput::Confirm);
         app.input(AppInput::Confirm);
         assert_eq!(app.chapter_loaded(1, 2).unwrap(), AppEffect::Render);
-        let AppView::Reader(session) = app.view() else {
-            panic!("reader view expected");
-        };
-        let location = session.location();
         let lines = [
             ReaderLine::new("Chapter one", ReaderStyle::Heading),
             ReaderLine::new("Readable words survive reflow.", ReaderStyle::Body),
@@ -450,7 +437,6 @@ mod tests {
                 "A Small Book",
                 "Chapter one",
                 &lines,
-                location,
                 app.reader_preferences(),
                 app.battery(),
             ),
@@ -463,15 +449,29 @@ mod tests {
     }
 
     #[test]
+    fn reading_chrome_is_absent_without_the_drawer() {
+        let mut bytes = vec![0; 48_000];
+        let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        render_reader(
+            ReaderView::new(
+                "A title that must stay hidden",
+                "A chapter that must stay hidden",
+                &[],
+                ReaderPreferences::default(),
+                crate::power::BatteryStatus::from_percent(82, crate::input::UsbState::Connected),
+            ),
+            &mut frame,
+        )
+        .unwrap();
+        assert!(bytes.iter().all(|byte| *byte == 0xff));
+    }
+
+    #[test]
     fn rejects_lines_that_exceed_the_bounded_body_region() {
         let mut app = App::new(1);
         app.input(AppInput::Confirm);
         app.input(AppInput::Confirm);
         assert_eq!(app.chapter_loaded(1, 1).unwrap(), AppEffect::Render);
-        let AppView::Reader(session) = app.view() else {
-            panic!("reader view expected");
-        };
-        let location = session.location();
         let line = ReaderLine::new("line", ReaderStyle::Body);
         let theme = super::ReaderTheme::from_preferences(app.reader_preferences());
         let lines = vec![line; (BODY_BOTTOM - BODY_TOP) / theme.line_height(line.style()) + 1];
@@ -484,7 +484,6 @@ mod tests {
                     "Book",
                     "Chapter",
                     &lines,
-                    location,
                     app.reader_preferences(),
                     app.battery(),
                 ),

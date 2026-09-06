@@ -85,7 +85,6 @@ fn application_frames_match_the_pinned_contract() {
         .unwrap();
     });
 
-    let location = reader_location();
     let lines = [
         ReaderLine::new("A Declarative Reader", ReaderStyle::Heading),
         ReaderLine::new("The body follows the heading.", ReaderStyle::Body),
@@ -97,7 +96,6 @@ fn application_frames_match_the_pinned_contract() {
                 "The First Book",
                 "Chapter One",
                 &lines,
-                location,
                 ReaderPreferences::default(),
                 battery,
             )),
@@ -120,7 +118,7 @@ fn application_frames_match_the_pinned_contract() {
 
     assert_frame("sleep", |target| {
         render_app(
-            AppFrame::Sleep(SleepView::built_in("HOME POSITION SAVED", battery)),
+            AppFrame::Sleep(SleepView::built_in("Position saved", battery)),
             target,
         )
         .unwrap();
@@ -225,22 +223,12 @@ fn storage_and_sleep_frames_match_the_pinned_contract() {
         });
     }
     assert_frame("sleep-cover", |target| {
-        render_app(
-            AppFrame::Sleep(SleepView::book_cover(
-                "The First Book",
-                "Author One",
-                "POSITION SAVED",
-                cover,
-                battery,
-            )),
-            target,
-        )
-        .unwrap();
+        render_app(AppFrame::Sleep(SleepView::book_cover(cover)), target).unwrap();
     });
     assert_frame("sleep-custom", |target| {
         let bytes = std::vec![0xAA; FRAME_BYTES];
         let bitmap = MonochromeBitmap::new(Size::new(WIDTH, HEIGHT).unwrap(), &bytes).unwrap();
-        render_app(AppFrame::Sleep(SleepView::custom(bitmap, battery)), target).unwrap();
+        render_app(AppFrame::Sleep(SleepView::custom(bitmap)), target).unwrap();
     });
 }
 
@@ -282,7 +270,8 @@ fn populated_shelf_and_settings_rows_match_the_pinned_contract() {
     }
 }
 
-fn reader_location() -> crate::app::ReadingLocation {
+#[test]
+fn reader_drawer_rows_match_the_pinned_contract() {
     let mut app = App::new(1);
     assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
     assert!(matches!(
@@ -290,10 +279,30 @@ fn reader_location() -> crate::app::ReadingLocation {
         AppEffect::LoadChapter { .. }
     ));
     assert_eq!(app.chapter_loaded(2, 3).unwrap(), AppEffect::Render);
-    let AppView::Reader(session) = app.view() else {
-        panic!("chapter load did not produce a reader view");
-    };
-    session.location()
+    app.input(AppInput::Confirm);
+    let lines = [ReaderLine::new("The page stays behind.", ReaderStyle::Body)];
+    for row in 0..crate::app::ReaderControl::ALL.len() {
+        let AppView::ReaderDrawer(drawer) = app.view() else {
+            panic!("drawer expected")
+        };
+        assert_frame(&std::format!("reader-drawer-{row}"), |target| {
+            render_app(
+                AppFrame::Reader(
+                    ReaderView::new(
+                        "The First Book",
+                        "Chapter one",
+                        &lines,
+                        app.reader_preferences(),
+                        app.battery(),
+                    )
+                    .with_drawer(drawer),
+                ),
+                target,
+            )
+            .unwrap();
+        });
+        app.input(AppInput::Move(crate::app::Direction::Down));
+    }
 }
 
 fn assert_frame(name: &str, render: impl FnOnce(&mut MonochromeImage<'_>)) {

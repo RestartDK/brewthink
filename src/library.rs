@@ -13,7 +13,7 @@ use crate::{
     app::LibraryState,
     image::{MonochromeBitmap, MonochromeImage, Size},
     power::BatteryStatus,
-    ui::{AppBar, FixedText, FrameTarget, Label, Selection, TextRole, ui},
+    ui::{AppBar, CommandBar, FixedText, FrameTarget, Label, Selection, TextRole, ui},
 };
 
 const FRAME_WIDTH: usize = 480;
@@ -88,18 +88,19 @@ pub fn render_shelf(
     let mut section = FixedText::<48>::new();
     write!(
         section,
-        "BOOKS  {} ITEM{}",
+        "Books  {} item{}",
         state.book_count(),
-        if state.book_count() == 1 { "" } else { "S" }
+        if state.book_count() == 1 { "" } else { "s" }
     )
     .ok();
     let mut display = FrameTarget::new(target);
     if books.is_empty() {
         ui!(
             AppBar::new(section.as_str(), battery),
-            Label::new("NO BOOKS FOUND", TextRole::Heading).at(Point::new(166, 342)),
+            Label::new("No books yet", TextRole::Heading).at(Point::new(120, 342)),
             Label::new("Add DRM-free EPUB files to /books", TextRole::Body)
-                .at(Point::new(135, 382)),
+                .at(Point::new(120, 382)),
+            CommandBar::new(["Home", "", "", ""]),
         )
         .draw(&mut display)
         .ok();
@@ -247,7 +248,7 @@ impl Drawable for CoverTile<'_> {
                 )
                 .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
                 .draw(target)?;
-                Label::new("NO COVER", TextRole::Metadata)
+                Label::new("No cover", TextRole::Metadata)
                     .at(self.top_left + Point::new(62, 127))
                     .draw(target)?;
             }
@@ -331,12 +332,7 @@ impl Drawable for ShelfFooter<'_> {
         Label::new(page.as_str(), TextRole::Metadata)
             .at(self.top_left + Point::new(376, 73))
             .draw(target)?;
-        Label::new(
-            "ARROWS  MOVE     CONFIRM  OPEN     BACK  HOME",
-            TextRole::CommandHint,
-        )
-        .at(self.top_left + Point::new(0, 118))
-        .draw(target)
+        CommandBar::new(["Home", "Read", "Left", "Right"]).draw(target)
     }
 }
 

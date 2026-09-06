@@ -165,6 +165,14 @@ Builds, flashes, and serial monitors run in dedicated herdr tabs. Past sessions 
 - `espflash monitor` never exits. Watch only for the specific bench marker you need, then move on. When the task ends, C-c the monitor and close its tab.
 - For output that matters, grep the tee'd log with the bash tool instead of re-reading scrollback.
 
+## UI iteration and captures
+
+- Iterate on UI through the hot-reloading web simulator. Do not flash or control the embedded device as the UI iteration loop.
+- Keep one simulator server and one browser session for visual iteration.
+- Capture the canvas bitmap at its native 480 × 800 resolution. Use the simulator's Save frame PNG button or `web/tests/capture-frame.ts`.
+- Do not use CSS-scaled canvas screenshots as pixel-level evidence. Fractional downscaling drops bitmap glyph strokes.
+- Inspect final native captures before reporting visual results. Use full-page browser screenshots only for simulator layout checks.
+
 ## External references to inspect
 
 Local docs first:

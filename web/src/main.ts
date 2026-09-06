@@ -14,8 +14,8 @@ const APP_PREFERENCES_KEY = "brewthink.reader-preferences.v1";
 const SLEEP_IMAGE_KEY = "brewthink.sleep-image.v1";
 const INVALID_APP_PREFERENCES = 0xffff_ffff;
 const NO_SLEEP_IMAGE = 0xffff_ffff;
-const INK_SHADE = { red: 27, green: 27, blue: 24 };
-const PAPER_SHADE = { red: 230, green: 227, blue: 211 };
+const INK_SHADE = { red: 0, green: 0, blue: 0 };
+const PAPER_SHADE = { red: 255, green: 255, blue: 255 };
 const integerFormat = new Intl.NumberFormat("en-US");
 
 type Screen =
@@ -24,6 +24,7 @@ type Screen =
   | "files"
   | "settings"
   | "reader"
+  | "reader-drawer"
   | "image"
   | "sleep"
   | "error";
@@ -71,9 +72,10 @@ app.innerHTML = `
           <p class="eyebrow">Shared application frame</p>
           <h1 id="preview-heading">Starting · 480 × 800</h1>
         </div>
-        <span class="rotation-label">X4 portrait view</span>
+        <button class="text-button" id="save-frame" type="button" disabled>Save frame PNG</button>
       </div>
 
+      <div class="device-viewport" tabindex="0" role="region" aria-label="Native-size display preview, scroll to inspect">
       <div class="reader" aria-label="Xteink X4 display preview">
         <div class="reader-brand" aria-hidden="true">XTEINK</div>
         <div class="display-bezel">
@@ -92,8 +94,9 @@ app.innerHTML = `
         </div>
         <div class="reader-footer" aria-hidden="true">
           <span>480 × 800</span>
-          <span>1-BIT E-PAPER</span>
+          <span>Native pixels · 1-bit e-paper</span>
         </div>
+      </div>
       </div>
     </section>
 
@@ -200,6 +203,7 @@ const selectionPosition = requireElement("#selection-position");
 const pageLabel = requireElement("#page-label");
 const viewPosition = requireElement("#view-position");
 const resetButton = requireButton("#reset-library");
+const saveFrameButton = requireButton("#save-frame");
 const confirmButton = requireButton("#confirm-selection");
 const confirmLabel = requireElement("#confirm-label");
 const confirmHint = requireElement("#confirm-hint");
@@ -260,6 +264,14 @@ resetButton.addEventListener("click", () => {
     WebLibrary.withPreferences(readStoredPreferences(), readStoredSleepImage()),
     "Built-in public-domain sample",
   );
+});
+
+saveFrameButton.addEventListener("click", () => {
+  if (viewState.kind !== "ready") return;
+  const link = document.createElement("a");
+  link.href = canvas.toDataURL("image/png");
+  link.download = `brewthink-${viewState.screen}-480x800.png`;
+  link.click();
 });
 
 confirmButton.addEventListener("click", () => sendInput(WebInput.Confirm));
@@ -386,6 +398,7 @@ function renderState(): void {
     viewState.kind === "booting" ||
     viewState.kind === "rendering" ||
     (isReady && sourceName === "Built-in public-domain sample");
+  saveFrameButton.disabled = !isReady;
   confirmButton.disabled = !isReady || screen === "sleep" || screen === "error";
   backButton.disabled = !isReady || screen === "home" || screen === "sleep";
   powerButton.disabled = !isReady || screen === "error";
@@ -479,10 +492,10 @@ function renderReadyState(state: Extract<ViewState, { kind: "ready" }>): void {
       selectionPosition.textContent = `${state.selected + 1} / ${state.itemCount}`;
       pageLabel.textContent = "Current value";
       viewPosition.textContent = state.creator;
-      confirmLabel.textContent = state.title === "APPLY SETTINGS" ? "Apply" : "Next value";
+      confirmLabel.textContent = state.title === "Save settings" ? "Apply" : "Next value";
       confirmHint.textContent = "Left and Right also change";
       message.textContent =
-        "Reader typography changes pagination and rendering. The Brewthink wordmark stays fixed.";
+        "Side buttons choose a row. Left and Right change values. Save settings applies them.";
       canvas.setAttribute(
         "aria-label",
         `Brewthink reader settings. Selected: ${state.title}. Value: ${state.creator}.`,
@@ -503,14 +516,24 @@ function renderReadyState(state: Extract<ViewState, { kind: "ready" }>): void {
       selectionPosition.textContent = `Chapter ${state.chapter + 1} / ${state.chapterCount}`;
       pageLabel.textContent = "Chapter page";
       viewPosition.textContent = `${state.page + 1} / ${state.pageCount}`;
-      confirmLabel.textContent = "Next page";
-      confirmHint.textContent = "Right and Down also turn";
+      confirmLabel.textContent = "Reading controls";
+      confirmHint.textContent = "Pages, chapters, and typography";
       message.textContent =
         "Sleep restores the page. Typography changes reflow the chapter around its saved progress.";
       canvas.setAttribute(
         "aria-label",
         `${state.title} reader. Chapter ${state.chapter + 1} of ${state.chapterCount}, page ${state.page + 1} of ${state.pageCount}.`,
       );
+      break;
+    case "reader-drawer":
+      previewHeading.textContent = "Reading controls · 480 × 800";
+      selectionPosition.textContent = `Chapter ${state.chapter + 1} / ${state.chapterCount}`;
+      pageLabel.textContent = "Chapter page";
+      viewPosition.textContent = `${state.page + 1} / ${state.pageCount}`;
+      confirmLabel.textContent = "Apply";
+      confirmHint.textContent = "Confirm changes and return to reading";
+      message.textContent = "Up and Down choose a row. Left and Right adjust. Confirm applies, Back cancels.";
+      canvas.setAttribute("aria-label", `${state.title} reading controls. Selected row: ${state.creator}.`);
       break;
     case "sleep":
       previewHeading.textContent = "Retained sleep screen · 480 × 800";
@@ -581,6 +604,7 @@ function parseScreen(value: string): Screen {
     value === "files" ||
     value === "settings" ||
     value === "reader" ||
+    value === "reader-drawer" ||
     value === "image" ||
     value === "sleep" ||
     value === "error"
@@ -591,7 +615,7 @@ function parseScreen(value: string): Screen {
 }
 
 function drawPaper(target: CanvasRenderingContext2D): void {
-  target.fillStyle = "rgb(230 227 211)";
+  target.fillStyle = "rgb(255 255 255)";
   target.fillRect(0, 0, WIDTH, HEIGHT);
 }
 

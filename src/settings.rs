@@ -35,9 +35,9 @@ pub enum CustomImagePreview<'a> {
 impl CustomImagePreview<'_> {
     const fn label(self) -> &'static str {
         match self {
-            Self::Missing => "NO IMAGE",
-            Self::Invalid => "INVALID IMAGE",
-            Self::Ready { .. } => "IMAGE READY",
+            Self::Missing => "No image",
+            Self::Invalid => "Invalid image",
+            Self::Ready { .. } => "Image ready",
         }
     }
 }
@@ -66,7 +66,7 @@ pub fn render_settings(
     let preferences = state.draft();
     let mut row_views = SettingsItem::ALL.map(|item| {
         SettingsRow::new(
-            item.label(),
+            item,
             item.value(preferences),
             Selection::from_selected(item == selected),
         )
@@ -76,19 +76,33 @@ pub fn render_settings(
         .arrange()
         .translate(Point::new(CONTENT_LEFT, 92));
     let screen = ui!(
-        AppBar::new("SETTINGS", battery),
+        AppBar::new("Settings", battery),
         rows,
         SettingsPreview {
             state,
             custom_image,
             top_left: Point::new(CONTENT_LEFT, 416),
         },
-        CommandBar::new("UP/DOWN  ROW     LEFT/RIGHT  CHANGE     BACK  CANCEL").at(
-            CONTENT_LEFT,
-            CONTENT_WIDTH,
-            710,
-            730,
-        ),
+        Label::new("Side buttons: choose a row", TextRole::Metadata)
+            .at(Point::new(CONTENT_LEFT, 714)),
+        CommandBar::new([
+            "Cancel",
+            if selected == SettingsItem::Apply {
+                "Save"
+            } else {
+                "Change"
+            },
+            if selected == SettingsItem::Apply {
+                ""
+            } else {
+                "Decrease"
+            },
+            if selected == SettingsItem::Apply {
+                ""
+            } else {
+                "Increase"
+            }
+        ]),
     );
     screen.draw(&mut FrameTarget::new(target)).ok();
     Ok(())
@@ -123,12 +137,12 @@ impl Drawable for SettingsPreview<'_> {
         let mode = self.state.draft().sleep_screen();
         let heading = if sleep_preview {
             match mode {
-                SleepScreenMode::Automatic => "SLEEP PREVIEW  COVER IN READER, CUSTOM ELSEWHERE",
-                SleepScreenMode::Custom => "SLEEP PREVIEW  CUSTOM IMAGE",
-                SleepScreenMode::BookCover => "SLEEP PREVIEW  CURRENT BOOK COVER",
+                SleepScreenMode::Automatic => "Sleep preview: cover in reader, image elsewhere",
+                SleepScreenMode::Custom => "Sleep preview: custom image",
+                SleepScreenMode::BookCover => "Sleep preview: book cover",
             }
         } else {
-            "READER PREVIEW"
+            "Reader preview"
         };
         Label::new(heading, TextRole::Body)
             .at(self.top_left)
@@ -228,8 +242,8 @@ mod tests {
             &mut image,
         )
         .unwrap();
-        assert!(image.pixel_is_black(18, 58));
-        assert!(image.pixel_is_black(18, 92));
-        assert!(image.pixel_is_black(18, 326));
+        assert!(!image.pixel_is_black(18, 58));
+        assert!(image.pixel_is_black(24, 274));
+        assert!(!image.pixel_is_black(24, 106));
     }
 }

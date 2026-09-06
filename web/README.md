@@ -10,9 +10,22 @@ bun install
 bun run dev
 ```
 
-The built-in catalog uses public-domain titles and generated covers. Choose or drop a DRM-free EPUB to parse its package metadata and show its declared cover in the first shelf slot. The app opens on Home. Books shows the cover shelf, Files shows source EPUB names and sizes, and Settings changes the reader font, text size, and line spacing. Applied reader settings persist in browser storage. Use the on-screen direction pad or keyboard arrows to move and change values.
+The built-in catalog uses public-domain titles and generated covers. Choose or drop a DRM-free EPUB to parse its package metadata and show its declared cover in the first shelf slot. The app opens on Home. Books shows the cover shelf, Files shows source EPUB names and sizes, and Settings changes the reader font, text size, and line spacing. Applied reader settings persist in browser storage. Use the on-screen controls or keyboard arrows to move and change values. In Reader, Confirm opens a drawer for page jumps, chapter selection, and typography. Up and Down choose a row. Left and Right change its value. Confirm applies it; Back cancels.
 
 `bun run dev` watches both sides of the simulator. Vite hot-reloads TypeScript and CSS. Changes to Rust source, Cargo inputs, or the WASM build script trigger an incremental WASM rebuild and a full browser reload. A failed Rust build leaves the last generated module in place and reports the error in the terminal.
+
+## Capture native pixels
+
+Use **Save frame PNG** to export the exact 480 × 800 canvas bitmap. The preview also renders at native size. On narrow screens, scroll the preview rather than shrinking the device pixels.
+
+For UI iteration, keep `bun run dev` running and use its Rust hot reload. Do not use the physical device as the iteration loop. Do not judge bitmap text from CSS-scaled element screenshots.
+
+The Playwright walkthrough uses `tests/capture-frame.ts` to validate opaque black-and-white pixels and export them without resizing.
+
+```bash
+BREWTHINK_WALKTHROUGH_DIR=../artifacts/ui-walkthrough bun run test:e2e
+python3 ../scripts/render-ui-fixtures.py
+```
 
 ## Verify
 

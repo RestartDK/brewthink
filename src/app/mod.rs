@@ -1,5 +1,8 @@
 use crate::power::{BatteryLevel, BatteryStatus};
 
+#[cfg(test)]
+mod reader_drawer_tests;
+
 const BOOKS_PER_SHELF_PAGE: usize = 4;
 const SHELF_COLUMNS: usize = 2;
 const BATTERY_REFRESH_PERCENT_DELTA: u8 = 5;
@@ -159,9 +162,9 @@ impl HomeItem {
 
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Books => "BOOKS",
-            Self::Files => "FILES",
-            Self::Settings => "SETTINGS",
+            Self::Books => "Books",
+            Self::Files => "Files",
+            Self::Settings => "Settings",
         }
     }
 }
@@ -310,9 +313,9 @@ impl ReaderFont {
 
     pub const fn label(self) -> &'static str {
         match self {
-            Self::NotoSerif => "NOTO SERIF",
-            Self::Compact => "COMPACT",
-            Self::Mono => "MONO",
+            Self::NotoSerif => "Noto Serif",
+            Self::Compact => "Compact",
+            Self::Mono => "Mono",
         }
     }
 
@@ -346,9 +349,9 @@ impl ReaderFontSize {
 
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Small => "SMALL",
-            Self::Medium => "MEDIUM",
-            Self::Large => "LARGE",
+            Self::Small => "Small",
+            Self::Medium => "Medium",
+            Self::Large => "Large",
         }
     }
 
@@ -382,9 +385,9 @@ impl ReaderSpacing {
 
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Compact => "COMPACT",
-            Self::Normal => "NORMAL",
-            Self::Relaxed => "RELAXED",
+            Self::Compact => "Compact",
+            Self::Normal => "Normal",
+            Self::Relaxed => "Relaxed",
         }
     }
 
@@ -493,9 +496,9 @@ impl SleepScreenMode {
 
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Automatic => "AUTOMATIC",
-            Self::Custom => "CUSTOM IMAGE",
-            Self::BookCover => "BOOK COVER",
+            Self::Automatic => "Automatic",
+            Self::Custom => "Custom image",
+            Self::BookCover => "Book cover",
         }
     }
 
@@ -589,11 +592,11 @@ impl SettingsItem {
 
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Font => "FONT",
-            Self::Size => "TEXT SIZE",
-            Self::Spacing => "LINE SPACING",
-            Self::SleepScreen => "SLEEP SCREEN",
-            Self::Apply => "APPLY SETTINGS",
+            Self::Font => "Font",
+            Self::Size => "Text size",
+            Self::Spacing => "Line spacing",
+            Self::SleepScreen => "Sleep screen",
+            Self::Apply => "Save settings",
         }
     }
 
@@ -769,6 +772,109 @@ impl ReadingSession {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum ReaderControl {
+    Page,
+    Chapter,
+    Font,
+    Size,
+    Spacing,
+}
+
+impl ReaderControl {
+    pub const ALL: [Self; 5] = [
+        Self::Page,
+        Self::Chapter,
+        Self::Font,
+        Self::Size,
+        Self::Spacing,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Page => "Page in chapter",
+            Self::Chapter => "Chapter",
+            Self::Font => "Font",
+            Self::Size => "Text size",
+            Self::Spacing => "Line spacing",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReaderDrawer {
+    session: ReadingSession,
+    selected: ReaderControl,
+    page: usize,
+    chapter: usize,
+    preferences: ReaderPreferences,
+}
+
+impl ReaderDrawer {
+    pub const fn new(session: ReadingSession, preferences: ReaderPreferences) -> Self {
+        Self {
+            session,
+            selected: ReaderControl::Page,
+            page: session.location.page_index,
+            chapter: session.location.spine_index,
+            preferences,
+        }
+    }
+
+    pub const fn session(self) -> ReadingSession {
+        self.session
+    }
+    pub const fn selected(self) -> ReaderControl {
+        self.selected
+    }
+    pub const fn page(self) -> usize {
+        self.page
+    }
+    pub const fn chapter(self) -> usize {
+        self.chapter
+    }
+    pub const fn preferences(self) -> ReaderPreferences {
+        self.preferences
+    }
+
+    fn input(&mut self, direction: Direction) {
+        if matches!(direction, Direction::Up | Direction::Down) {
+            let index = self.selected as usize;
+            let next = if direction == Direction::Up {
+                index.saturating_sub(1)
+            } else {
+                (index + 1).min(ReaderControl::ALL.len() - 1)
+            };
+            self.selected = ReaderControl::ALL[next];
+            return;
+        }
+        match self.selected {
+            ReaderControl::Page => {
+                let count = self.session.location.page_count;
+                let step = count.div_ceil(20);
+                self.page = if direction == Direction::Left {
+                    self.page.saturating_sub(step)
+                } else {
+                    self.page.saturating_add(step).min(count - 1)
+                };
+            }
+            ReaderControl::Chapter => {
+                self.chapter = if direction == Direction::Left {
+                    self.chapter.saturating_sub(1)
+                } else {
+                    (self.chapter + 1).min(self.session.location.spine_count - 1)
+                };
+            }
+            ReaderControl::Font => self.preferences.font = self.preferences.font.next(direction),
+            ReaderControl::Size => self.preferences.size = self.preferences.size.next(direction),
+            ReaderControl::Spacing => {
+                self.preferences.spacing = self.preferences.spacing.next(direction)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResumePoint {
     Home {
         selected: HomeItem,
@@ -802,6 +908,7 @@ pub enum AppView {
     Settings(SettingsState),
     Loading(PendingChapter),
     Reader(ReadingSession),
+    ReaderDrawer(ReaderDrawer),
     Image(ImageId),
     Error { book: BookId, origin: BookOrigin },
     Sleeping { resume: ResumePoint },
@@ -1165,7 +1272,7 @@ impl App {
 
     fn current_render_effect(&self) -> AppEffect {
         match self.view {
-            AppView::Loading(_) => AppEffect::None,
+            AppView::Loading(_) | AppView::Reader(_) | AppView::Sleeping { .. } => AppEffect::None,
             _ => AppEffect::Render,
         }
     }
@@ -1185,12 +1292,14 @@ impl App {
                 selected: settings.selected,
                 draft: settings.draft,
             },
-            AppView::Reader(session) => ResumePoint::Reader {
-                book: session.location.book,
-                spine_index: session.location.spine_index,
-                page_index: session.location.page_index,
-                origin: session.origin,
-            },
+            AppView::Reader(session) | AppView::ReaderDrawer(ReaderDrawer { session, .. }) => {
+                ResumePoint::Reader {
+                    book: session.location.book,
+                    spine_index: session.location.spine_index,
+                    page_index: session.location.page_index,
+                    origin: session.origin,
+                }
+            }
             AppView::Image(image) => ResumePoint::Image { image },
             AppView::Sleeping { resume } => resume,
             AppView::Loading(pending) => self.origin_resume(pending.origin),
@@ -1266,8 +1375,28 @@ impl App {
                 AppEffect::Render
             }
             (AppView::Settings(_), AppInput::Back) => self.return_home(HomeItem::Settings),
-            (AppView::Reader(session), AppInput::Move(Direction::Right | Direction::Down))
-            | (AppView::Reader(session), AppInput::Confirm) => self.next_page(session),
+            (AppView::Reader(session), AppInput::Move(Direction::Right | Direction::Down)) => {
+                self.next_page(session)
+            }
+            (AppView::Reader(session), AppInput::Confirm) => {
+                self.view =
+                    AppView::ReaderDrawer(ReaderDrawer::new(session, self.reader_preferences()));
+                AppEffect::Render
+            }
+            (AppView::ReaderDrawer(mut drawer), AppInput::Move(direction)) => {
+                let previous = drawer;
+                drawer.input(direction);
+                if drawer == previous {
+                    return AppEffect::None;
+                }
+                self.view = AppView::ReaderDrawer(drawer);
+                AppEffect::Render
+            }
+            (AppView::ReaderDrawer(drawer), AppInput::Confirm) => self.apply_reader_drawer(drawer),
+            (AppView::ReaderDrawer(drawer), AppInput::Back) => {
+                self.view = AppView::Reader(drawer.session);
+                AppEffect::Render
+            }
             (AppView::Reader(session), AppInput::Move(Direction::Left | Direction::Up)) => {
                 self.previous_page(session)
             }
@@ -1436,6 +1565,43 @@ impl App {
             ),
             None => self.request_chapter(book, 0, PageTarget::First, origin),
         }
+    }
+
+    fn apply_reader_drawer(&mut self, drawer: ReaderDrawer) -> AppEffect {
+        let location = drawer.session.location;
+        let typography_changed = drawer.preferences != self.reader_preferences();
+        self.preferences = self.preferences.with_reader(drawer.preferences);
+        if drawer.selected == ReaderControl::Chapter && drawer.chapter != location.spine_index {
+            return self.request_chapter(
+                location.book,
+                drawer.chapter,
+                PageTarget::First,
+                drawer.session.origin,
+            );
+        }
+        let page_index = if drawer.selected == ReaderControl::Page {
+            drawer.page
+        } else {
+            location.page_index
+        };
+        if typography_changed {
+            return self.request_chapter(
+                location.book,
+                location.spine_index,
+                PageTarget::Progress {
+                    page_index,
+                    page_count: location.page_count,
+                },
+                drawer.session.origin,
+            );
+        }
+        self.set_reading_session(
+            ReadingLocation {
+                page_index,
+                ..location
+            },
+            drawer.session.origin,
+        )
     }
 
     fn next_page(&mut self, session: ReadingSession) -> AppEffect {

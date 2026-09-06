@@ -153,12 +153,6 @@ impl DeviceLibrary {
             .map_or("Unknown title", FixedString::as_str)
     }
 
-    fn creator(&self, book: BookId) -> &str {
-        self.creators
-            .get(book.index())
-            .map_or("Unknown creator", FixedString::as_str)
-    }
-
     fn cover_path(&self, book: BookId) -> Option<&str> {
         self.cover_paths
             .get(book.index())
@@ -947,6 +941,16 @@ fn write_control_status(app: &App) {
         AppView::Loading(_) => {
             esp_println::println!("BREWCTL/1 STATUS view=loading");
         }
+        AppView::ReaderDrawer(drawer) => {
+            let location = drawer.session().location();
+            esp_println::println!(
+                "BREWCTL/1 STATUS view=reader-drawer book={} spine={} page={} pages={}",
+                location.book().index(),
+                location.spine_index(),
+                location.page_index(),
+                location.page_count()
+            );
+        }
         AppView::Reader(session) => {
             let location = session.location();
             esp_println::println!(
@@ -1195,8 +1199,12 @@ fn run_effect(
                     return Ok(None);
                 }
                 AppView::Loading(_) => return Err("reader render requested while loading"),
-                AppView::Reader(session) => {
-                    let location = session.location();
+                AppView::Reader(_) | AppView::ReaderDrawer(_) => {
+                    let location = match app.view() {
+                        AppView::Reader(session) => session.location(),
+                        AppView::ReaderDrawer(drawer) => drawer.session().location(),
+                        _ => unreachable!(),
+                    };
                     esp_println::println!(
                         "BREWCTL/1 LOG stage=render-reader state=start book={} spine={} page={}",
                         location.book().index(),
@@ -1641,14 +1649,16 @@ fn render_page(
         lines[line_count] = ReaderLine::new(line.text(), line.style());
         line_count += 1;
     }
-    let view = ReaderView::new(
+    let mut view = ReaderView::new(
         library.title(location.book()),
         page.chapter_title(),
         &lines[..line_count],
-        location,
         app.reader_preferences(),
         app.battery(),
     );
+    if let AppView::ReaderDrawer(drawer) = app.view() {
+        view = view.with_drawer(drawer);
+    }
     let mut image = MonochromeImage::new(frame_size(), frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
     render_app(AppFrame::Reader(view), &mut image).map_err(|_| "reader page render failed")
@@ -1670,25 +1680,25 @@ fn render_sleep_frame(
             ..
         } => write!(
             status,
-            "SAVED  CHAPTER {}  PAGE {}",
+            "Saved chapter {}  page {}",
             spine_index + 1,
             page_index + 1
         )
         .map_err(|_| "reader sleep status overflowed")?,
         ResumePoint::Home { .. } => status
-            .push_str("HOME POSITION SAVED")
+            .push_str("Home position saved")
             .map_err(|_| "reader sleep status overflowed")?,
         ResumePoint::Books { .. } => status
-            .push_str("BOOKS POSITION SAVED")
+            .push_str("Books position saved")
             .map_err(|_| "reader sleep status overflowed")?,
         ResumePoint::Files { .. } => status
-            .push_str("FILES POSITION SAVED")
+            .push_str("Files position saved")
             .map_err(|_| "reader sleep status overflowed")?,
         ResumePoint::Settings { .. } => status
-            .push_str("SETTINGS POSITION SAVED")
+            .push_str("Settings position saved")
             .map_err(|_| "reader sleep status overflowed")?,
         ResumePoint::Image { .. } => status
-            .push_str("IMAGE POSITION SAVED")
+            .push_str("Image position saved")
             .map_err(|_| "reader sleep status overflowed")?,
     }
 
@@ -1714,13 +1724,7 @@ fn render_sleep_frame(
                 let mut image = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
                     .map_err(|_| "reader frame buffer has the wrong size")?;
                 return render_app(
-                    AppFrame::Sleep(SleepView::book_cover(
-                        library.title(book),
-                        library.creator(book),
-                        status.as_str(),
-                        bitmap(workspaces.cover),
-                        app.battery(),
-                    )),
+                    AppFrame::Sleep(SleepView::book_cover(bitmap(workspaces.cover))),
                     &mut image,
                 )
                 .map_err(|_| "reader sleep frame render failed");

@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
-import { mkdir, stat, utimes } from "node:fs/promises";
+import { mkdir, readFile, stat, utimes } from "node:fs/promises";
+import { captureFrame } from "./capture-frame";
 import path from "node:path";
 
 const fixturePath = path.resolve("tests/fixtures/minimal.epub");
@@ -24,7 +25,7 @@ test("runs the complete library, reader, sleep, wake, and resume loop", async ({
   await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
   await expect(page.locator("#display-placeholder")).toBeHidden();
   await expect(page.locator("#preview-heading")).toHaveText("Home menu · 480 × 800");
-  await expect(page.locator("#selected-title")).toHaveText("BOOKS");
+  await expect(page.locator("#selected-title")).toHaveText("Books");
   await expect(page.locator("#selected-creator")).toHaveText("Primary menu");
   await expect(page.locator("#selection-position")).toHaveText("1 / 3");
   await expect(page.locator("#display")).toHaveAttribute("width", "480");
@@ -41,10 +42,10 @@ test("runs the complete library, reader, sleep, wake, and resume loop", async ({
   await page.keyboard.press("Enter");
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
   await expect(page.locator("#selection-position")).toHaveText("Chapter 1 / 3");
-  await expect(page.locator("#view-position")).toHaveText("1 / 9");
+  await expect(page.locator("#view-position")).toHaveText("1 / 8");
 
   await page.keyboard.press("ArrowRight");
-  await expect(page.locator("#view-position")).toHaveText("2 / 9");
+  await expect(page.locator("#view-position")).toHaveText("2 / 8");
   await page.keyboard.press("p");
   await expect(page.locator("#preview-heading")).toHaveText(
     "Retained sleep screen · 480 × 800",
@@ -54,7 +55,7 @@ test("runs the complete library, reader, sleep, wake, and resume loop", async ({
 
   await page.getByRole("button", { name: "Wake", exact: true }).click();
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
-  await expect(page.locator("#view-position")).toHaveText("2 / 9");
+  await expect(page.locator("#view-position")).toHaveText("2 / 8");
   await page.keyboard.press("Escape");
   await expect(page.locator("#preview-heading")).toHaveText("Library shelf · 480 × 800");
   await expect(page.locator("#selected-title")).toHaveText("Frankenstein");
@@ -97,7 +98,7 @@ test("parses an EPUB, renders its cover, and opens its spine text", async ({ pag
 
   const screenshotPath = process.env.BREWTHINK_SCREENSHOT;
   if (screenshotPath !== undefined) {
-    await page.screenshot({ path: screenshotPath, fullPage: true });
+    await captureFrame(page, screenshotPath);
   }
 });
 
@@ -123,7 +124,7 @@ test("reports invalid EPUB input without losing the simulator", async ({ page })
   await expect(page.locator("#message")).toContainText("InvalidZip");
   await expect(page.locator("#display-placeholder")).toBeVisible();
   await page.getByRole("button", { name: "Reset sample" }).click();
-  await expect(page.locator("#selected-title")).toHaveText("BOOKS");
+  await expect(page.locator("#selected-title")).toHaveText("Books");
   await expect(page.locator("#display-placeholder")).toBeHidden();
 });
 
@@ -140,38 +141,38 @@ test("opens files and applies reader typography settings", async ({ page }) => {
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
   await expect(page.locator("#preview-heading")).toHaveText("Reader settings · 480 × 800");
-  await expect(page.locator("#view-position")).toHaveText("NOTO SERIF");
+  await expect(page.locator("#view-position")).toHaveText("Noto Serif");
   await page.keyboard.press("ArrowRight");
-  await expect(page.locator("#view-position")).toHaveText("COMPACT");
+  await expect(page.locator("#view-position")).toHaveText("Compact");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowRight");
-  await expect(page.locator("#view-position")).toHaveText("LARGE");
+  await expect(page.locator("#view-position")).toHaveText("Large");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowRight");
-  await expect(page.locator("#view-position")).toHaveText("RELAXED");
+  await expect(page.locator("#view-position")).toHaveText("Relaxed");
   await page.keyboard.press("ArrowDown");
-  await expect(page.locator("#view-position")).toHaveText("AUTOMATIC");
+  await expect(page.locator("#view-position")).toHaveText("Automatic");
   await page.keyboard.press("ArrowRight");
-  await expect(page.locator("#view-position")).toHaveText("CUSTOM IMAGE");
+  await expect(page.locator("#view-position")).toHaveText("Custom image");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
   await expect(page.locator("#preview-heading")).toHaveText("Home menu · 480 × 800");
   await page.keyboard.press("Enter");
-  await expect(page.locator("#view-position")).toHaveText("COMPACT");
+  await expect(page.locator("#view-position")).toHaveText("Compact");
   await page.keyboard.press("Escape");
   await page.keyboard.press("ArrowUp");
   await page.keyboard.press("ArrowUp");
   await page.keyboard.press("Enter");
   await page.keyboard.press("Enter");
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
-  await expect(page.locator("#view-position")).toHaveText("1 / 3");
+  await expect(page.locator("#view-position")).toHaveText("1 / 2");
 
   await page.reload();
   await expect(page.locator("#preview-heading")).toHaveText("Home menu · 480 × 800");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
-  await expect(page.locator("#view-position")).toHaveText("COMPACT");
+  await expect(page.locator("#view-position")).toHaveText("Compact");
 });
 
 test("opens and selects images from Files", async ({ page }) => {
@@ -220,7 +221,7 @@ test("keeps the reader simulator usable at a narrow viewport", async ({ page }) 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
   await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
-  await expect(page.locator("#selected-title")).toHaveText("BOOKS");
+  await expect(page.locator("#selected-title")).toHaveText("Books");
   await page.keyboard.press("Enter");
   await page.keyboard.press("Enter");
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
@@ -241,35 +242,23 @@ test("captures the app-shell visual walkthrough", async ({ page }) => {
   await mkdir(walkthroughDirectory, { recursive: true });
   await page.goto("/");
   await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
-  await page.screenshot({
-    path: path.join(walkthroughDirectory, "01-home.png"),
-    fullPage: true,
-  });
+  await captureFrame(page, path.join(walkthroughDirectory, "01-home.png"));
 
   await page.keyboard.press("Enter");
   await expect(page.locator("#preview-heading")).toHaveText("Library shelf · 480 × 800");
-  await page.screenshot({
-    path: path.join(walkthroughDirectory, "02-books.png"),
-    fullPage: true,
-  });
+  await captureFrame(page, path.join(walkthroughDirectory, "02-books.png"));
 
   await page.keyboard.press("Escape");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
   await expect(page.locator("#preview-heading")).toHaveText("File browser · 480 × 800");
-  await page.screenshot({
-    path: path.join(walkthroughDirectory, "03-files.png"),
-    fullPage: true,
-  });
+  await captureFrame(page, path.join(walkthroughDirectory, "03-files.png"));
 
   await page.keyboard.press("Escape");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
-  await expect(page.locator("#view-position")).toHaveText("NOTO SERIF");
-  await page.screenshot({
-    path: path.join(walkthroughDirectory, "04-settings.png"),
-    fullPage: true,
-  });
+  await expect(page.locator("#view-position")).toHaveText("Noto Serif");
+  await captureFrame(page, path.join(walkthroughDirectory, "04-settings.png"));
 
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
@@ -281,19 +270,79 @@ test("captures the app-shell visual walkthrough", async ({ page }) => {
   await page.keyboard.press("Enter");
   await page.keyboard.press("Enter");
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
-  await page.screenshot({
-    path: path.join(walkthroughDirectory, "05-reader.png"),
-    fullPage: true,
-  });
+  await captureFrame(page, path.join(walkthroughDirectory, "05-reader.png"));
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#preview-heading")).toHaveText("Reading controls · 480 × 800");
+  await captureFrame(page, path.join(walkthroughDirectory, "06-drawer.png"));
+  await page.keyboard.press("Escape");
 
   await page.keyboard.press("p");
   await expect(page.locator("#preview-heading")).toHaveText(
     "Retained sleep screen · 480 × 800",
   );
-  await page.screenshot({
-    path: path.join(walkthroughDirectory, "06-sleep.png"),
-    fullPage: true,
-  });
+  await captureFrame(page, path.join(walkthroughDirectory, "07-sleep.png"));
+});
+
+test("opens the drawer, stages page and chapter jumps, and reflows typography", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+  const original = await page.locator("#view-position").textContent();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#preview-heading")).toHaveText("Reading controls · 480 × 800");
+  await expect(page.locator("#view-position")).toHaveText(original ?? "");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator("#view-position")).toHaveText("2 / 8");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
+  await expect(page.locator("#view-position")).toHaveText(original ?? "");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#view-position")).toHaveText("2 / 8");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator("#selected-creator")).toHaveText("Chapter");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#selection-position")).toHaveText("Chapter 2 / 3");
+  await expect(page.locator("#view-position")).toHaveText("1 / 8");
+  await page.keyboard.press("Enter");
+  for (let row = 0; row < 3; row += 1) await page.keyboard.press("ArrowDown");
+  await expect(page.locator("#selected-creator")).toHaveText("Text size");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
+  await expect(page.locator("#view-position")).not.toHaveText("1 / 8");
+  const applied = await page.evaluate(() => localStorage.getItem("brewthink.reader-preferences.v1"));
+  await page.reload();
+  expect(await page.evaluate(() => localStorage.getItem("brewthink.reader-preferences.v1"))).toBe(applied);
+});
+
+test("exports exact native pixels independently of viewport and browser scaling", async ({ page }, testInfo) => {
+  for (const width of [390, 1440]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.goto("/");
+    await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
+    const size = await page.locator("#display").evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      return { width: bounds.width, height: bounds.height };
+    });
+    expect(size).toEqual({ width: 480, height: 800 });
+    const expectedPath = testInfo.outputPath(`native-${width}.png`);
+    await captureFrame(page, expectedPath);
+    const downloadReady = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Save frame PNG" }).click();
+    const download = await downloadReady;
+    expect(download.suggestedFilename()).toBe("brewthink-home-480x800.png");
+    const savedPath = testInfo.outputPath(`download-${width}.png`);
+    await download.saveAs(savedPath);
+    const saved = await readFile(savedPath);
+    expect(saved.equals(await readFile(expectedPath))).toBe(true);
+    expect(saved.readUInt32BE(16)).toBe(480);
+    expect(saved.readUInt32BE(20)).toBe(800);
+  }
 });
 
 test("rebuilds WASM and reloads after a Rust change", async ({ page }) => {

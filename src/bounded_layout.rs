@@ -4,7 +4,7 @@ use crate::{
     reader::{ReaderStyle, ReaderTheme},
 };
 
-pub const MAX_PAGE_LINES: usize = 50;
+pub use crate::reader::MAX_PAGE_LINES;
 pub const MAX_READER_LINE_BYTES: usize = 320;
 pub const MAX_CHAPTER_TITLE_BYTES: usize = 96;
 const PAGE_HEIGHT: usize = crate::reader::BODY_BOTTOM - crate::reader::BODY_TOP;
@@ -230,6 +230,7 @@ struct PageSink<'a> {
     requested_page: usize,
     page_index: usize,
     used_height: usize,
+    page_line_count: usize,
     theme: ReaderTheme,
     page: &'a mut BoundedPage,
     current: FixedString<MAX_READER_LINE_BYTES>,
@@ -249,6 +250,7 @@ impl<'a> PageSink<'a> {
             requested_page,
             page_index: 0,
             used_height: 0,
+            page_line_count: 0,
             theme: ReaderTheme::from_preferences(preferences),
             page,
             current: FixedString::new(),
@@ -335,9 +337,10 @@ impl<'a> PageSink<'a> {
         style: ReaderStyle,
     ) -> Result<(), LayoutError> {
         let height = self.theme.line_height(style);
-        if self.used_height + height > PAGE_HEIGHT {
+        if self.used_height + height > PAGE_HEIGHT || self.page_line_count == MAX_PAGE_LINES {
             self.page_index += 1;
             self.used_height = 0;
+            self.page_line_count = 0;
         }
         if self.page_index == self.requested_page {
             let index = usize::from(self.page.line_count);
@@ -353,6 +356,7 @@ impl<'a> PageSink<'a> {
             self.page.chapter_title = copy_fixed(line.as_str())?;
         }
         self.used_height += height;
+        self.page_line_count += 1;
         self.emitted_any = true;
         Ok(())
     }
@@ -408,6 +412,42 @@ mod tests {
 
     use super::{BoundedPage, LayoutError, layout_xhtml_page, layout_xhtml_page_into};
     use crate::{app::ReaderPreferences, reader::ReaderStyle};
+
+    #[test]
+    fn all_typography_choices_paginate_within_the_shared_line_budget() {
+        use crate::app::{ReaderFont, ReaderFontSize, ReaderSpacing};
+        let text = String::from("<html><body>")
+            + &"<p>Words on a line.</p>".repeat(120)
+            + "</body></html>";
+        for font in [ReaderFont::NotoSerif, ReaderFont::Compact, ReaderFont::Mono] {
+            for size in [
+                ReaderFontSize::Small,
+                ReaderFontSize::Medium,
+                ReaderFontSize::Large,
+            ] {
+                for spacing in [
+                    ReaderSpacing::Compact,
+                    ReaderSpacing::Normal,
+                    ReaderSpacing::Relaxed,
+                ] {
+                    let preferences = ReaderPreferences::new(font, size, spacing);
+                    let first = layout_xhtml_page(text.as_bytes(), 0, preferences).unwrap();
+                    assert!(first.page_count() > 1);
+                    let mut paragraphs = 0;
+                    for index in 0..first.page_count() {
+                        let page = layout_xhtml_page(text.as_bytes(), index, preferences).unwrap();
+                        assert!(page.lines().count() <= super::MAX_PAGE_LINES);
+                        assert_eq!(page.page_count(), first.page_count());
+                        paragraphs += page
+                            .lines()
+                            .filter(|line| line.text() == "Words on a line.")
+                            .count();
+                    }
+                    assert_eq!(paragraphs, 120);
+                }
+            }
+        }
+    }
 
     #[test]
     fn preserves_unknown_text_images_lists_tables_and_quotes() {
