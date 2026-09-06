@@ -14,7 +14,7 @@ def stack_frame(body):
     registers = {"sp": 0, "zero": 0}
     minimum = 0
     for line in body:
-        instruction = re.match(r"\s*[0-9a-f]+:\s+[0-9a-f]+\s+(\w+)\s*(.*)", line)
+        instruction = re.match(r"\s*[0-9a-f]+:\s+([a-z][a-z0-9.]*)\s*(.*)", line)
         if instruction is None:
             continue
         opcode, operands = instruction.groups()
@@ -42,7 +42,7 @@ def stack_frame(body):
             registers.pop(args[0], None)
         minimum = min(minimum, registers["sp"])
     if minimum == 0:
-        raise ValueError("no stack frame found; inspect the generated prologue")
+        raise ValueError("no stack frame found; prologue:\n" + "\n".join(body[:24]))
     return -minimum
 
 
@@ -76,7 +76,7 @@ def main():
     parser = argparse.ArgumentParser(description="Check reader entry frames against the linked X4 stack. This is not a whole-program stack analysis.")
     parser.add_argument("elf")
     arguments = parser.parse_args()
-    disassembly = subprocess.check_output(["llvm-objdump", "-d", "--demangle", arguments.elf], text=True)
+    disassembly = subprocess.check_output(["llvm-objdump", "-d", "--demangle", "--no-show-raw-insn", arguments.elf], text=True)
     sizes = subprocess.check_output(["llvm-size", "-A", arguments.elf], text=True)
     match = re.search(r"^\.stack\s+(\d+)", sizes, re.MULTILINE)
     if match is None:
