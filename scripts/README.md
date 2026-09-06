@@ -156,8 +156,9 @@ Before any boot-slot switch, back up the current OTA boot-selection metadata:
 ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/backup-otadata.sh
 ```
 
-This reads `0xE000..0xFFFF` into ignored `backup/otadata/` and prints a restore command.
-It does not write device flash.
+This probes the X4 and reads `0xE000..0xFFFF` into a uniquely named file under ignored `backup/otadata/`. It records a SHA-256 sidecar and makes both files read-only. No `latest` file is replaced. An unrecognized selection is reported as an error, but the captured bytes remain available for inspection.
+
+These read-only commands reset the processor to enter download mode. They do not write flash. Backup digests record integrity, not device identity. Before recovery, compare the digest against your recorded verified backup or independent private copy.
 
 ## Guarded app1 write/readback
 
@@ -167,47 +168,52 @@ Only run after reviewing the printed offset and size:
 ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/flash-app1-and-readback.sh
 ```
 
-This writes only `app1` at `0x650000`, reads back the same byte count, and compares SHA-256 hashes.
-It does **not** write bootloader, partition table, NVS, filesystem, `app0`, or `otadata`.
-Because `otadata` is not changed, stock `app0` should remain the selected boot slot.
+The script copies the image to a private read-only snapshot before inspection and confirmation. It writes only `app1` at `0x650000` and compares the same byte count on readback. Reset and optional `--monitor` occur only after verification. A failure stops without a final reset. The monitor ELF is also snapshotted before confirmation.
+
+No bootloader, partition table, NVS, filesystem, `app0`, or `otadata` write occurs. The existing boot selection remains unchanged. That selection may already be `app1`.
 
 ## Switch boot selection to app1
 
-Only after app1 write/readback verification and otadata backup:
+This is a first-switch helper, not an OTA manager. It accepts only a verified sequence-1 `app0` backup with an erased second OTA sector. It compares live app1 bytes with the reviewed image and live otadata with the reviewed backup before any write.
+
+With explicit hardware-write authorization, set `OTA_BACKUP` and `VERIFIED_OTA_SHA` to the reviewed backup and its recorded digest. The following command writes only OTA sector 1 at `0xF000..0xFFFF`, verifies readback, and resets to select app1:
 
 ```bash
-ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/switch-boot-app1.sh
+ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/switch-boot-app1.sh \
+  --backup "$OTA_BACKUP" --backup-sha256 "$VERIFIED_OTA_SHA"
 ```
-
-This writes only `otadata` sector 1 at `0xF000` with `ota_seq=2`, reads it back, and verifies it.
-After reset, the ESP-IDF bootloader should choose `app1`. Restore the backed-up `otadata` file to `0xE000` to return to the exact previous stock `app0` selection.
 
 ## Restore helpers
 
-These are hardware-writing recovery/cleanup tools. Review the printed ranges before confirming.
+Recovery requires explicit hardware-write authorization and review of each printed range. Every helper probes chip, flash, crystal, and security state. Payloads are private read-only snapshots. Verification occurs before the final reset. No helper infers provenance from `otadata-latest.bin`.
 
-Restore only the previous boot selection metadata:
-
-```bash
-ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/restore-otadata.sh
-```
-
-Restore only stock `app0` from the private full-flash backup:
+`restore-otadata.sh` writes only `0xE000..0xFFFF`. It requires an explicit backup, recorded digest, and expected slot. It inspects the live target application's checksum and hash before a boot-selection write. For a reviewed backup selecting app0:
 
 ```bash
-ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/restore-stock-app0.sh
+ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/restore-otadata.sh \
+  --backup "$OTA_BACKUP" --backup-sha256 "$VERIFIED_OTA_SHA" --expect-slot app0
 ```
 
-Erase only the `app1` development slot and verify it is all `0xFF`:
+Set `STOCK_BACKUP` and `VERIFIED_STOCK_SHA` from your verified full stock backup and its independently recorded digest. `restore-stock-app0.sh` restores only `0x10000..0x64FFFF`, with no boot-selection change:
 
 ```bash
-ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/erase-app1.sh
+ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/restore-stock-app0.sh \
+  --stock-flash-backup "$STOCK_BACKUP" --backup-sha256 "$VERIFIED_STOCK_SHA"
 ```
 
-Return to the verified stock boot state without writing the whole flash:
+`restore-stock-state.sh` extracts app0 and the original sequence-1 otadata from that same verified full backup. It restores and verifies app0 before writing otadata, verifies otadata, and then resets. App1 remains intact. The former `--otadata-backup` option is rejected because a separate checkpoint does not establish stock selection.
 
 ```bash
-ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/restore-stock-state.sh
+ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/restore-stock-state.sh \
+  --stock-flash-backup "$STOCK_BACKUP" --backup-sha256 "$VERIFIED_STOCK_SHA"
 ```
 
-`restore-stock-state.sh` restores stock `app0`, erases `app1`, restores backed-up `otadata`, verifies readback, and resets once at the end. It does **not** write bootloader, partition table, NVS, filesystem, or coredump.
+Flash erasure is prohibited by `AGENTS.md`. `erase-app1.sh` always refuses without accessing hardware, including with `--yes`. Stock recovery does not require erasing app1.
+
+## Test the scripts without hardware
+
+```bash
+python3 -m unittest discover -s scripts -p 'test_*.py'
+```
+
+`test_flash_safety.py` copies the scripts into temporary directories and replaces both hardware tools with fakes. Synthetic flash bytes exercise write ranges, ordering, concurrent image replacement, backup integrity, OTA selection, and failure paths. These tests do not establish physical power-loss recovery or replace a reviewed hardware procedure.
