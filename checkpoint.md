@@ -1,5 +1,26 @@
 # Brewthink checkpoint
 
+## Active hardware override, grayscale bench, 2026-09-06
+
+This section supersedes the historical live-firmware state below. Source `main` was at `ef32fbb` when the diagnostic was added. The diagnostic changes and `docs/grayscale-depth.md` remain uncommitted.
+
+- App1 now runs the explicitly triggered grayscale bench, not the reader app. Its USB protocol is `BREWGRAY/1`; normal `scripts/device-control.sh` reader commands do not apply.
+- Installed version 3 image `artifacts/grayscale-depth/eight-repeat/bench.bin`, 105,840 bytes, SHA-256 `9024b7218bc2697def152b7a7c7d64a45aac60e3880358bb27a81eb99f3c64a5`.
+- Reviewed write range `0x650000..0x669D6F`; sector range `0x650000..0x669FFF`. Guarded flash readback matched. Boot selection, stock app0, other partitions, and SD files were not modified.
+- Version 1's black-and-white pattern completed in 4,070 ms and four-state pattern in 1,511 ms. The user's `IMG_1619.HEIC` photograph shows four separated tones in the expected raw-state order. See ignored `artifacts/grayscale-depth/photo-1619/` for the crop and descriptive analysis.
+- Version 2's four-state reference completed in 1,523 ms. Its `sixteen-probe` command completed in 2,036 ms. The probe applies two unchanged stock-derived waveforms to sixteen combinations of starting state and adjustment state. It does not establish sixteen optical shades.
+- The user's `IMG_1621.HEIC` photograph supplied the eight-tone candidate palette. Several of the sixteen recipes were near-duplicates. See ignored `artifacts/grayscale-depth/photo-1621/` for the selection evidence.
+- Version 3 freezes those eight recipes and displays two shuffled copies each. Its four-state conditioning command completed in 1,530 ms and `eight-repeat` in 2,245 ms. The drive sequence and waveform bytes are unchanged from version 2.
+- `IMG_1622.HEIC` passes the frozen within-photo separation check. All eight tones retain their expected order across both copies. The smallest normalized P10-to-P90 gap is 0.0101 between the two lightest tones. Mottling remains visible. See ignored `artifacts/grayscale-depth/eight-repeat/plan.json` and `artifacts/grayscale-depth/photo-1622/`.
+- The eight-tone repeat is held on the panel. The last completed paint put the display controller to sleep; the ESP32 remains awake for explicit bench commands. No automatic refreshes are scheduled.
+- Final version 3 USB status reports `attempts=2`, `faulted=false`, and `probe_attempt=2`. Both probe commands share the consumed one-attempt-per-boot allowance. Both chip selects were high after each paint.
+- This is one successful validation render after palette selection. It supports experimental eight-tone output under the tested conditions, not a general reliability guarantee. Sixteen distinct tones and maximum panel depth remain unestablished.
+- The current pre-experiment reader differs from the old verified storage image below. Its validated live readback is `backup/grayscale-before/reader.bin`, 503,952 bytes. Use that file for restoration, after reviewing its app1 range. It covers the entire diagnostic write and sector boundary.
+
+See [grayscale depth investigation](docs/grayscale-depth.md) for the pattern geometry, command protocol, evidence, and next measurement. The host work tab is closed; no monitor remains running.
+
+## Historical storage checkpoint
+
 Last updated: 2026-09-06. Git and worktree state checked at 20:04 UTC.
 
 ## Current state
