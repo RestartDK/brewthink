@@ -53,7 +53,7 @@ use crate::{
     settings::CustomImagePreview,
     sleep::SleepView,
     storage::{BookFile, FatStorage, ImageFile, MAX_DEVICE_IMAGE_BYTES, ReadOnlySdCard},
-    transfer::{FileTransfer, ImageName, UploadRequest},
+    transfer::{FileTransfer, UploadRequest},
     ui::{AppFrame, render_app},
     x4::{X4FatBlockDevice, X4InputHardware, X4StorageHardware, decode_buttons},
     zip_stream::{InflateWorkspace, StreamingZip, ZipValidationScratch},
@@ -256,7 +256,17 @@ impl DeviceImages {
         self.files.get(image.index()).and_then(Option::as_ref)
     }
 
-    fn selected(&self, name: Option<ImageName>) -> Option<ImageId> {
+    fn selected(&self, store: &DeviceStore) -> Option<ImageId> {
+        let name = match store.app_data().read_selected_image() {
+            Ok(name) => name,
+            Err(error) => {
+                info!(
+                    "reader image selection unavailable: {}",
+                    defmt::Display2Format(&error)
+                );
+                None
+            }
+        };
         name.and_then(|name| {
             self.files[..self.length]
                 .iter()
@@ -511,13 +521,18 @@ pub async fn reader_app_task(
         },
         preferences: AppPreferences::default(),
     });
-    let preferences = store
-        .app_data()
-        .read_preferences()
-        .ok()
-        .flatten()
-        .unwrap_or(retained.preferences);
-    let selected_image = images.selected(store.app_data().read_selected_image());
+    let preferences = match store.app_data().read_preferences() {
+        Ok(Some(preferences)) => preferences,
+        Ok(None) => retained.preferences,
+        Err(error) => {
+            info!(
+                "reader preferences unavailable: {}",
+                defmt::Display2Format(&error)
+            );
+            retained.preferences
+        }
+    };
+    let selected_image = images.selected(store);
     let (mut app, first_effect) = App::from_resume_with_catalog(
         library.length,
         images.length,
@@ -597,7 +612,7 @@ pub async fn reader_app_task(
                 .run_input(InputSource::Usb, button),
                 ControlEvent::ImagesChanged => {
                     load_images(store, images);
-                    let selected = images.selected(store.app_data().read_selected_image());
+                    let selected = images.selected(store);
                     let effect = app.replace_image_catalog(images.length, selected);
                     run_effect(
                         effect,

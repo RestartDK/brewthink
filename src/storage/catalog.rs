@@ -381,7 +381,7 @@ where
         let app = root.open_dir(APP_DATA_DIRECTORY)?;
         Self::ensure_directory(&app, CACHE_DIRECTORY)?;
         Self::ensure_directory(&app, BOOKMARK_DIRECTORY)?;
-        Ok(())
+        app.close().and(root.close()).and(volume.close())
     }
 
     #[cfg(feature = "device-reader")]
@@ -438,11 +438,13 @@ where
             Error::NotFound => AppDataError::DirectoryMissing,
             error => AppDataError::Filesystem(error),
         })?;
-        drop(root);
+        root.close().map_err(AppDataError::Filesystem)?;
         let result = function(&directory).map_err(AppDataError::Filesystem);
-        drop(directory);
-        drop(volume);
-        result
+        let closed = directory
+            .close()
+            .and(volume.close())
+            .map_err(AppDataError::Filesystem);
+        result.and_then(|value| closed.map(|()| value))
     }
 
     #[cfg(feature = "device-reader")]
@@ -464,12 +466,14 @@ where
         let files = root
             .open_dir(FILE_DIRECTORY)
             .map_err(AppDataError::Filesystem)?;
-        drop(root);
+        root.close().map_err(AppDataError::Filesystem)?;
         let result = function(&app, &files).map_err(AppDataError::Filesystem);
-        drop(files);
-        drop(app);
-        drop(volume);
-        result
+        let closed = files
+            .close()
+            .and(app.close())
+            .and(volume.close())
+            .map_err(AppDataError::Filesystem);
+        result.and_then(|value| closed.map(|()| value))
     }
 }
 
@@ -501,6 +505,36 @@ pub enum AppDataError<E: core::error::Error> {
     ChecksumMismatch,
     IncompleteWrite,
     TargetExists,
+}
+
+#[cfg(feature = "device-reader")]
+impl<E: core::error::Error> fmt::Display for AppDataError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Filesystem(error) => write!(f, "filesystem: {error}"),
+            Self::DirectoryMissing => f.write_str("application directory is missing"),
+            Self::FileTooLarge => f.write_str("file exceeds the buffer capacity"),
+            Self::InvalidMetadata => f.write_str("invalid application metadata"),
+            Self::ChecksumMismatch => f.write_str("file checksum mismatch"),
+            Self::IncompleteWrite => f.write_str("incomplete file write"),
+            Self::TargetExists => f.write_str("a different target file already exists"),
+        }
+    }
+}
+
+#[cfg(feature = "device-reader")]
+impl<E: core::error::Error + 'static> core::error::Error for AppDataError<E> {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::Filesystem(error) => Some(error),
+            Self::DirectoryMissing
+            | Self::FileTooLarge
+            | Self::InvalidMetadata
+            | Self::ChecksumMismatch
+            | Self::IncompleteWrite
+            | Self::TargetExists => None,
+        }
+    }
 }
 
 #[cfg(feature = "device-reader")]
@@ -573,19 +607,14 @@ where
         })
     }
 
-    pub fn read_selected_image(&self) -> Option<ImageName> {
-        for file in [
-            AppDataFile::ImageSelection,
-            AppDataFile::ImageSelectionBackup,
-        ] {
-            let mut bytes = [0; IMAGE_SELECTION_BYTES];
-            if self.read_file(file, &mut bytes).ok() == Some(bytes.len())
-                && let Some(name) = decode_image_selection(bytes)
-            {
-                return Some(name);
-            }
-        }
-        None
+    pub fn read_selected_image(&self) -> Result<Option<ImageName>, AppDataError<D::Error>> {
+        self.read_records(
+            &[
+                AppDataFile::ImageSelection,
+                AppDataFile::ImageSelectionBackup,
+            ],
+            decode_image_selection,
+        )
     }
 
     pub fn write_selected_image(&self, name: ImageName) -> Result<(), AppDataError<D::Error>> {
@@ -597,13 +626,23 @@ where
         {
             return Err(AppDataError::IncompleteWrite);
         }
-        if self.file_exists(AppDataFile::ImageSelection)? {
-            self.delete_if_present(AppDataFile::ImageSelectionBackup)?;
+        let previous =
+            match self.read_records(&[AppDataFile::ImageSelection], decode_image_selection) {
+                Ok(previous) => previous,
+                Err(AppDataError::InvalidMetadata) => None,
+                Err(error) => return Err(error),
+            };
+        if let Some(previous) = previous {
             self.copy_file(
                 AppDataFile::ImageSelection,
                 AppDataFile::ImageSelectionBackup,
                 &mut [0; 32],
             )?;
+            if self.read_records(&[AppDataFile::ImageSelectionBackup], decode_image_selection)?
+                != Some(previous)
+            {
+                return Err(AppDataError::IncompleteWrite);
+            }
         }
         self.delete_if_present(AppDataFile::ImageSelection)?;
         self.copy_file(
@@ -611,19 +650,18 @@ where
             AppDataFile::ImageSelection,
             &mut [0; 32],
         )?;
-        if self.read_selected_image() != Some(name) {
+        if self.read_records(&[AppDataFile::ImageSelection], decode_image_selection)? != Some(name)
+        {
             return Err(AppDataError::IncompleteWrite);
         }
         self.delete_if_present(AppDataFile::ImageSelectionTemp)
     }
 
     pub fn read_preferences(&self) -> Result<Option<AppPreferences>, AppDataError<D::Error>> {
-        for name in [AppDataFile::Preferences, AppDataFile::PreferencesBackup] {
-            if let Some(preferences) = self.read_preferences_file(name) {
-                return Ok(Some(preferences));
-            }
-        }
-        Ok(None)
+        self.read_records(
+            &[AppDataFile::Preferences, AppDataFile::PreferencesBackup],
+            decode_preferences,
+        )
     }
 
     pub fn write_preferences(
@@ -643,16 +681,22 @@ where
             self.delete_if_present(AppDataFile::PreferencesTemp)?;
             return Err(AppDataError::IncompleteWrite);
         }
-        if self
-            .read_preferences_file(AppDataFile::Preferences)
-            .is_some()
-        {
-            self.delete_if_present(AppDataFile::PreferencesBackup)?;
+        let previous = match self.read_records(&[AppDataFile::Preferences], decode_preferences) {
+            Ok(previous) => previous,
+            Err(AppDataError::InvalidMetadata) => None,
+            Err(error) => return Err(error),
+        };
+        if let Some(previous) = previous {
             self.copy_file(
                 AppDataFile::Preferences,
                 AppDataFile::PreferencesBackup,
                 &mut [0; 32],
             )?;
+            if self.read_records(&[AppDataFile::PreferencesBackup], decode_preferences)?
+                != Some(previous)
+            {
+                return Err(AppDataError::IncompleteWrite);
+            }
         }
         self.delete_if_present(AppDataFile::Preferences)?;
         self.copy_file(
@@ -660,7 +704,8 @@ where
             AppDataFile::Preferences,
             &mut [0; 32],
         )?;
-        if self.read_preferences_file(AppDataFile::Preferences) != Some(preferences) {
+        if self.read_records(&[AppDataFile::Preferences], decode_preferences)? != Some(preferences)
+        {
             return Err(AppDataError::IncompleteWrite);
         }
         self.delete_if_present(AppDataFile::PreferencesTemp)?;
@@ -673,12 +718,18 @@ where
             .ensure_layout()
             .map_err(AppDataError::Filesystem)?;
         self.recover_image_upload(&mut [0; 512])?;
-        if self.named_file_exists(name.as_str())?
-            && self
-                .verify_named_file(name, request.length(), request.crc32(), &mut [0; 512])
-                .is_err()
-        {
-            return Err(AppDataError::TargetExists);
+        if self.named_file_exists(name.as_str())? {
+            match self.verify_named_file(name, request.length(), request.crc32(), &mut [0; 512]) {
+                Ok(()) => {}
+                Err(
+                    AppDataError::ChecksumMismatch
+                    | AppDataError::IncompleteWrite
+                    | AppDataError::InvalidMetadata,
+                ) => {
+                    return Err(AppDataError::TargetExists);
+                }
+                Err(error) => return Err(error),
+            }
         }
         self.delete_if_present(AppDataFile::ImageUploadTemp)?;
         self.write_file(AppDataFile::ImageUploadTemp, &[])
@@ -732,44 +783,59 @@ where
     }
 
     fn recover_image_upload(&self, scratch: &mut [u8]) -> Result<(), AppDataError<D::Error>> {
-        if !self.file_exists(AppDataFile::ImageUploadTransaction)? {
-            self.delete_if_present(AppDataFile::ImageUploadTemp)?;
-            return Ok(());
+        if scratch.is_empty() {
+            return Err(AppDataError::IncompleteWrite);
         }
-        let mut bytes = [0; IMAGE_UPLOAD_RECORD_BYTES];
-        let transaction = self
-            .read_file(AppDataFile::ImageUploadTransaction, &mut bytes)
-            .ok()
-            .filter(|length| *length == bytes.len())
-            .and_then(|_| ImageUploadRecord::decode(bytes));
-        if let Some(transaction) = transaction
-            && self
-                .verify_named_file(
-                    transaction.name,
-                    transaction.length,
-                    transaction.crc32,
-                    scratch,
-                )
-                .is_err()
-        {
-            self.delete_named_if_present(transaction.name.as_str())?;
+        let transaction = self.read_records(
+            &[AppDataFile::ImageUploadTransaction],
+            ImageUploadRecord::decode,
+        )?;
+        if let Some(transaction) = transaction {
+            match self.verify_named_file(
+                transaction.name,
+                transaction.length,
+                transaction.crc32,
+                scratch,
+            ) {
+                Ok(()) | Err(AppDataError::Filesystem(Error::NotFound)) => {}
+                Err(
+                    AppDataError::ChecksumMismatch
+                    | AppDataError::IncompleteWrite
+                    | AppDataError::InvalidMetadata,
+                ) => {
+                    self.delete_named_if_present(transaction.name.as_str())?;
+                }
+                Err(error) => return Err(error),
+            }
+            self.delete_if_present(AppDataFile::ImageUploadTransaction)?;
         }
-        self.delete_if_present(AppDataFile::ImageUploadTransaction)?;
         self.delete_if_present(AppDataFile::ImageUploadTemp)
     }
 
-    fn read_preferences_file(&self, name: AppDataFile) -> Option<AppPreferences> {
-        let mut bytes = [0; 12];
-        let length = self.read_file(name, &mut bytes).ok()?;
-        if length != bytes.len() || u32::from_le_bytes(bytes[0..4].try_into().ok()?) != PREFS_MAGIC
-        {
-            return None;
+    fn read_records<const N: usize, R>(
+        &self,
+        files: &[AppDataFile],
+        decode: fn([u8; N]) -> Option<R>,
+    ) -> Result<Option<R>, AppDataError<D::Error>> {
+        let mut corrupt = false;
+        for &file in files {
+            let mut bytes = [0; N];
+            match self.read_file(file, &mut bytes) {
+                Ok(length) if length == N => match decode(bytes) {
+                    Some(record) => return Ok(Some(record)),
+                    None => corrupt = true,
+                },
+                Ok(_) | Err(AppDataError::Filesystem(Error::NotEnoughSpace)) => corrupt = true,
+                Err(AppDataError::DirectoryMissing | AppDataError::Filesystem(Error::NotFound)) => {
+                }
+                Err(error) => return Err(error),
+            }
         }
-        let packed = u32::from_le_bytes(bytes[4..8].try_into().ok()?);
-        let checksum = u32::from_le_bytes(bytes[8..12].try_into().ok()?);
-        (preference_checksum(packed) == checksum)
-            .then(|| AppPreferences::from_packed(packed))
-            .flatten()
+        if corrupt {
+            Err(AppDataError::InvalidMetadata)
+        } else {
+            Ok(None)
+        }
     }
 
     fn verify_file(
@@ -990,29 +1056,27 @@ where
 
     fn named_file_exists(&self, name: &str) -> Result<bool, AppDataError<D::Error>> {
         self.storage
-            .with_files_directory(|directory| Ok(directory.directory_entry_exists(name)))
+            .with_files_directory(|directory| match directory.find_directory_entry(name) {
+                Ok(_) => Ok(true),
+                Err(Error::NotFound) => Ok(false),
+                Err(error) => Err(error),
+            })
     }
 
     fn delete_named_if_present(&self, name: &str) -> Result<(), AppDataError<D::Error>> {
-        self.storage.with_files_directory(|directory| {
-            if directory.directory_entry_exists(name) {
-                directory.delete_entry_in_dir(name)?;
-            }
-            Ok(())
-        })
-    }
-
-    fn file_exists(&self, file: AppDataFile) -> Result<bool, AppDataError<D::Error>> {
         self.storage
-            .with_app_directory(|directory| Ok(directory.directory_entry_exists(file.name())))
+            .with_files_directory(|directory| match directory.delete_entry_in_dir(name) {
+                Ok(()) | Err(Error::NotFound) => Ok(()),
+                Err(error) => Err(error),
+            })
     }
 
     fn delete_if_present(&self, file: AppDataFile) -> Result<(), AppDataError<D::Error>> {
         self.storage.with_app_directory(|directory| {
-            if directory.directory_entry_exists(file.name()) {
-                directory.delete_entry_in_dir(file.name())?;
+            match directory.delete_entry_in_dir(file.name()) {
+                Ok(()) | Err(Error::NotFound) => Ok(()),
+                Err(error) => Err(error),
             }
-            Ok(())
         })
     }
 }
@@ -1056,6 +1120,17 @@ const IMAGE_SELECTION_BYTES: usize = 20;
 const IMAGE_UPLOAD_MAGIC: u32 = 0x4254_5531;
 #[cfg(feature = "device-reader")]
 const IMAGE_UPLOAD_RECORD_BYTES: usize = 28;
+
+#[cfg(feature = "device-reader")]
+fn decode_preferences(bytes: [u8; 12]) -> Option<AppPreferences> {
+    let magic = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    let packed = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    let checksum = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
+    if magic != PREFS_MAGIC || checksum != preference_checksum(packed) {
+        return None;
+    }
+    AppPreferences::from_packed(packed)
+}
 
 #[cfg(feature = "device-reader")]
 fn encode_image_selection(name: ImageName) -> [u8; IMAGE_SELECTION_BYTES] {
@@ -1197,6 +1272,9 @@ impl fmt::Write for ShortName {
         Ok(())
     }
 }
+
+#[cfg(all(test, feature = "device-reader"))]
+mod recovery_tests;
 
 #[cfg(test)]
 mod tests {
