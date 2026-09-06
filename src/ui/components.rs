@@ -285,15 +285,15 @@ impl Drawable for MenuRow<'_> {
 }
 
 #[derive(Clone, Copy)]
-pub struct ValueRow<'a> {
+pub struct SettingsRow<'a> {
     label: &'a str,
-    value: &'a str,
+    value: Option<&'a str>,
     selection: Selection,
     top_left: Point,
 }
 
-impl<'a> ValueRow<'a> {
-    pub const fn new(label: &'a str, value: &'a str, selection: Selection) -> Self {
+impl<'a> SettingsRow<'a> {
+    pub const fn new(label: &'a str, value: Option<&'a str>, selection: Selection) -> Self {
         Self {
             label,
             value,
@@ -303,83 +303,49 @@ impl<'a> ValueRow<'a> {
     }
 }
 
-impl View for ValueRow<'_> {
+impl View for SettingsRow<'_> {
     fn translate_impl(&mut self, by: Point) {
         self.top_left += by;
     }
 
     fn bounds(&self) -> Rectangle {
-        Rectangle::new(self.top_left, Size::new(CONTENT_WIDTH, 46))
+        let height = if self.value.is_some() { 46 } else { 74 };
+        Rectangle::new(self.top_left, Size::new(CONTENT_WIDTH, height))
     }
 }
 
-impl Drawable for ValueRow<'_> {
+impl Drawable for SettingsRow<'_> {
     type Color = BinaryColor;
     type Output = ();
 
-    fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
+    fn draw<D>(&self, target: &mut D) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = Self::Color>,
     {
-        self.bounds()
+        let (top, height, role, label_y) = match self.value {
+            Some(_) => (self.top_left, 46, TextRole::Body, 14),
+            None => (
+                self.top_left + Point::new(0, 10),
+                64,
+                TextRole::ControlLabel,
+                20,
+            ),
+        };
+        Rectangle::new(top, Size::new(CONTENT_WIDTH, height))
             .into_styled(PrimitiveStyle::with_stroke(
                 BinaryColor::On,
                 self.selection.stroke(1, 3),
             ))
             .draw(target)?;
-        Label::new(self.label, TextRole::Body)
-            .at(self.top_left + Point::new(16, 14))
+        Label::new(self.label, role)
+            .at(top + Point::new(16, label_y))
             .draw(target)?;
-        Label::new(self.value, TextRole::Body)
-            .at(self.top_left + Point::new(312, 14))
-            .draw(target)
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct ActionRow<'a> {
-    label: &'a str,
-    selection: Selection,
-    top_left: Point,
-}
-
-impl<'a> ActionRow<'a> {
-    pub const fn new(label: &'a str, selection: Selection) -> Self {
-        Self {
-            label,
-            selection,
-            top_left: Point::zero(),
+        if let Some(value) = self.value {
+            Label::new(value, TextRole::Body)
+                .at(top + Point::new(312, 14))
+                .draw(target)?;
         }
-    }
-}
-
-impl View for ActionRow<'_> {
-    fn translate_impl(&mut self, by: Point) {
-        self.top_left += by;
-    }
-
-    fn bounds(&self) -> Rectangle {
-        Rectangle::new(self.top_left, Size::new(CONTENT_WIDTH, 64))
-    }
-}
-
-impl Drawable for ActionRow<'_> {
-    type Color = BinaryColor;
-    type Output = ();
-
-    fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
-    where
-        D: DrawTarget<Color = Self::Color>,
-    {
-        self.bounds()
-            .into_styled(PrimitiveStyle::with_stroke(
-                BinaryColor::On,
-                self.selection.stroke(1, 3),
-            ))
-            .draw(target)?;
-        Label::new(self.label, TextRole::ControlLabel)
-            .at(self.top_left + Point::new(16, 20))
-            .draw(target)
+        Ok(())
     }
 }
 

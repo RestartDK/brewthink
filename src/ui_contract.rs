@@ -13,7 +13,8 @@ use crate::{
     library::ShelfBook,
     power::BatteryStatus,
     reader::{ReaderLine, ReaderStyle, ReaderView},
-    sleep::{CustomSleepImageStatus, SleepView},
+    settings::CustomImagePreview,
+    sleep::SleepView,
     ui::{AppFrame, render_app},
 };
 
@@ -77,9 +78,7 @@ fn application_frames_match_the_pinned_contract() {
             AppFrame::Settings {
                 state: SettingsState::new(AppPreferences::default()),
                 battery,
-                custom_image_status: CustomSleepImageStatus::Missing,
-                custom_image_name: None,
-                custom_image_preview: None,
+                custom_image: CustomImagePreview::Missing,
             },
             target,
         )
@@ -185,30 +184,29 @@ fn storage_and_sleep_frames_match_the_pinned_contract() {
     });
     let cover_bytes = [0xAA; 176 * 264 / 8];
     let cover = MonochromeBitmap::new(Size::new(176, 264).unwrap(), &cover_bytes).unwrap();
-    for (name, mode, status, preview) in [
+    for (name, mode, custom_image) in [
         (
             "settings-sleep-auto",
             SleepScreenMode::Automatic,
-            CustomSleepImageStatus::Missing,
-            None,
+            CustomImagePreview::Missing,
         ),
         (
             "settings-sleep-custom",
             SleepScreenMode::Custom,
-            CustomSleepImageStatus::Ready,
-            Some(cover),
+            CustomImagePreview::Ready {
+                name: "cover.jpg",
+                bitmap: cover,
+            },
         ),
         (
             "settings-sleep-invalid",
             SleepScreenMode::Custom,
-            CustomSleepImageStatus::Invalid,
-            None,
+            CustomImagePreview::Invalid,
         ),
         (
             "settings-sleep-cover",
             SleepScreenMode::BookCover,
-            CustomSleepImageStatus::Missing,
-            None,
+            CustomImagePreview::Missing,
         ),
     ] {
         assert_frame(name, |target| {
@@ -219,9 +217,7 @@ fn storage_and_sleep_frames_match_the_pinned_contract() {
                         AppPreferences::new(ReaderPreferences::default(), mode),
                     ),
                     battery,
-                    custom_image_status: status,
-                    custom_image_name: Some("cover.jpg"),
-                    custom_image_preview: preview,
+                    custom_image,
                 },
                 target,
             )
@@ -248,19 +244,56 @@ fn storage_and_sleep_frames_match_the_pinned_contract() {
     });
 }
 
+#[test]
+fn populated_shelf_and_settings_rows_match_the_pinned_contract() {
+    let battery = BatteryStatus::from_percent(82, UsbState::Disconnected);
+    let half_bytes = [0xAA; 88 * 132 / 8];
+    let full_bytes = [0x33; 176 * 264 / 8];
+    let half = MonochromeBitmap::new(Size::new(88, 132).unwrap(), &half_bytes).unwrap();
+    let full = MonochromeBitmap::new(Size::new(176, 264).unwrap(), &full_bytes).unwrap();
+    let covers = [Some(half), None, Some(half), Some(full), Some(full)];
+    let books = covers.map(|cover| ShelfBook::new("A Book", "An Author", cover));
+    for selected in [3, 4] {
+        let state = LibraryState::with_selected(books.len(), selected).unwrap();
+        assert_frame(&std::format!("library-page-{}", state.page()), |target| {
+            render_app(
+                AppFrame::Library {
+                    state,
+                    books: &books,
+                    battery,
+                },
+                target,
+            )
+            .unwrap();
+        });
+    }
+    for item in SettingsItem::ALL {
+        assert_frame(&std::format!("settings-row-{}", item.index()), |target| {
+            render_app(
+                AppFrame::Settings {
+                    state: SettingsState::with_state(item, AppPreferences::default()),
+                    battery,
+                    custom_image: CustomImagePreview::Missing,
+                },
+                target,
+            )
+            .unwrap();
+        });
+    }
+}
+
 fn reader_location() -> crate::app::ReadingLocation {
     let mut app = App::new(1);
-    assert_eq!(app.input(AppInput::Confirm), AppEffect::RenderLibrary);
+    assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
     assert!(matches!(
         app.input(AppInput::Confirm),
         AppEffect::LoadChapter { .. }
     ));
-    let effect = app.chapter_loaded(2, 3).unwrap();
-    let AppEffect::RenderReader(location) = effect else {
-        panic!("chapter load did not produce a reader frame");
+    assert_eq!(app.chapter_loaded(2, 3).unwrap(), AppEffect::Render);
+    let AppView::Reader(session) = app.view() else {
+        panic!("chapter load did not produce a reader view");
     };
-    assert!(matches!(app.view(), AppView::Reader(_)));
-    location
+    session.location()
 }
 
 fn assert_frame(name: &str, render: impl FnOnce(&mut MonochromeImage<'_>)) {

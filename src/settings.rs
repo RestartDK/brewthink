@@ -5,19 +5,42 @@ use embedded_graphics::{
     prelude::{DrawTarget, Primitive},
     primitives::{PrimitiveStyle, Rectangle},
 };
-use embedded_layout::View;
+use embedded_layout::{
+    View,
+    layout::linear::{FixedMargin, LinearLayout},
+    view_group::Views,
+};
 
 use crate::{
     app::{SettingsItem, SettingsState, SleepScreenMode},
     image::{MonochromeBitmap, MonochromeImage, Size},
     power::BatteryStatus,
     reader::{ReaderStyle, ReaderTheme},
-    sleep::CustomSleepImageStatus,
     ui::{
-        ActionRow, AppBar, CONTENT_LEFT, CONTENT_WIDTH, CommandBar, FRAME_HEIGHT, FRAME_WIDTH,
-        FrameTarget, Label, Selection, TextRole, ValueRow, ui, ui_column,
+        AppBar, CONTENT_LEFT, CONTENT_WIDTH, CommandBar, FRAME_HEIGHT, FRAME_WIDTH, FrameTarget,
+        Label, Selection, SettingsRow, TextRole, ui,
     },
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CustomImagePreview<'a> {
+    Missing,
+    Invalid,
+    Ready {
+        name: &'a str,
+        bitmap: MonochromeBitmap<'a>,
+    },
+}
+
+impl CustomImagePreview<'_> {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Missing => "NO IMAGE",
+            Self::Invalid => "INVALID IMAGE",
+            Self::Ready { .. } => "IMAGE READY",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SettingsRenderError {
@@ -27,9 +50,7 @@ pub enum SettingsRenderError {
 pub fn render_settings(
     state: SettingsState,
     battery: BatteryStatus,
-    custom_image_status: CustomSleepImageStatus,
-    custom_image_name: Option<&str>,
-    custom_image_preview: Option<MonochromeBitmap<'_>>,
+    custom_image: CustomImagePreview<'_>,
     target: &mut MonochromeImage<'_>,
 ) -> Result<(), SettingsRenderError> {
     let expected =
@@ -43,29 +64,23 @@ pub fn render_settings(
     target.clear_white();
     let selected = state.selected();
     let preferences = state.draft();
-    let rows = ui_column!(
-        20;
-        ui_column!(
-            10;
-            value_row(SettingsItem::Font, preferences.reader().font().label(), selected),
-            value_row(SettingsItem::Size, preferences.reader().size().label(), selected),
-            value_row(SettingsItem::Spacing, preferences.reader().spacing().label(), selected),
-            value_row(SettingsItem::SleepScreen, preferences.sleep_screen().label(), selected),
-        ),
-        ActionRow::new(
-            SettingsItem::Apply.label(),
-            Selection::from_selected(selected == SettingsItem::Apply),
-        ),
-    )
-    .translate(Point::new(CONTENT_LEFT, 92));
+    let mut row_views = SettingsItem::ALL.map(|item| {
+        SettingsRow::new(
+            item.label(),
+            item.value(preferences),
+            Selection::from_selected(item == selected),
+        )
+    });
+    let rows = LinearLayout::vertical(Views::new(&mut row_views))
+        .with_spacing(FixedMargin(10))
+        .arrange()
+        .translate(Point::new(CONTENT_LEFT, 92));
     let screen = ui!(
         AppBar::new("SETTINGS", battery),
         rows,
         SettingsPreview {
             state,
-            custom_image_status,
-            custom_image_name,
-            custom_image_preview,
+            custom_image,
             top_left: Point::new(CONTENT_LEFT, 416),
         },
         CommandBar::new("UP/DOWN  ROW     LEFT/RIGHT  CHANGE     BACK  CANCEL").at(
@@ -79,20 +94,10 @@ pub fn render_settings(
     Ok(())
 }
 
-fn value_row(item: SettingsItem, value: &'static str, selected: SettingsItem) -> ValueRow<'static> {
-    ValueRow::new(
-        item.label(),
-        value,
-        Selection::from_selected(item == selected),
-    )
-}
-
 #[derive(Clone, Copy)]
 struct SettingsPreview<'a> {
     state: SettingsState,
-    custom_image_status: CustomSleepImageStatus,
-    custom_image_name: Option<&'a str>,
-    custom_image_preview: Option<MonochromeBitmap<'a>>,
+    custom_image: CustomImagePreview<'a>,
     top_left: Point,
 }
 
@@ -136,7 +141,10 @@ impl Drawable for SettingsPreview<'_> {
         .draw(target)?;
 
         if sleep_preview && mode != SleepScreenMode::BookCover {
-            if let Some(preview) = self.custom_image_preview {
+            if let CustomImagePreview::Ready {
+                bitmap: preview, ..
+            } = self.custom_image
+            {
                 target.draw_iter((0..192).flat_map(|y| {
                     (0..128).map(move |x| {
                         Pixel(
@@ -153,19 +161,19 @@ impl Drawable for SettingsPreview<'_> {
                     })
                 }))?;
             } else {
-                Label::new(self.custom_image_status.label(), TextRole::Heading)
+                Label::new(self.custom_image.label(), TextRole::Heading)
                     .at(self.top_left + Point::new(30, 120))
                     .draw(target)?;
             }
-            let message = match self.custom_image_status {
-                CustomSleepImageStatus::Ready => self.custom_image_name.unwrap_or("IMAGE READY"),
-                CustomSleepImageStatus::Missing => "Upload a JPG or PNG over USB",
-                CustomSleepImageStatus::Invalid => "Replace the selected image",
+            let message = match self.custom_image {
+                CustomImagePreview::Ready { name, .. } => name,
+                CustomImagePreview::Missing => "Upload a JPG or PNG over USB",
+                CustomImagePreview::Invalid => "Replace the selected image",
             };
             Label::new(message, TextRole::Body)
                 .at(self.top_left + Point::new(172, 100))
                 .draw(target)?;
-            return Label::new(self.custom_image_status.label(), TextRole::Heading)
+            return Label::new(self.custom_image.label(), TextRole::Heading)
                 .at(self.top_left + Point::new(172, 132))
                 .draw(target);
         }
@@ -201,13 +209,12 @@ impl Drawable for SettingsPreview<'_> {
 mod tests {
     extern crate std;
 
-    use super::render_settings;
+    use super::{CustomImagePreview, render_settings};
     use crate::{
         app::{AppPreferences, SettingsItem, SettingsState},
         image::{MonochromeImage, Size},
         input::UsbState,
         power::BatteryStatus,
-        sleep::CustomSleepImageStatus,
     };
 
     #[test]
@@ -217,9 +224,7 @@ mod tests {
         render_settings(
             SettingsState::with_state(SettingsItem::SleepScreen, AppPreferences::default()),
             BatteryStatus::from_percent(82, UsbState::Disconnected),
-            CustomSleepImageStatus::Missing,
-            None,
-            None,
+            CustomImagePreview::Missing,
             &mut image,
         )
         .unwrap();

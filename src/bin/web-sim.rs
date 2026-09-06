@@ -3,7 +3,7 @@ use std::io::Cursor;
 use brewthink::{
     app::{
         App, AppEffect, AppInput, AppPreferences, AppView, Direction, FilesState, ImageId,
-        ReaderPreferences, ReadingLocation, ResumePoint, SettingsState, SleepScreenSource,
+        ReaderPreferences, ReadingLocation, ResumePoint, SettingsItem, SleepScreenSource,
     },
     epub::{ChapterContent, ContentStyle, EpubBook},
     files::{FileItem, FileKind},
@@ -13,7 +13,8 @@ use brewthink::{
     library::ShelfBook,
     power::BatteryStatus,
     reader::{ReaderLine, ReaderStyle, ReaderTheme, ReaderView},
-    sleep::{CustomSleepImageStatus, SleepView},
+    settings::CustomImagePreview,
+    sleep::SleepView,
     ui::{AppFrame, render_app},
 };
 use image::{ImageReader, Limits};
@@ -257,12 +258,12 @@ impl WebLibrary {
                     AppFrame::Settings {
                         state,
                         battery: self.app.battery(),
-                        custom_image_status: selected
-                            .map_or(CustomSleepImageStatus::Missing, |_| {
-                                CustomSleepImageStatus::Ready
-                            }),
-                        custom_image_name: selected.map(|image| image.name.as_str()),
-                        custom_image_preview: selected.map(OwnedImage::bitmap),
+                        custom_image: selected.map_or(CustomImagePreview::Missing, |image| {
+                            CustomImagePreview::Ready {
+                                name: &image.name,
+                                bitmap: image.bitmap(),
+                            }
+                        }),
                     },
                     &mut frame,
                 )
@@ -270,9 +271,12 @@ impl WebLibrary {
                 FrameMetadata::selection(
                     "settings",
                     state.selected().label(),
-                    setting_value(state),
+                    state
+                        .selected()
+                        .value(state.draft())
+                        .unwrap_or("Confirm to save"),
                     state.selected().index(),
-                    5,
+                    SettingsItem::ALL.len(),
                 )
             }
             AppView::Reader(session) => self.render_reader(session.location(), &mut frame)?,
@@ -291,7 +295,7 @@ impl WebLibrary {
                 .map_err(js_error)?;
                 FrameMetadata::book("error", book)
             }
-            AppView::Loading => return Err(JsValue::from_str("chapter load did not resolve")),
+            AppView::Loading(_) => return Err(JsValue::from_str("chapter load did not resolve")),
         };
         Ok(RenderedFrame {
             pixels,
@@ -329,7 +333,7 @@ impl WebLibrary {
     }
 
     fn resolve_effect(&mut self, mut effect: AppEffect) -> bool {
-        let mut changed = effect != AppEffect::None;
+        let changed = effect != AppEffect::None;
         loop {
             effect = match effect {
                 AppEffect::LoadChapter {
@@ -350,22 +354,15 @@ impl WebLibrary {
                         Err(_) => return false,
                     }
                 }
-                AppEffect::RenderSleep { .. } => {
-                    changed = true;
+                AppEffect::Render if matches!(self.app.view(), AppView::Sleeping { .. }) => {
                     match self.app.sleep_frame_ready() {
                         Ok(next) => next,
                         Err(_) => return false,
                     }
                 }
-                AppEffect::None
-                | AppEffect::RenderHome
-                | AppEffect::RenderLibrary
-                | AppEffect::RenderFiles
-                | AppEffect::RenderSettings
-                | AppEffect::RenderReader(_)
-                | AppEffect::RenderImage(_)
-                | AppEffect::RenderError { .. }
-                | AppEffect::EnterDeepSleep { .. } => return changed,
+                AppEffect::None | AppEffect::Render | AppEffect::EnterDeepSleep { .. } => {
+                    return changed;
+                }
             };
         }
     }
@@ -651,16 +648,6 @@ impl FrameMetadata {
             chapter: 0,
             chapter_count: 0,
         }
-    }
-}
-
-fn setting_value(state: SettingsState) -> &'static str {
-    match state.selected() {
-        brewthink::app::SettingsItem::Font => state.draft().reader().font().label(),
-        brewthink::app::SettingsItem::Size => state.draft().reader().size().label(),
-        brewthink::app::SettingsItem::Spacing => state.draft().reader().spacing().label(),
-        brewthink::app::SettingsItem::SleepScreen => state.draft().sleep_screen().label(),
-        brewthink::app::SettingsItem::Apply => "Confirm to save",
     }
 }
 

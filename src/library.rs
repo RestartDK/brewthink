@@ -120,40 +120,6 @@ pub fn render_shelf(
     Ok(())
 }
 
-pub fn render_shelf_cover(
-    state: LibraryState,
-    book_index: usize,
-    cover: MonochromeBitmap<'_>,
-    target: &mut MonochromeImage<'_>,
-) -> Result<(), ShelfRenderError> {
-    if target.size() != Size::new(FRAME_WIDTH, FRAME_HEIGHT).unwrap() {
-        return Err(ShelfRenderError::WrongFrameSize {
-            actual: target.size(),
-        });
-    }
-    cover_scale(cover)?;
-    let range = state.visible_range();
-    if !range.contains(&book_index) {
-        return Ok(());
-    }
-    let visible_index = book_index - range.start;
-    CoverTile::new(
-        Point::new(
-            COVER_LEFT[visible_index % 2] as i32,
-            COVER_TOP[visible_index / 2] as i32,
-        ),
-        Some(cover),
-        Selection::from_selected(
-            state
-                .selected()
-                .is_some_and(|selected| selected.index() == book_index),
-        ),
-    )
-    .draw(&mut FrameTarget::new(target))
-    .ok();
-    Ok(())
-}
-
 #[derive(Clone, Copy)]
 struct ShelfGrid<'a> {
     state: LibraryState,

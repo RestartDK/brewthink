@@ -2,12 +2,12 @@ use crate::{
     app::{FilesState, HomeState, LibraryState, SettingsState},
     files::{FileItem, FilesRenderError, render_files},
     home::{HomeRenderError, render_home},
-    image::{MonochromeBitmap, MonochromeImage},
+    image::MonochromeImage,
     library::{ShelfBook, ShelfRenderError, render_shelf},
     power::BatteryStatus,
     reader::{ReaderRenderError, ReaderView, render_reader, render_reader_error},
-    settings::{SettingsRenderError, render_settings},
-    sleep::{CustomSleepImageStatus, SleepRenderError, SleepView, render_sleep},
+    settings::{CustomImagePreview, SettingsRenderError, render_settings},
+    sleep::{SleepRenderError, SleepView, render_sleep},
 };
 
 #[derive(Clone, Copy)]
@@ -29,9 +29,7 @@ pub enum AppFrame<'a> {
     Settings {
         state: SettingsState,
         battery: BatteryStatus,
-        custom_image_status: CustomSleepImageStatus,
-        custom_image_name: Option<&'a str>,
-        custom_image_preview: Option<MonochromeBitmap<'a>>,
+        custom_image: CustomImagePreview<'a>,
     },
     Reader(ReaderView<'a>),
     Sleep(SleepView<'a>),
@@ -73,18 +71,10 @@ pub fn render_app(
         AppFrame::Settings {
             state,
             battery,
-            custom_image_status,
-            custom_image_name,
-            custom_image_preview,
-        } => render_settings(
-            state,
-            battery,
-            custom_image_status,
-            custom_image_name,
-            custom_image_preview,
-            target,
-        )
-        .map_err(AppRenderError::Settings),
+            custom_image,
+        } => {
+            render_settings(state, battery, custom_image, target).map_err(AppRenderError::Settings)
+        }
         AppFrame::Reader(view) => render_reader(view, target).map_err(AppRenderError::Reader),
         AppFrame::Sleep(view) => render_sleep(view, target).map_err(AppRenderError::Sleep),
         AppFrame::Error {

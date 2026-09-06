@@ -19,23 +19,6 @@ const COVER_WIDTH: usize = 176;
 const COVER_HEIGHT: usize = 264;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CustomSleepImageStatus {
-    Missing,
-    Ready,
-    Invalid,
-}
-
-impl CustomSleepImageStatus {
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Missing => "NO IMAGE",
-            Self::Ready => "IMAGE READY",
-            Self::Invalid => "INVALID IMAGE",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SleepScreenContent<'a> {
     CustomImage(MonochromeBitmap<'a>),
     BookCover(MonochromeBitmap<'a>),

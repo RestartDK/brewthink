@@ -40,15 +40,19 @@ The current writable FAT layout uses the 8.3-compatible `/brew`, `/brew/cache`, 
 
 ## UI architecture
 
-`App` owns behavior and emits effects. `AppFrame` is a borrowed snapshot containing the state and data needed for a shared screen render. Both the X4 runtime and the WASM simulator pass snapshots to `render_app`.
+`App` owns behavior and emits effects. `AppEffect::Render` tells the platform to render the current `AppView`; it does not duplicate the selected screen or reading location. Loading carries its `PendingChapter` inside `AppView::Loading`. Leaving that state discards the request.
 
-Image rendering also has in-place paths. The X4 decodes full-screen images directly into its reusable framebuffer, and `render_image_viewer` overlays shared controls. The X4 shelf draws decoded covers after its base frame. These paths avoid retaining another full-size image buffer.
+`AppFrame` is a borrowed snapshot containing the state and data needed for a shared screen render. Both runtimes pass snapshots to `render_app`. The X4 shelf supplies decoded covers through `ShelfBook` before rendering. The selected cover uses full resolution and other visible covers borrow half-resolution buffers.
+
+Full-screen image decoding remains in-place. The X4 decodes directly into its reusable framebuffer, and `render_image_viewer` overlays shared controls. This avoids retaining another full-size image buffer.
 
 Screens compose short-lived Rust values with `ui!` and `ui_column!`. The macros build `embedded-layout` view chains, draw them directly into `FrameTarget`, and retain no widget tree after the frame is complete. `embedded-graphics` remains the source of geometry, clipping, text, primitives, and `DrawTarget` behavior.
 
-Shared components own recurring visual rules: `AppBar`, `CommandBar`, `Label`, menu rows, value rows, action rows, and file rows. Semantic `TextRole` values resolve application typography centrally. Reader typography continues to resolve through `ReaderTheme` and never changes application chrome.
+Shared components own recurring visual rules: `AppBar`, `CommandBar`, `Label`, `MenuRow`, `SettingsRow`, and `FileRow`. `SettingsItem::ALL` supplies the row order for navigation and rendering. `SettingsItem::value` supplies values for device rows and browser metadata. `CustomImagePreview` distinguishes missing and invalid images from a ready image with a name and bitmap.
 
-Home, Books, Files, Settings, Reader, Image, Error, and Sleep renders are pinned as PBM fixtures with exact 48,000-byte pixel payloads. Coverage includes empty catalogs, filename clipping, and sleep-image previews. PBM uses the opposite bit polarity from the device framebuffer. A component or layout change must preserve those frames unless the visual change is deliberate and the fixtures are reviewed.
+Semantic `TextRole` values resolve application typography centrally. Reader typography continues to resolve through `ReaderTheme` and never changes application chrome.
+
+Home, Books, Files, Settings, Reader, Image, Error, and Sleep renders are pinned as PBM fixtures with exact 48,000-byte pixel payloads. Coverage includes empty catalogs, populated shelf pages, every settings selection, filename clipping, and sleep-image previews. PBM uses the opposite bit polarity from the device framebuffer. A component or layout change must preserve those frames unless the visual change is deliberate and the fixtures are reviewed.
 
 ## Simulator
 

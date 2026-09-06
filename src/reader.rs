@@ -413,7 +413,7 @@ mod tests {
         render_reader,
     };
     use crate::{
-        app::{App, AppEffect, AppInput, ReaderPreferences},
+        app::{App, AppEffect, AppInput, AppView, ReaderPreferences},
         image::{MonochromeImage, Size},
     };
 
@@ -432,9 +432,11 @@ mod tests {
         let mut app = App::new(1);
         app.input(AppInput::Confirm);
         app.input(AppInput::Confirm);
-        let AppEffect::RenderReader(location) = app.chapter_loaded(1, 2).unwrap() else {
-            panic!("reader effect expected");
+        assert_eq!(app.chapter_loaded(1, 2).unwrap(), AppEffect::Render);
+        let AppView::Reader(session) = app.view() else {
+            panic!("reader view expected");
         };
+        let location = session.location();
         let lines = [
             ReaderLine::new("Chapter one", ReaderStyle::Heading),
             ReaderLine::new("Readable words survive reflow.", ReaderStyle::Body),
@@ -465,9 +467,11 @@ mod tests {
         let mut app = App::new(1);
         app.input(AppInput::Confirm);
         app.input(AppInput::Confirm);
-        let AppEffect::RenderReader(location) = app.chapter_loaded(1, 1).unwrap() else {
-            panic!("reader effect expected");
+        assert_eq!(app.chapter_loaded(1, 1).unwrap(), AppEffect::Render);
+        let AppView::Reader(session) = app.view() else {
+            panic!("reader view expected");
         };
+        let location = session.location();
         let line = ReaderLine::new("line", ReaderStyle::Body);
         let theme = super::ReaderTheme::from_preferences(app.reader_preferences());
         let lines = vec![line; (BODY_BOTTOM - BODY_TOP) / theme.line_height(line.style()) + 1];

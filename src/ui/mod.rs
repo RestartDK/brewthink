@@ -5,7 +5,7 @@ mod layout;
 mod theme;
 
 pub use app::{AppFrame, AppRenderError, render_app};
-pub use components::{ActionRow, AppBar, CommandBar, FileRow, Label, MenuRow, Selection, ValueRow};
+pub use components::{AppBar, CommandBar, FileRow, Label, MenuRow, Selection, SettingsRow};
 pub use frame::{FixedText, FrameTarget};
 pub(crate) use layout::{ui, ui_column};
 pub use theme::{

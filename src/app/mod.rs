@@ -580,13 +580,10 @@ impl SettingsItem {
     }
 
     pub const fn from_index(index: usize) -> Option<Self> {
-        match index {
-            0 => Some(Self::Font),
-            1 => Some(Self::Size),
-            2 => Some(Self::Spacing),
-            3 => Some(Self::SleepScreen),
-            4 => Some(Self::Apply),
-            _ => None,
+        if index < Self::ALL.len() {
+            Some(Self::ALL[index])
+        } else {
+            None
         }
     }
 
@@ -597,6 +594,16 @@ impl SettingsItem {
             Self::Spacing => "LINE SPACING",
             Self::SleepScreen => "SLEEP SCREEN",
             Self::Apply => "APPLY SETTINGS",
+        }
+    }
+
+    pub const fn value(self, preferences: AppPreferences) -> Option<&'static str> {
+        match self {
+            Self::Font => Some(preferences.reader().font().label()),
+            Self::Size => Some(preferences.reader().size().label()),
+            Self::Spacing => Some(preferences.reader().spacing().label()),
+            Self::SleepScreen => Some(preferences.sleep_screen().label()),
+            Self::Apply => None,
         }
     }
 }
@@ -793,7 +800,7 @@ pub enum AppView {
     Library,
     Files(FilesState),
     Settings(SettingsState),
-    Loading,
+    Loading(PendingChapter),
     Reader(ReadingSession),
     Image(ImageId),
     Error { book: BookId, origin: BookOrigin },
@@ -880,22 +887,11 @@ impl SleepScreenPlan {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AppEffect {
     None,
-    RenderHome,
-    RenderLibrary,
-    RenderFiles,
-    RenderSettings,
+    Render,
     LoadChapter {
         book: BookId,
         spine_index: usize,
         target: PageTarget,
-    },
-    RenderReader(ReadingLocation),
-    RenderImage(ImageId),
-    RenderError {
-        book: BookId,
-    },
-    RenderSleep {
-        resume: ResumePoint,
     },
     EnterDeepSleep {
         resume: ResumePoint,
@@ -913,7 +909,7 @@ pub enum AppStateError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct PendingChapter {
+pub struct PendingChapter {
     book: BookId,
     spine_index: usize,
     target: PageTarget,
@@ -979,7 +975,6 @@ pub struct App {
     image_count: usize,
     selected_sleep_image: Option<ImageId>,
     battery: BatteryDisplayState,
-    pending: Option<PendingChapter>,
     reading_checkpoint: Option<ReadingCheckpoint>,
 }
 
@@ -1023,7 +1018,6 @@ impl App {
             image_count,
             selected_sleep_image,
             battery: BatteryDisplayState::new(),
-            pending: None,
             reading_checkpoint: None,
         }
     }
@@ -1050,11 +1044,11 @@ impl App {
             ResumePoint::Home { selected } => {
                 app.home = HomeState::with_selected(selected);
                 app.view = AppView::Home(app.home);
-                AppEffect::RenderHome
+                AppEffect::Render
             }
             ResumePoint::Books { selected: None } if book_count == 0 => {
                 app.view = AppView::Library;
-                AppEffect::RenderLibrary
+                AppEffect::Render
             }
             ResumePoint::Books {
                 selected: Some(selected),
@@ -1062,15 +1056,15 @@ impl App {
                 app.library = LibraryState::with_selected(book_count, selected.index())
                     .map_err(|_| AppStateError::BookOutOfBounds)?;
                 app.view = AppView::Library;
-                AppEffect::RenderLibrary
+                AppEffect::Render
             }
             ResumePoint::Books { selected: None } => {
                 app.view = AppView::Library;
-                AppEffect::RenderLibrary
+                AppEffect::Render
             }
             ResumePoint::Files { selected: None } if file_count == 0 => {
                 app.view = AppView::Files(app.files);
-                AppEffect::RenderFiles
+                AppEffect::Render
             }
             ResumePoint::Files {
                 selected: Some(selected),
@@ -1078,17 +1072,17 @@ impl App {
                 app.files = FilesState::with_selected(file_count, selected.index())
                     .map_err(|_| AppStateError::ImageOutOfBounds)?;
                 app.view = AppView::Files(app.files);
-                AppEffect::RenderFiles
+                AppEffect::Render
             }
             ResumePoint::Files { selected: None } => {
                 app.view = AppView::Files(app.files);
-                AppEffect::RenderFiles
+                AppEffect::Render
             }
             ResumePoint::Settings { selected, draft } => {
                 let settings = SettingsState::with_state(selected, draft);
                 app.home = HomeState::with_selected(HomeItem::Settings);
                 app.view = AppView::Settings(settings);
-                AppEffect::RenderSettings
+                AppEffect::Render
             }
             ResumePoint::Reader {
                 book,
@@ -1111,7 +1105,7 @@ impl App {
                 app.validate_image(image)?;
                 app.view = AppView::Image(image);
                 app.files.selected = Some(FileId::new(book_count + image.index()));
-                AppEffect::RenderImage(image)
+                AppEffect::Render
             }
         };
         Ok((app, effect))
@@ -1171,15 +1165,8 @@ impl App {
 
     fn current_render_effect(&self) -> AppEffect {
         match self.view {
-            AppView::Home(_) => AppEffect::RenderHome,
-            AppView::Library => AppEffect::RenderLibrary,
-            AppView::Files(_) => AppEffect::RenderFiles,
-            AppView::Settings(_) => AppEffect::RenderSettings,
-            AppView::Loading => AppEffect::None,
-            AppView::Reader(session) => AppEffect::RenderReader(session.location()),
-            AppView::Image(image) => AppEffect::RenderImage(image),
-            AppView::Error { book, .. } => AppEffect::RenderError { book },
-            AppView::Sleeping { resume } => AppEffect::RenderSleep { resume },
+            AppView::Loading(_) => AppEffect::None,
+            _ => AppEffect::Render,
         }
     }
 
@@ -1206,12 +1193,7 @@ impl App {
             },
             AppView::Image(image) => ResumePoint::Image { image },
             AppView::Sleeping { resume } => resume,
-            AppView::Loading => self.pending.map_or(
-                ResumePoint::Home {
-                    selected: self.home.selected,
-                },
-                |pending| self.origin_resume(pending.origin),
-            ),
+            AppView::Loading(pending) => self.origin_resume(pending.origin),
             AppView::Error { origin, .. } => self.origin_resume(origin),
         }
     }
@@ -1220,8 +1202,7 @@ impl App {
         if input == AppInput::Power && !matches!(self.view, AppView::Sleeping { .. }) {
             let resume = self.resume_point();
             self.view = AppView::Sleeping { resume };
-            self.pending = None;
-            return AppEffect::RenderSleep { resume };
+            return AppEffect::Render;
         }
 
         match (self.view, input) {
@@ -1231,25 +1212,25 @@ impl App {
                 }
                 self.home = home;
                 self.view = AppView::Home(home);
-                AppEffect::RenderHome
+                AppEffect::Render
             }
             (AppView::Home(home), AppInput::Confirm) => match home.selected {
                 HomeItem::Books => {
                     self.view = AppView::Library;
-                    AppEffect::RenderLibrary
+                    AppEffect::Render
                 }
                 HomeItem::Files => {
                     self.view = AppView::Files(self.files);
-                    AppEffect::RenderFiles
+                    AppEffect::Render
                 }
                 HomeItem::Settings => {
                     self.view = AppView::Settings(SettingsState::new(self.preferences));
-                    AppEffect::RenderSettings
+                    AppEffect::Render
                 }
             },
             (AppView::Library, AppInput::Move(direction)) => {
                 if self.library.move_selection(direction) {
-                    AppEffect::RenderLibrary
+                    AppEffect::Render
                 } else {
                     AppEffect::None
                 }
@@ -1262,7 +1243,7 @@ impl App {
                 }
                 self.files = files;
                 self.view = AppView::Files(files);
-                AppEffect::RenderFiles
+                AppEffect::Render
             }
             (AppView::Files(_), AppInput::Confirm) => self.open_file(),
             (AppView::Files(_), AppInput::Back) => self.return_home(HomeItem::Files),
@@ -1271,7 +1252,7 @@ impl App {
                     return AppEffect::None;
                 }
                 self.view = AppView::Settings(settings);
-                AppEffect::RenderSettings
+                AppEffect::Render
             }
             (AppView::Settings(settings), AppInput::Confirm)
                 if settings.selected == SettingsItem::Apply =>
@@ -1282,7 +1263,7 @@ impl App {
             (AppView::Settings(mut settings), AppInput::Confirm) => {
                 settings.input(Direction::Right);
                 self.view = AppView::Settings(settings);
-                AppEffect::RenderSettings
+                AppEffect::Render
             }
             (AppView::Settings(_), AppInput::Back) => self.return_home(HomeItem::Settings),
             (AppView::Reader(session), AppInput::Move(Direction::Right | Direction::Down))
@@ -1293,19 +1274,13 @@ impl App {
             (AppView::Reader(session), AppInput::Back) => self.return_to_origin(session.origin),
             (AppView::Image(image), AppInput::Confirm) => {
                 self.selected_sleep_image = Some(image);
-                AppEffect::RenderImage(image)
+                AppEffect::Render
             }
             (AppView::Image(_), AppInput::Back) => {
                 self.view = AppView::Files(self.files);
-                AppEffect::RenderFiles
+                AppEffect::Render
             }
-            (AppView::Loading, AppInput::Back) => {
-                let origin = self
-                    .pending
-                    .map_or(BookOrigin::Books, |pending| pending.origin);
-                self.pending = None;
-                self.return_to_origin(origin)
-            }
+            (AppView::Loading(pending), AppInput::Back) => self.return_to_origin(pending.origin),
             (AppView::Error { origin, .. }, AppInput::Back) => self.return_to_origin(origin),
             _ => AppEffect::None,
         }
@@ -1316,10 +1291,9 @@ impl App {
         spine_count: usize,
         page_count: usize,
     ) -> Result<AppEffect, AppStateError> {
-        let pending = self
-            .pending
-            .take()
-            .ok_or(AppStateError::UnexpectedChapter)?;
+        let AppView::Loading(pending) = self.view else {
+            return Err(AppStateError::UnexpectedChapter);
+        };
         if spine_count == 0 || pending.spine_index >= spine_count {
             return Err(AppStateError::SpineOutOfBounds);
         }
@@ -1354,19 +1328,18 @@ impl App {
             page_count: location.page_count,
             preferences: self.preferences.reader(),
         });
-        Ok(AppEffect::RenderReader(location))
+        Ok(AppEffect::Render)
     }
 
     pub fn chapter_failed(&mut self) -> Result<AppEffect, AppStateError> {
-        let pending = self
-            .pending
-            .take()
-            .ok_or(AppStateError::UnexpectedChapter)?;
+        let AppView::Loading(pending) = self.view else {
+            return Err(AppStateError::UnexpectedChapter);
+        };
         self.view = AppView::Error {
             book: pending.book,
             origin: pending.origin,
         };
-        Ok(AppEffect::RenderError { book: pending.book })
+        Ok(AppEffect::Render)
     }
 
     pub fn sleep_frame_ready(&self) -> Result<AppEffect, AppStateError> {
@@ -1384,14 +1357,14 @@ impl App {
             ResumePoint::Home { selected } => {
                 self.home = HomeState::with_selected(selected);
                 self.view = AppView::Home(self.home);
-                AppEffect::RenderHome
+                AppEffect::Render
             }
             ResumePoint::Books { selected } => {
                 if let Some(selected) = selected {
                     self.select_book(selected);
                 }
                 self.view = AppView::Library;
-                AppEffect::RenderLibrary
+                AppEffect::Render
             }
             ResumePoint::Files { selected } => {
                 if let Some(selected) = selected
@@ -1401,12 +1374,12 @@ impl App {
                     self.files = files;
                 }
                 self.view = AppView::Files(self.files);
-                AppEffect::RenderFiles
+                AppEffect::Render
             }
             ResumePoint::Settings { selected, draft } => {
                 let settings = SettingsState::with_state(selected, draft);
                 self.view = AppView::Settings(settings);
-                AppEffect::RenderSettings
+                AppEffect::Render
             }
             ResumePoint::Reader {
                 book,
@@ -1416,7 +1389,7 @@ impl App {
             } => self.request_chapter(book, spine_index, PageTarget::Index(page_index), origin),
             ResumePoint::Image { image } => {
                 self.view = AppView::Image(image);
-                AppEffect::RenderImage(image)
+                AppEffect::Render
             }
         }
     }
@@ -1436,7 +1409,7 @@ impl App {
         }
         let image = ImageId::new(file.index() - self.library.book_count);
         self.view = AppView::Image(image);
-        AppEffect::RenderImage(image)
+        AppEffect::Render
     }
 
     fn open_book(&mut self, book: BookId, origin: BookOrigin) -> AppEffect {
@@ -1514,7 +1487,7 @@ impl App {
             page_count: location.page_count,
             preferences: self.preferences.reader(),
         });
-        AppEffect::RenderReader(location)
+        AppEffect::Render
     }
 
     fn request_chapter(
@@ -1524,8 +1497,7 @@ impl App {
         target: PageTarget,
         origin: BookOrigin,
     ) -> AppEffect {
-        self.view = AppView::Loading;
-        self.pending = Some(PendingChapter {
+        self.view = AppView::Loading(PendingChapter {
             book,
             spine_index,
             target,
@@ -1541,20 +1513,18 @@ impl App {
     fn return_home(&mut self, selected: HomeItem) -> AppEffect {
         self.home = HomeState::with_selected(selected);
         self.view = AppView::Home(self.home);
-        self.pending = None;
-        AppEffect::RenderHome
+        AppEffect::Render
     }
 
     fn return_to_origin(&mut self, origin: BookOrigin) -> AppEffect {
-        self.pending = None;
         match origin {
             BookOrigin::Books => {
                 self.view = AppView::Library;
-                AppEffect::RenderLibrary
+                AppEffect::Render
             }
             BookOrigin::Files => {
                 self.view = AppView::Files(self.files);
-                AppEffect::RenderFiles
+                AppEffect::Render
             }
         }
     }
@@ -1637,7 +1607,8 @@ mod tests {
     use crate::{input::UsbState, power::BatteryStatus};
 
     fn open_books(app: &mut App) {
-        assert_eq!(app.input(AppInput::Confirm), AppEffect::RenderLibrary);
+        assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
+        assert_eq!(app.view(), AppView::Library);
     }
 
     fn open_first_book(app: &mut App, pages: usize) {
@@ -1646,10 +1617,8 @@ mod tests {
             app.input(AppInput::Confirm),
             AppEffect::LoadChapter { .. }
         ));
-        assert!(matches!(
-            app.chapter_loaded(3, pages).unwrap(),
-            AppEffect::RenderReader(_)
-        ));
+        assert_eq!(app.chapter_loaded(3, pages).unwrap(), AppEffect::Render);
+        assert!(matches!(app.view(), AppView::Reader(_)));
     }
 
     #[test]
@@ -1705,18 +1674,21 @@ mod tests {
     fn starts_at_home_and_opens_each_primary_section() {
         let mut app = App::new(4);
         assert_eq!(app.view(), AppView::Home(app.home()));
-        assert_eq!(app.input(AppInput::Confirm), AppEffect::RenderLibrary);
-        assert_eq!(app.input(AppInput::Back), AppEffect::RenderHome);
+        assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
+        assert_eq!(app.view(), AppView::Library);
+        assert_eq!(app.input(AppInput::Back), AppEffect::Render);
+        assert_eq!(app.view(), AppView::Home(app.home()));
 
         app.input(AppInput::Move(Direction::Down));
         assert_eq!(app.home().selected(), HomeItem::Files);
-        assert_eq!(app.input(AppInput::Confirm), AppEffect::RenderFiles);
+        assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
         assert_eq!(app.view(), AppView::Files(FilesState::new(4)));
-        assert_eq!(app.input(AppInput::Back), AppEffect::RenderHome);
+        assert_eq!(app.input(AppInput::Back), AppEffect::Render);
+        assert_eq!(app.view(), AppView::Home(app.home()));
 
         app.input(AppInput::Move(Direction::Down));
         assert_eq!(app.home().selected(), HomeItem::Settings);
-        assert_eq!(app.input(AppInput::Confirm), AppEffect::RenderSettings);
+        assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
         assert!(matches!(app.view(), AppView::Settings(_)));
     }
 
@@ -1743,7 +1715,8 @@ mod tests {
             app.view(),
             AppView::Settings(settings) if settings.selected() == SettingsItem::Apply
         ));
-        assert_eq!(app.input(AppInput::Confirm), AppEffect::RenderHome);
+        assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
+        assert_eq!(app.view(), AppView::Home(app.home()));
         assert_eq!(
             app.preferences(),
             AppPreferences::new(
@@ -1768,7 +1741,7 @@ mod tests {
             AppEffect::LoadChapter { book, .. } if book.index() == 1
         ));
         app.chapter_loaded(1, 2).unwrap();
-        assert_eq!(app.input(AppInput::Back), AppEffect::RenderFiles);
+        assert_eq!(app.input(AppInput::Back), AppEffect::Render);
         assert!(
             matches!(app.view(), AppView::Files(files) if files.selected().unwrap().index() == 1)
         );
@@ -1780,26 +1753,26 @@ mod tests {
         app.input(AppInput::Move(Direction::Down));
         app.input(AppInput::Confirm);
         app.input(AppInput::Move(Direction::Down));
-        assert_eq!(
-            app.input(AppInput::Confirm),
-            AppEffect::RenderImage(ImageId::new(0))
-        );
-        assert_eq!(
-            app.input(AppInput::Confirm),
-            AppEffect::RenderImage(ImageId::new(0))
-        );
+        assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
+        assert_eq!(app.view(), AppView::Image(ImageId::new(0)));
+        assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
+        assert_eq!(app.view(), AppView::Image(ImageId::new(0)));
         assert_eq!(app.selected_sleep_image(), Some(ImageId::new(0)));
-        assert_eq!(app.input(AppInput::Back), AppEffect::RenderFiles);
+        assert_eq!(app.input(AppInput::Back), AppEffect::Render);
+        assert_eq!(app.view(), AppView::Files(app.files()));
     }
 
     #[test]
     fn reader_turns_pages_and_crosses_chapter_boundaries() {
         let mut app = App::new(1);
         open_first_book(&mut app, 2);
-        assert!(matches!(
+        assert_eq!(
             app.input(AppInput::Move(Direction::Right)),
-            AppEffect::RenderReader(location) if location.page_index() == 1
-        ));
+            AppEffect::Render
+        );
+        assert!(
+            matches!(app.view(), AppView::Reader(session) if session.location().page_index() == 1)
+        );
         assert!(matches!(
             app.input(AppInput::Move(Direction::Right)),
             AppEffect::LoadChapter {
@@ -1808,9 +1781,11 @@ mod tests {
                 ..
             }
         ));
-        let AppEffect::RenderReader(location) = app.chapter_loaded(3, 4).unwrap() else {
-            panic!("expected reader render");
+        assert_eq!(app.chapter_loaded(3, 4).unwrap(), AppEffect::Render);
+        let AppView::Reader(session) = app.view() else {
+            panic!("expected reader view");
         };
+        let location = session.location();
         assert_eq!(location.spine_index(), 1);
         assert_eq!(location.page_index(), 0);
     }
@@ -1847,9 +1822,11 @@ mod tests {
             panic!("expected progress load");
         };
         assert_eq!((page_index, page_count), (2, 5));
-        let AppEffect::RenderReader(location) = app.chapter_loaded(3, 9).unwrap() else {
-            panic!("expected reader render");
+        assert_eq!(app.chapter_loaded(3, 9).unwrap(), AppEffect::Render);
+        let AppView::Reader(session) = app.view() else {
+            panic!("expected reader view");
         };
+        let location = session.location();
         assert_eq!(location.page_index(), 4);
     }
 
@@ -1872,9 +1849,10 @@ mod tests {
         let (mut app, effect) = App::from_resume(2, preferences, resume).unwrap();
         assert!(matches!(effect, AppEffect::LoadChapter { .. }));
         app.chapter_loaded(4, 7).unwrap();
+        assert_eq!(app.input(AppInput::Power), AppEffect::Render);
         assert!(matches!(
-            app.input(AppInput::Power),
-            AppEffect::RenderSleep {
+            app.view(),
+            AppView::Sleeping {
                 resume: ResumePoint::Reader {
                     origin: BookOrigin::Files,
                     ..
@@ -1887,7 +1865,8 @@ mod tests {
         ));
         assert!(matches!(app.wake(), AppEffect::LoadChapter { .. }));
         app.chapter_loaded(4, 7).unwrap();
-        assert_eq!(app.input(AppInput::Back), AppEffect::RenderFiles);
+        assert_eq!(app.input(AppInput::Back), AppEffect::Render);
+        assert_eq!(app.view(), AppView::Files(app.files()));
         assert_eq!(app.preferences(), preferences);
     }
 
@@ -1957,10 +1936,87 @@ mod tests {
     }
 
     #[test]
+    fn rejected_chapter_metadata_preserves_the_loading_request() {
+        let mut app = App::new(1);
+        open_books(&mut app);
+        app.input(AppInput::Confirm);
+        let loading = app.view();
+        assert!(matches!(loading, AppView::Loading(_)));
+        assert_eq!(
+            app.set_battery(BatteryStatus::from_percent(82, UsbState::Disconnected)),
+            AppEffect::None,
+        );
+        assert_eq!(app.view(), loading);
+        assert_eq!(
+            app.chapter_loaded(0, 1),
+            Err(super::AppStateError::SpineOutOfBounds)
+        );
+        assert_eq!(app.view(), loading);
+        assert_eq!(
+            app.chapter_loaded(1, 0),
+            Err(super::AppStateError::EmptyChapter)
+        );
+        assert_eq!(app.view(), loading);
+        app.chapter_loaded(1, 2).unwrap();
+        assert!(matches!(app.view(), AppView::Reader(_)));
+        assert_eq!(
+            app.chapter_failed(),
+            Err(super::AppStateError::UnexpectedChapter)
+        );
+    }
+
+    #[test]
+    fn cancelling_or_sleeping_drops_the_loading_request_and_keeps_the_origin() {
+        for origin in [BookOrigin::Books, BookOrigin::Files] {
+            for interrupt in [AppInput::Back, AppInput::Power] {
+                let mut app = App::new(1);
+                if origin == BookOrigin::Files {
+                    app.input(AppInput::Move(Direction::Down));
+                }
+                app.input(AppInput::Confirm);
+                let parent = app.view();
+                let resume = app.resume_point();
+                app.input(AppInput::Confirm);
+                assert!(matches!(app.view(), AppView::Loading(_)));
+                assert_eq!(app.resume_point(), resume);
+                app.input(interrupt);
+                assert_eq!(
+                    app.chapter_loaded(1, 1),
+                    Err(super::AppStateError::UnexpectedChapter)
+                );
+                assert_eq!(
+                    app.chapter_failed(),
+                    Err(super::AppStateError::UnexpectedChapter)
+                );
+                if interrupt == AppInput::Power {
+                    assert!(matches!(app.view(), AppView::Sleeping { .. }));
+                    app.wake();
+                }
+                assert_eq!(app.view(), parent);
+            }
+        }
+    }
+
+    #[test]
+    fn settings_metadata_matches_the_navigation_order() {
+        let preferences = AppPreferences::default();
+        for (index, item) in SettingsItem::ALL.into_iter().enumerate() {
+            assert_eq!(item.index(), index);
+            assert_eq!(SettingsItem::from_index(index), Some(item));
+            assert_eq!(
+                item.value(preferences).is_none(),
+                item == SettingsItem::Apply
+            );
+        }
+        assert_eq!(SettingsItem::from_index(SettingsItem::ALL.len()), None);
+        assert_eq!(SettingsItem::from_index(usize::MAX), None);
+    }
+
+    #[test]
     fn battery_updates_refresh_meaningful_changes() {
         let mut app = App::new(0);
         let initial = BatteryStatus::from_percent(42, UsbState::Disconnected);
-        assert_eq!(app.set_battery(initial), AppEffect::RenderHome);
+        assert_eq!(app.set_battery(initial), AppEffect::Render);
         assert_eq!(app.set_battery(initial), AppEffect::None);
 
         let small_change = BatteryStatus::from_percent(44, UsbState::Disconnected);
@@ -1968,10 +2024,10 @@ mod tests {
         assert_eq!(app.battery(), small_change);
 
         let threshold_change = BatteryStatus::from_percent(47, UsbState::Disconnected);
-        assert_eq!(app.set_battery(threshold_change), AppEffect::RenderHome);
+        assert_eq!(app.set_battery(threshold_change), AppEffect::Render);
 
         let usb_connected = BatteryStatus::from_percent(47, UsbState::Connected);
-        assert_eq!(app.set_battery(usb_connected), AppEffect::RenderHome);
+        assert_eq!(app.set_battery(usb_connected), AppEffect::Render);
         assert_eq!(app.battery(), usb_connected);
     }
 }
