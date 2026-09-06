@@ -7,6 +7,28 @@ The goal of this project is:
 
 I want to get more into reading, and what better way to do that than with fully open firmware on an Xteink X4?
 
+## Development status as of 2026-09-06
+
+Storage [PR #8](https://github.com/RestartDK/brewthink/pull/8) is merged as `1481f89`. Local `main` contains that work. At 20:04 UTC, the UI-refactor worktree had staged integration changes and no unmerged Git paths. Its code has not been reviewed or tested in this session.
+
+The SD card still uses FAT32 through `embedded-sdmmc` 0.10.0. The application uses `/books`, `/files`, `/brew/cache`, and `/brew/bookmark`. Existing books were preserved. All six requested images passed USB upload and SD readback verification and opened in the device viewer.
+
+The selected custom image persisted across reboot and rendered during real sleep. Physical wake on that reader build remains unverified here. The older GPIO3 wake diagnostic passed, but it does not establish the result for this build.
+
+The latest firmware, safety boundaries, and remaining checks are in [checkpoint.md](../checkpoint.md). The stock-flash observations below describe the private backup, not the current development image or boot selection.
+
+### Folder creation and startup failures
+
+`/BREWTHINK` is nine characters long. FAT32 supports long filenames, but the library's file/directory creation API accepts 8.3 names. Using `/brew` fixed that name failure without replacing the filesystem.
+
+The later startup freeze was stack exhaustion, not a confirmed FAT-chain cycle. Read-only captures showed matching FAT copies and valid directory/book chains. The host could scan those same bytes. Five orphan clusters were preserved without physical repair.
+
+Forced inlining made the reader reserve 37,520 stack bytes before calling a loader that reserved another 41,872 bytes. The linked stack had 62,280 bytes available. Removing `#[inline(always)]` from `run_effect` and `load_chapter` reduced the reader task frame to 1,104 bytes, and the same physical card then booted.
+
+Inlining places a function's compiled operations inside its caller instead of making a separate call. It can remove call overhead, but it can also increase code size or stack requirements. Host tests did not reproduce this device-specific stack limit. The compiled reader-stack check now catches the known regression, though it does not analyze the entire call graph.
+
+The last log before the freeze identified the scan entry, not the cause. USB commands could not respond because startup had not reached command handling. The separate read-only diagnostic bypasses that dependency. See [SD inspection without removing the card](sd-recovery.md).
+
 ## About the device
 
 ### Identity
@@ -284,7 +306,7 @@ The following table was decoded from the partition-table sector at `0x8000` in t
 | `spiffs`            | Data / SPIFFS subtype | `0xC90000` |      `0x360000` | `0xC90000–0xFEFFFF` |
 | `coredump`          | Data / core dump      | `0xFF0000` |      `0x010000` | `0xFF0000–0xFFFFFF` |
 
-Verified stock contents:
+Verified contents of the original stock backup:
 
 - `app0` contains the valid stock ESP32-C3 application and is selected by valid OTA sequence `1`.
 - `app1` is completely erased (`0xFF`) and contains no application image.
@@ -333,9 +355,9 @@ sector 0: valid seq=1 -> app0
 sector 1: empty/unselected
 ```
 
-Therefore the bootloader currently selects stock `app0`.
+That backup selects stock `app0`. The later approved development workflow selected `app1` with sequence `2`. See [checkpoint.md](../checkpoint.md) for the last recorded device state. Do not repeat boot-selection writes during routine app1 updates.
 
-To test Brewthink in `app1` after writing and verifying an app image there, write a valid `seq=2` OTA select sector at `0x00F000` only. For this bootloader format, the first 32 bytes of the sector are:
+The historical switch to Brewthink used a valid `seq=2` OTA select sector at `0x00F000`, after writing and verifying an app image in `app1`. For this bootloader format, the first 32 bytes of the sector are:
 
 ```text
 02 00 00 00  ff ff ff ff  ff ff ff ff  ff ff ff ff
@@ -454,8 +476,7 @@ The decoded CSV from this physical device is authoritative. It matches the commu
 
 ### Sources
 
-- [Xteink X4 sample firmware](https://github.com/CidVonHighwind/xteink-x4-sample)
-- [Open X4 sample firmware](https://github.com/open-x4-epaper/sample-firmware)
+- Community X4 firmware examples for GPIO assignments and display initialization
 - [Xteink X4 schematics](https://github.com/sunwoods/Xteink-X4)
 - [Good Display GDEQ0426T82 product page](https://www.good-display.com/product/457.html)
 - [ESP32-C3 datasheet](https://www.espressif.com/sites/default/files/documentation/esp32-c3_datasheet_en.pdf)

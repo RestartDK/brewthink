@@ -35,7 +35,7 @@ The ESP32-C3 adapter is under `src/x4/display.rs`. It binds SPI2 and the verifie
 | Display CS / D/C / reset / BUSY | GPIO21 / GPIO4 / GPIO5 / GPIO6 |
 | SD CS | GPIO12, retained high throughout display diagnostics |
 
-Brewthink runs the X4 display phase at 40 MHz, matching MarigoldOS and the established X4 community overclock. The SSD1677 datasheet specifies a 20 MHz maximum write clock, and current FreeInk/CrossPoint defaults to that in-spec rate unless `FREEINK_X4_OVERCLOCK_SPI` is enabled. Only the display phase uses 40 MHz; Brewthink restores the separately verified 10 MHz SD data clock before card traffic. Moving from 20 to 40 MHz reduces two 48,000-byte plane transfers by about 19 ms but does not shorten the much longer physical e-paper waveform.
+Brewthink runs the X4 display phase at 40 MHz. This exceeds the SSD1677 datasheet's 20 MHz maximum write clock. Community firmware uses both the in-spec rate and this overclock. Only the display phase uses 40 MHz; Brewthink restores the separately verified 10 MHz SD data clock before card traffic. Moving from 20 to 40 MHz reduces two 48,000-byte plane transfers by about 19 ms but does not shorten the much longer physical e-paper waveform.
 
 The SSD1677 datasheet describes a controller with up to 960 source and 680 gate outputs; those maxima are not the fitted panel dimensions. Brewthink uses the GDEQ0426T82's actual 800 × 480 geometry.
 
@@ -95,7 +95,7 @@ The device reader always has a 48,000-byte next frame in its frame/codec workspa
 
 `host-ram` is the conventional dual-buffer strategy. A differential refresh writes the next frame to BW RAM and the host's previous frame to RED RAM before activation. The host copies the next frame into its previous-frame buffer only after BUSY reports completion.
 
-`controller-ram` is the conventional single-buffer strategy. A differential refresh writes only the next frame to BW RAM before activation because RED RAM already holds the previous frame. After completion, Brewthink seeds RED RAM with the new baseline. The stock-parity path also rewrites BW RAM to match FreeInk's conservative controller synchronization.
+`controller-ram` is the conventional single-buffer strategy. A differential refresh writes only the next frame to BW RAM before activation because RED RAM already holds the previous frame. After completion, Brewthink seeds RED RAM with the new baseline. The stock-parity path also rewrites BW RAM so both controller planes contain the new baseline.
 
 `BaselineState` tracks whether either storage strategy is trustworthy. A failed refresh marks it unknown. A requested differential refresh becomes quick-clean whenever the baseline is unknown, including the first refresh after boot.
 
@@ -103,10 +103,10 @@ The `automatic` refresh policy requests differential updates during normal inter
 
 Two X4 drive profiles are available:
 
-| Drive profile | Initialization | Full-clean | Quick-clean | Differential |
+| Drive behavior | Initialization | Full-clean | Quick-clean | Differential |
 | --- | --- | ---: | ---: | ---: |
-| `openx4-fast-du` | Booster tail `40`, border `01` | `F4` | `D4` with temperature `5A` | `1C` |
-| `stock-parity` | Booster tail `80`, border `80` | `F7` | `D7` with temperature `5A` | `FC` |
+| Fast differential | Booster tail `40`, border `01` | `F4` | `D4` with temperature `5A` | `1C` |
+| Stock parity | Booster tail `80`, border `80` | `F7` | `D7` with temperature `5A` | `FC` |
 
 The reader now defaults to the conservative `stock-parity` drive profile, memory-saving `controller-ram` storage, and mixed `automatic` refresh policy. These defaults have compile-time and command-transcript coverage but are not yet verified on the physical panel. Compare baseline storage while holding the drive profile and refresh mode constant:
 
@@ -122,7 +122,7 @@ BREWTHINK_DISPLAY_REFRESH=differential \
   scripts/build-reader-app1.sh artifacts/brewthink-reader-stock-parity-controller-ram-differential-app1.bin
 ```
 
-Accepted drive profiles are `openx4-fast-du` and `stock-parity`. Accepted previous-frame storage values are `host-ram` and `controller-ram`. Accepted refresh policies are `automatic`, `full-clean`, `quick-clean`, and `differential`. Building does not touch the device. Non-default combinations have command-transcript tests but are not yet verified on the physical panel.
+The exact accepted `BREWTHINK_X4_DRIVE_PROFILE` values are defined in `build.rs`. Accepted previous-frame storage values are `host-ram` and `controller-ram`. Accepted refresh policies are `automatic`, `full-clean`, `quick-clean`, and `differential`. Building does not touch the device. Non-default combinations have command-transcript tests but are not yet verified on the physical panel.
 
 ## Display deep sleep
 
@@ -190,7 +190,6 @@ Controller completion and flash readback are machine-verified. Human inspection 
 
 ## References
 
-- OpenX4 Community SDK: `libs/display/EInkDisplay/src/EInkDisplay.cpp`
-- MarigoldOS: `display/src/epd/ssd1677.rs` and `fw/src/display_flush/ssd1677.rs`
+- Community X4 display-driver initialization and refresh transcripts
 - Solomon Systech SSD1677 datasheet
 - Good Display GDEQ0426T82 panel documentation

@@ -56,7 +56,7 @@ The current host, WASM, and X4 paths provide:
 - Immediate conversion of decoded covers into 5,808-byte, 176 × 264 packed shelf bitmaps; no full-color frame is retained.
 - Shared Home, Books, Files, Settings, Reader, Error, and Sleep navigation and framebuffer rendering in ordinary Rust tests, WASM, and X4 firmware.
 - A shared battery indicator backed by a smoothed voltage estimate on X4 and a fake battery state in WASM.
-- Bounded reader typography choices whose resolved metrics drive both pagination and rendering. Noto Serif 14 pt is the default, matching CrossPoint Reader.
+- Bounded reader typography choices whose resolved metrics drive both pagination and rendering. Noto Serif 14 pt is the default.
 - Read-only FAT `/books` discovery, a seekable file adapter, bounded streaming ZIP/DEFLATE, fixed-memory XML, and page-at-a-time XHTML layout on the X4.
 - A normal X4 application loop connecting all seven controls, shelf, chapter/page navigation, SSD1677 refresh, retained sleep frame, GPIO3 deep sleep/wake, and checksummed book/chapter/page resume.
 - Synthetic EPUB, PNG-alpha, and JPEG fixtures plus private acceptance against every spine item and the cover in the Hamming EPUB.
@@ -146,15 +146,15 @@ The private Hamming EPUB is an acceptance target, not a repository fixture.
 | Capability | Current evidence | Remaining device evidence |
 | --- | --- | --- |
 | EPUB 3 package | All 340 resources and 42 spine items parsed through the fixed-memory reader | Parse the same file through physical FAT |
-| Metadata | Exact title and creator recovered with bounded XML | Show from microSD catalog |
+| Metadata | Bounded XML extraction and physical SD catalog/EPUB metadata validation pass | Verify the catalog after reader wake |
 | Cover | `OEBPS/Images/Cover.png`, 143,179 bytes, decoded to packed fingerprint `b8bce90b` | Refresh the physical shelf region |
-| 2 × 2 shelf | Shared Rust framebuffer/navigation tests and six Playwright flows | Navigate with physical buttons |
+| 2 × 2 shelf | Shared Rust framebuffer/navigation tests and ten passing Playwright tests, including the full walkthrough | Navigate with physical buttons |
 | Chapter text | Every spine document read and first/last page-count consistency checked | Read and turn physical pages |
 | 286 PNG images | All fit the current extracted-resource bound | Add inline figures and image viewer |
 | Tables and footnotes | Text and alternatives survive fallback layout | Add semantic overlays and dedicated viewers |
-| Sleep screens | Shared resolver and simulator cover Custom, Book Cover, and Automatic modes; X4 falls back to the built-in screen after missing or invalid assets | Verify all modes, deep sleep, GPIO3 wake, and exact physical resume |
-| USB upload | Chunked protocol, CRC32, SD readback, and incomplete-transfer cleanup are host-tested | Upload a JPEG and PNG to physical `/files` and verify sleep rendering |
+| Sleep screens | Shared resolver and simulator cover all modes. Selected custom image persisted across reboot and rendered during real sleep | Verify every mode end to end, GPIO3 wake, and exact physical resume on the final reader build |
+| USB upload | Six JPEG uploads passed CRC, SD readback, and device previews. One selected image rendered during real sleep | Verify native PNG upload and interrupted-transfer recovery on hardware |
 
 ## Next vertical slice
 
-Copy the private acceptance EPUB into `/books` only after explicit removable-media approval, then flash the locally checked reader image only after separate guarded-`app1` approval. Verify shelf → open → page/chapter navigation → retained sleep frame → GPIO3 deep-sleep wake → exact resume one physical action at a time. Inline figures, image/table viewers, links, footnotes, and semantic source checkpoints remain subsequent reader-engine work.
+Storage PR #8 is merged as `1481f89`. Use the existing EPUB in `/books` for the remaining reader-wake and pagination checks rather than copying it again. Review and verify the UI refactor separately against that storage baseline. See [checkpoint.md](../checkpoint.md) for worktree status and the last verified image. Every firmware write still requires exact image and app1-range review. Inline figures, image/table viewers, links, footnotes, and semantic source checkpoints remain subsequent reader-engine work.
