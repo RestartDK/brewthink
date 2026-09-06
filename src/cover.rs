@@ -1,5 +1,5 @@
 use crate::{
-    image::{MonochromeBitmap, MonochromeImage, RenderOptions, ScaleMode, Size},
+    image::{PackedBitmap, PackedImage, RenderOptions, ScaleMode, Size},
     image_decoder::{ImageDecodeError, decode_jpeg, decode_png},
 };
 
@@ -22,7 +22,7 @@ pub fn decode_png_cover(
     output: &mut [u8; COVER_BYTES],
     workspace: &mut CoverDecodeWorkspace,
 ) -> Result<(), CoverDecodeError> {
-    let mut target = MonochromeImage::new(cover_size(), output)
+    let mut target = PackedImage::monochrome(cover_size(), output)
         .expect("the packed cover buffer has the exact required length");
     decode_png(
         encoded,
@@ -41,7 +41,7 @@ pub fn decode_jpeg_cover(
     output: &mut [u8; COVER_BYTES],
     workspace: &mut JpegDecodeWorkspace,
 ) -> Result<(), CoverDecodeError> {
-    let mut target = MonochromeImage::new(cover_size(), output)
+    let mut target = PackedImage::monochrome(cover_size(), output)
         .expect("the packed cover buffer has the exact required length");
     decode_jpeg(
         encoded,
@@ -55,8 +55,8 @@ pub fn decode_jpeg_cover(
     Ok(())
 }
 
-pub fn bitmap(bytes: &[u8; COVER_BYTES]) -> MonochromeBitmap<'_> {
-    MonochromeBitmap::new(cover_size(), bytes)
+pub fn bitmap(bytes: &[u8; COVER_BYTES]) -> PackedBitmap<'_> {
+    PackedBitmap::monochrome(cover_size(), bytes)
         .expect("the packed cover buffer has the exact required length")
 }
 

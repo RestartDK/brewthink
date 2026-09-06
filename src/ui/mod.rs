@@ -22,14 +22,14 @@ mod tests {
 
     use super::{AppBar, FrameTarget};
     use crate::{
-        image::{MonochromeBitmap, MonochromeImage, Size},
+        image::{PackedBitmap, PackedImage, Size},
         input::UsbState,
         power::BatteryStatus,
     };
 
     fn render_battery(percent: u8, usb: UsbState) -> std::vec::Vec<u8> {
         let mut bytes = vec![0xFF; 480 * 800 / 8];
-        let mut image = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        let mut image = PackedImage::monochrome(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
         AppBar::new("HOME", BatteryStatus::from_percent(percent, usb))
             .draw(&mut FrameTarget::new(&mut image))
             .unwrap();
@@ -39,7 +39,7 @@ mod tests {
     #[test]
     fn external_power_hides_the_capacity_fill() {
         let bytes = render_battery(100, UsbState::Connected);
-        let battery = MonochromeBitmap::new(Size::new(480, 800).unwrap(), &bytes).unwrap();
+        let battery = PackedBitmap::monochrome(Size::new(480, 800).unwrap(), &bytes).unwrap();
 
         for y in 22..31 {
             for x in (376..384).chain(393..399) {
@@ -57,8 +57,8 @@ mod tests {
         for percent in [0, 50, 75, 100] {
             let connected_bytes = render_battery(percent, UsbState::Connected);
             let disconnected_bytes = render_battery(percent, UsbState::Disconnected);
-            let connected = MonochromeBitmap::new(size, &connected_bytes).unwrap();
-            let disconnected = MonochromeBitmap::new(size, &disconnected_bytes).unwrap();
+            let connected = PackedBitmap::monochrome(size, &connected_bytes).unwrap();
+            let disconnected = PackedBitmap::monochrome(size, &disconnected_bytes).unwrap();
             let mut inside = 0;
             let mut outside = 0;
 

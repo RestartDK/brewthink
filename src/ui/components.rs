@@ -4,7 +4,7 @@ use embedded_graphics::{
     Drawable, Pixel,
     draw_target::DrawTargetExt,
     geometry::{Dimensions, Point, Size},
-    pixelcolor::BinaryColor,
+    pixelcolor::Gray8,
     prelude::{DrawTarget, Primitive},
     primitives::{PrimitiveStyle, Rectangle},
     text::{Baseline, Text},
@@ -94,7 +94,7 @@ impl View for Label<'_> {
 }
 
 impl Drawable for Label<'_> {
-    type Color = BinaryColor;
+    type Color = Gray8;
     type Output = ();
 
     fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
@@ -147,7 +147,7 @@ impl View for AppBar<'_> {
 }
 
 impl Drawable for AppBar<'_> {
-    type Color = BinaryColor;
+    type Color = Gray8;
     type Output = ();
 
     fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
@@ -165,7 +165,7 @@ impl Drawable for AppBar<'_> {
             self.top_left + Point::new(CONTENT_LEFT, APP_BAR_RULE_Y),
             Size::new(CONTENT_WIDTH, 2),
         )
-        .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+        .into_styled(PrimitiveStyle::with_fill(Gray8::new(0)))
         .draw(target)?;
         draw_battery(target, self.top_left, self.battery)
     }
@@ -216,7 +216,7 @@ impl View for CommandBar<'_> {
 }
 
 impl Drawable for CommandBar<'_> {
-    type Color = BinaryColor;
+    type Color = Gray8;
     type Output = ();
 
     fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
@@ -224,7 +224,7 @@ impl Drawable for CommandBar<'_> {
         D: DrawTarget<Color = Self::Color>,
     {
         Rectangle::new(Point::new(self.left, self.rule_y), Size::new(self.width, 1))
-            .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+            .into_styled(PrimitiveStyle::with_fill(Gray8::new(0)))
             .draw(target)?;
         Label::new(self.text, TextRole::CommandHint)
             .at(Point::new(self.left, self.text_y))
@@ -262,7 +262,7 @@ impl View for MenuRow<'_> {
 }
 
 impl Drawable for MenuRow<'_> {
-    type Color = BinaryColor;
+    type Color = Gray8;
     type Output = ();
 
     fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
@@ -271,7 +271,7 @@ impl Drawable for MenuRow<'_> {
     {
         self.bounds()
             .into_styled(PrimitiveStyle::with_stroke(
-                BinaryColor::On,
+                Gray8::new(0),
                 self.selection.stroke(1, 4),
             ))
             .draw(target)?;
@@ -315,7 +315,7 @@ impl View for SettingsRow<'_> {
 }
 
 impl Drawable for SettingsRow<'_> {
-    type Color = BinaryColor;
+    type Color = Gray8;
     type Output = ();
 
     fn draw<D>(&self, target: &mut D) -> Result<(), D::Error>
@@ -333,7 +333,7 @@ impl Drawable for SettingsRow<'_> {
         };
         Rectangle::new(top, Size::new(CONTENT_WIDTH, height))
             .into_styled(PrimitiveStyle::with_stroke(
-                BinaryColor::On,
+                Gray8::new(0),
                 self.selection.stroke(1, 3),
             ))
             .draw(target)?;
@@ -381,7 +381,7 @@ impl View for FileRow<'_> {
 }
 
 impl Drawable for FileRow<'_> {
-    type Color = BinaryColor;
+    type Color = Gray8;
     type Output = ();
 
     fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
@@ -390,7 +390,7 @@ impl Drawable for FileRow<'_> {
     {
         self.bounds()
             .into_styled(PrimitiveStyle::with_stroke(
-                BinaryColor::On,
+                Gray8::new(0),
                 self.selection.stroke(1, 3),
             ))
             .draw(target)?;
@@ -411,13 +411,13 @@ impl Drawable for FileRow<'_> {
 
 fn draw_battery<D>(target: &mut D, origin: Point, battery: BatteryStatus) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = BinaryColor>,
+    D: DrawTarget<Color = Gray8>,
 {
     Rectangle::new(origin + Point::new(374, 20), Size::new(27, 13))
-        .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+        .into_styled(PrimitiveStyle::with_stroke(Gray8::new(0), 1))
         .draw(target)?;
     Rectangle::new(origin + Point::new(401, 24), Size::new(3, 5))
-        .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+        .into_styled(PrimitiveStyle::with_fill(Gray8::new(0)))
         .draw(target)?;
 
     let mut label = FixedText::<12>::new();
@@ -427,7 +427,7 @@ where
             let fill = usize::from(percent.get()) * 23 / 100;
             if fill > 0 && !battery.usb().is_connected() {
                 Rectangle::new(origin + Point::new(376, 22), Size::new(fill as u32, 9))
-                    .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+                    .into_styled(PrimitiveStyle::with_fill(Gray8::new(0)))
                     .draw(target)?;
             }
             write!(label, "{}%", percent.get()).ok()
@@ -444,13 +444,13 @@ where
 
 fn draw_external_power_symbol<D>(target: &mut D, origin: Point) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = BinaryColor>,
+    D: DrawTarget<Color = Gray8>,
 {
     Rectangle::new(
         origin + Point::new(POWER_SYMBOL_X - 2, POWER_SYMBOL_Y),
         Size::new(9, POWER_SYMBOL_ROWS.len() as u32),
     )
-    .into_styled(PrimitiveStyle::with_fill(BinaryColor::Off))
+    .into_styled(PrimitiveStyle::with_fill(Gray8::new(255)))
     .draw(target)?;
     target.draw_iter(
         POWER_SYMBOL_ROWS
@@ -460,7 +460,7 @@ where
                 (0..5).filter_map(move |column| {
                     (pixels & (1 << (4 - column)) != 0).then_some(Pixel(
                         origin + Point::new(POWER_SYMBOL_X + column, POWER_SYMBOL_Y + row as i32),
-                        BinaryColor::On,
+                        Gray8::new(0),
                     ))
                 })
             }),

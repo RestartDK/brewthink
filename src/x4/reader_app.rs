@@ -40,7 +40,7 @@ use crate::{
         ssd1677::{BufferedDisplay, RefreshPolicy, RefreshPolicyMode, Ssd1677, X4DriveProfile},
     },
     files::{FileItem, FileKind},
-    image::{MonochromeBitmap, MonochromeImage, RenderOptions, ScaleMode, Size},
+    image::{PackedBitmap, PackedImage, RenderOptions, ScaleMode, Size},
     image_decoder::{ImageFormat, decode_jpeg, decode_png},
     image_viewer::render_image_viewer,
     input::{
@@ -1416,7 +1416,7 @@ fn decode_image_frame(
         .map_err(|_| "reader image read failed")?;
     let encoded = &encoded_buffer[..loaded.length()];
     let frame = workspaces.frame_codec.frame();
-    let mut target = MonochromeImage::new(frame_size(), frame)
+    let mut target = PackedImage::monochrome(frame_size(), frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
     let options = RenderOptions {
         scale,
@@ -1443,7 +1443,7 @@ fn decode_image_frame(
 }
 
 fn render_home_frame(app: &App, frame: &mut [u8; FRAME_BYTES]) -> Result<(), &'static str> {
-    let mut image = MonochromeImage::new(frame_size(), frame)
+    let mut image = PackedImage::monochrome(frame_size(), frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
     render_app(
         AppFrame::Home {
@@ -1483,7 +1483,7 @@ fn render_files_frame(
         };
         *file = FileItem::new(image.name().as_str(), image.size(), kind);
     }
-    let mut image = MonochromeImage::new(frame_size(), frame)
+    let mut image = PackedImage::monochrome(frame_size(), frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
     render_app(
         AppFrame::Files {
@@ -1521,7 +1521,7 @@ fn render_settings_frame(
         },
         None => CustomImagePreview::Missing,
     };
-    let mut image = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
+    let mut image = PackedImage::monochrome(frame_size(), workspaces.frame_codec.frame())
         .map_err(|_| "reader frame buffer has the wrong size")?;
     render_app(
         AppFrame::Settings {
@@ -1545,7 +1545,7 @@ fn render_image_frame(
         .file(image)
         .ok_or("image selection is out of bounds")?;
     if decode_image_frame(file, ScaleMode::Contain, store, workspaces).is_err() {
-        let mut target = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
+        let mut target = PackedImage::monochrome(frame_size(), workspaces.frame_codec.frame())
             .map_err(|_| "reader frame buffer has the wrong size")?;
         return render_app(
             AppFrame::Error {
@@ -1557,7 +1557,7 @@ fn render_image_frame(
         )
         .map_err(|_| "reader image error render failed");
     }
-    let mut target = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
+    let mut target = PackedImage::monochrome(frame_size(), workspaces.frame_codec.frame())
         .map_err(|_| "reader frame buffer has the wrong size")?;
     render_image_viewer(
         file.name().as_str(),
@@ -1612,7 +1612,7 @@ fn render_library(
             cover,
         );
     }
-    let mut image = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
+    let mut image = PackedImage::monochrome(frame_size(), workspaces.frame_codec.frame())
         .map_err(|_| "reader frame buffer has the wrong size")?;
     render_app(
         AppFrame::Library {
@@ -1649,7 +1649,7 @@ fn render_page(
         app.reader_preferences(),
         app.battery(),
     );
-    let mut image = MonochromeImage::new(frame_size(), frame)
+    let mut image = PackedImage::monochrome(frame_size(), frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
     render_app(AppFrame::Reader(view), &mut image).map_err(|_| "reader page render failed")
 }
@@ -1711,8 +1711,9 @@ fn render_sleep_frame(
                 if !decode_book_cover(book, library, store, workspaces).unwrap_or(false) {
                     continue;
                 }
-                let mut image = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
-                    .map_err(|_| "reader frame buffer has the wrong size")?;
+                let mut image =
+                    PackedImage::monochrome(frame_size(), workspaces.frame_codec.frame())
+                        .map_err(|_| "reader frame buffer has the wrong size")?;
                 return render_app(
                     AppFrame::Sleep(SleepView::book_cover(
                         library.title(book),
@@ -1726,8 +1727,9 @@ fn render_sleep_frame(
                 .map_err(|_| "reader sleep frame render failed");
             }
             SleepScreenSource::BuiltIn => {
-                let mut image = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
-                    .map_err(|_| "reader frame buffer has the wrong size")?;
+                let mut image =
+                    PackedImage::monochrome(frame_size(), workspaces.frame_codec.frame())
+                        .map_err(|_| "reader frame buffer has the wrong size")?;
                 return render_app(
                     AppFrame::Sleep(SleepView::built_in(status.as_str(), app.battery())),
                     &mut image,
@@ -1745,7 +1747,7 @@ fn render_error(
     library: &DeviceLibrary,
     frame: &mut [u8; FRAME_BYTES],
 ) -> Result<(), &'static str> {
-    let mut image = MonochromeImage::new(frame_size(), frame)
+    let mut image = PackedImage::monochrome(frame_size(), frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
     render_app(
         AppFrame::Error {
@@ -2004,8 +2006,8 @@ fn downsample_cover(source: &[u8; COVER_BYTES], output: &mut [u8; SHELF_COVER_BY
     }
 }
 
-fn shelf_bitmap(bytes: &[u8; SHELF_COVER_BYTES]) -> MonochromeBitmap<'_> {
-    MonochromeBitmap::new(
+fn shelf_bitmap(bytes: &[u8; SHELF_COVER_BYTES]) -> PackedBitmap<'_> {
+    PackedBitmap::monochrome(
         Size::new(SHELF_COVER_WIDTH, SHELF_COVER_HEIGHT)
             .expect("the shelf cover dimensions are non-zero"),
         bytes,

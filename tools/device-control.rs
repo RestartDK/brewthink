@@ -15,7 +15,7 @@ use std::{
 };
 
 use brewthink::{
-    image::{MonochromeImage, RenderOptions, ScaleMode, Size},
+    image::{PackedImage, RenderOptions, ScaleMode, Size},
     image_decoder::{
         ImageFormat, JpegDecodeWorkspace, PngDecodeWorkspace, decode_jpeg, decode_png,
     },
@@ -622,7 +622,7 @@ fn device_image_name(input: &Path, format: ImageFormat) -> io::Result<ImageName>
 
 fn validate_device_image(format: ImageFormat, encoded: &[u8]) -> io::Result<()> {
     let mut frame = vec![0xFF; FRAME_BYTES];
-    let mut target = MonochromeImage::new(
+    let mut target = PackedImage::monochrome(
         Size::new(FRAME_WIDTH as usize, FRAME_HEIGHT as usize).unwrap(),
         &mut frame,
     )

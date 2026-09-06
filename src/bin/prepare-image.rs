@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use brewthink::image::{Dither, MonochromeImage, RenderOptions, RgbImage, ScaleMode, Size};
+use brewthink::image::{Dither, PackedImage, RenderOptions, RgbImage, ScaleMode, Size};
 use image::ImageReader;
 
 struct Arguments {
@@ -66,7 +66,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         Size::new(rgb.width() as usize, rgb.height() as usize).map_err(image_error)?;
     let source = RgbImage::new(source_size, rgb.as_raw()).map_err(image_error)?;
     let mut frame = vec![0xFF; arguments.size.width() * arguments.size.height() / 8];
-    let mut target = MonochromeImage::new(arguments.size, &mut frame).map_err(image_error)?;
+    let mut target = PackedImage::monochrome(arguments.size, &mut frame).map_err(image_error)?;
     let report = brewthink::image::render(&source, &mut target, arguments.options);
 
     write_file(&arguments.frame, target.as_bytes())?;

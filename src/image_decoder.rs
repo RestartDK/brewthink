@@ -2,14 +2,13 @@ use embedded_graphics::pixelcolor::{Rgb888, RgbColor};
 use embedded_png::{DontDraw, ParsedPng};
 use tjpgd_rs::{JpegDecoder, PixelFormat, Rect, Scale};
 
-use crate::image::{Dither, MonochromeImage, RenderOptions, ScaleMode, Size};
+use crate::image::{Dither, PackedImage, RenderOptions, ScaleMode, Size};
 
 pub const MAX_IMAGE_DIMENSION: usize = 1_536;
 pub const MAX_DECODED_IMAGE_PIXELS: usize = 1_024 * 1_536;
 const DEFLATE_WINDOW_BYTES: usize = 32 * 1024;
 const MAX_SCANLINE_BYTES: usize = MAX_IMAGE_DIMENSION * 4;
 const JPEG_WORKSPACE_BYTES: usize = 35_000;
-const BAYER_4X4: [[u8; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
@@ -121,7 +120,7 @@ pub enum ImageDecodeError {
 
 pub fn decode_png(
     encoded: &[u8],
-    target: &mut MonochromeImage<'_>,
+    target: &mut PackedImage<'_>,
     options: RenderOptions,
     workspace: &mut PngDecodeWorkspace,
 ) -> Result<DecodeReport, ImageDecodeError> {
@@ -162,7 +161,7 @@ pub fn decode_png(
 
 pub fn decode_jpeg(
     encoded: &[u8],
-    target: &mut MonochromeImage<'_>,
+    target: &mut PackedImage<'_>,
     options: RenderOptions,
     workspace: &mut JpegDecodeWorkspace,
 ) -> Result<DecodeReport, ImageDecodeError> {
@@ -207,7 +206,7 @@ pub fn decode_jpeg(
 pub fn decode(
     format: ImageFormat,
     encoded: &[u8],
-    target: &mut MonochromeImage<'_>,
+    target: &mut PackedImage<'_>,
     options: RenderOptions,
     png: &mut PngDecodeWorkspace,
     jpeg: &mut JpegDecodeWorkspace,
@@ -258,7 +257,7 @@ impl Transform {
 
     fn draw_source_pixel(
         self,
-        target: &mut MonochromeImage<'_>,
+        target: &mut PackedImage<'_>,
         source_x: usize,
         source_y: usize,
         luma: u8,
@@ -282,7 +281,7 @@ impl Transform {
         let bottom = y1.max(0).min(self.target.height() as i128) as usize;
         for y in top..bottom {
             for x in left..right {
-                target.set_pixel(x, y, is_black(luma, x, y, dither));
+                target.set_luma_dithered(x, y, luma, dither);
             }
         }
     }
@@ -361,16 +360,6 @@ fn rounded_ratio(value: usize, numerator: usize, denominator: usize) -> usize {
     usize::try_from(result).unwrap_or(usize::MAX).max(1)
 }
 
-fn is_black(luma: u8, x: usize, y: usize, dither: Dither) -> bool {
-    match dither {
-        Dither::Threshold(threshold) => luma < threshold,
-        Dither::Ordered4x4 => {
-            let threshold = BAYER_4X4[y % 4][x % 4] as u32 * 16 + 8;
-            u32::from(luma) < threshold
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -378,9 +367,57 @@ mod tests {
     use std::vec;
 
     use super::{ImageFormat, JpegDecodeWorkspace, PngDecodeWorkspace, decode_jpeg, decode_png};
-    use crate::image::{MonochromeImage, RenderOptions, ScaleMode, Size};
+    use crate::image::{PackedImage, RenderOptions, ScaleMode, Size};
 
     const TRANSPARENT_PNG: &[u8] = include_bytes!("../web/tests/fixtures/transparent.png");
+
+    #[test]
+    fn png_and_jpeg_preserve_four_and_eight_tones_without_dither() {
+        use crate::image::{Dither, PixelDepth};
+        for depth in [PixelDepth::Four, PixelDepth::Eight] {
+            let size = Size::new(64, 16).unwrap();
+            let mut bytes = vec![0; depth.byte_len(size).unwrap()];
+            let mut image = PackedImage::new(size, depth, &mut bytes).unwrap();
+            let options = RenderOptions {
+                scale: ScaleMode::Contain,
+                dither: Dither::None,
+            };
+            for format in [ImageFormat::Png, ImageFormat::Jpeg] {
+                match format {
+                    ImageFormat::Png => decode_png(
+                        include_bytes!("../web/tests/fixtures/gray-ramp.png"),
+                        &mut image,
+                        options,
+                        &mut PngDecodeWorkspace::new(),
+                    ),
+                    ImageFormat::Jpeg => decode_jpeg(
+                        include_bytes!("../web/tests/fixtures/gray-ramp.jpg"),
+                        &mut image,
+                        options,
+                        &mut JpegDecodeWorkspace::new(),
+                    ),
+                }
+                .unwrap();
+                let mut seen = 0u8;
+                for band in 0..8 {
+                    let level = image.bitmap().level(band * 8 + 4, 8);
+                    seen |= 1 << level;
+                    for y in 2..14 {
+                        for x in band * 8 + 2..band * 8 + 6 {
+                            assert_eq!(image.bitmap().level(x, y), level, "{depth:?} {format:?}");
+                        }
+                    }
+                }
+                assert_eq!(
+                    seen,
+                    ((1u16 << depth.levels()) - 1) as u8,
+                    "{depth:?} {format:?}"
+                );
+                assert_eq!(image.bitmap().level(4, 8), 0);
+                assert_eq!(image.bitmap().level(60, 8), depth.levels() - 1);
+            }
+        }
+    }
 
     #[test]
     fn detects_supported_formats() {
@@ -399,7 +436,7 @@ mod tests {
     fn decodes_jpeg_directly_into_a_full_frame() {
         let encoded = include_bytes!("../web/tests/fixtures/cover.jpg");
         let mut bytes = vec![0xFF; 480 * 800 / 8];
-        let mut target = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        let mut target = PackedImage::monochrome(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
         decode_jpeg(
             encoded,
             &mut target,
@@ -420,7 +457,7 @@ mod tests {
         for (width, height) in [(176, 264), (480, 800)] {
             let mut bytes = vec![0xFF; width * height / 8];
             let mut target =
-                MonochromeImage::new(Size::new(width, height).unwrap(), &mut bytes).unwrap();
+                PackedImage::monochrome(Size::new(width, height).unwrap(), &mut bytes).unwrap();
             decode_png(
                 TRANSPARENT_PNG,
                 &mut target,
