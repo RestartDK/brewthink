@@ -8,3 +8,6 @@ OUTPUT_IMAGE="${1:-$ROOT_DIR/artifacts/brewthink-reader-app1.bin}"
 BREWTHINK_DIAGNOSTIC_STAGE=reader-app \
 BREWTHINK_CARGO_FEATURES=device-reader \
   "$ROOT_DIR/scripts/build-app1-image.sh" "$OUTPUT_IMAGE"
+
+python3 "$ROOT_DIR/scripts/check-reader-stack.py" \
+  "$ROOT_DIR/target/riscv32imc-unknown-none-elf/release/brewthink"

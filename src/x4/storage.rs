@@ -18,8 +18,8 @@ use esp_hal::{
     time::Rate,
 };
 
-#[cfg(feature = "sd-write-diagnostic")]
-use crate::storage::ExplicitWriteSdCard;
+#[cfg(feature = "sd-card-write")]
+use crate::storage::WritableSdCard;
 use crate::storage::{ReadOnlySdSpi, SdSpiClock};
 
 use super::{
@@ -97,9 +97,9 @@ pub struct X4ReadOnlyFatBlockDevice<'d> {
     sectors_read: Cell<u32>,
 }
 
-#[cfg(feature = "sd-write-diagnostic")]
+#[cfg(feature = "sd-card-write")]
 pub struct X4FatBlockDevice<'d> {
-    card: RefCell<ExplicitWriteSdCard<X4StorageHardware<'d>>>,
+    card: RefCell<WritableSdCard<X4StorageHardware<'d>>>,
     sectors_read: Cell<u32>,
     sectors_written: Cell<u32>,
 }
@@ -288,9 +288,9 @@ impl BlockDevice for X4ReadOnlyFatBlockDevice<'_> {
     }
 }
 
-#[cfg(feature = "sd-write-diagnostic")]
+#[cfg(feature = "sd-card-write")]
 impl<'d> X4FatBlockDevice<'d> {
-    pub fn new(card: ExplicitWriteSdCard<X4StorageHardware<'d>>) -> Self {
+    pub fn new(card: WritableSdCard<X4StorageHardware<'d>>) -> Self {
         Self {
             card: RefCell::new(card),
             sectors_read: Cell::new(0),
@@ -315,7 +315,14 @@ impl<'d> X4FatBlockDevice<'d> {
         (display_high, sd_high, both_high)
     }
 
-    pub fn into_card(self) -> ExplicitWriteSdCard<X4StorageHardware<'d>> {
+    pub fn with_hardware<R>(
+        &mut self,
+        function: impl FnOnce(&mut X4StorageHardware<'d>) -> R,
+    ) -> R {
+        function(self.card.get_mut().bus_mut())
+    }
+
+    pub fn into_card(self) -> WritableSdCard<X4StorageHardware<'d>> {
         self.card.into_inner()
     }
 
@@ -328,7 +335,7 @@ impl<'d> X4FatBlockDevice<'d> {
     }
 }
 
-#[cfg(feature = "sd-write-diagnostic")]
+#[cfg(feature = "sd-card-write")]
 impl BlockDevice for X4FatBlockDevice<'_> {
     type Error = X4FatBlockDeviceError;
 

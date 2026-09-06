@@ -71,8 +71,8 @@ const IDLE_BAND: VoltageBand = VoltageBand::new(2_800, 3_200);
 const NAVIGATION_BANDS: [ButtonBand; 4] = [
     ButtonBand::new(2_400, 2_700, Button::Left),
     ButtonBand::new(1_800, 2_150, Button::Right),
-    ButtonBand::new(950, 1_250, Button::Up),
-    ButtonBand::new(0, 150, Button::Down),
+    ButtonBand::new(950, 1_250, Button::Back),
+    ButtonBand::new(0, 150, Button::Confirm),
 ];
 const PAGE_BANDS: [ButtonBand; 2] = [
     ButtonBand::new(1_500, 1_800, Button::Up),
@@ -334,8 +334,8 @@ mod tests {
         let cases = [
             (2_563, 2_973, false, Button::Left),
             (1_985, 2_973, false, Button::Right),
-            (1_110, 2_973, false, Button::Up),
-            (3, 2_973, false, Button::Down),
+            (1_110, 2_973, false, Button::Back),
+            (3, 2_973, false, Button::Confirm),
             (2_973, 1_655, false, Button::Up),
             (2_973, 4, false, Button::Down),
             (2_973, 2_973, true, Button::Power),

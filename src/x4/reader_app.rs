@@ -19,12 +19,12 @@ use esp_hal::{
     system::SleepSource,
     usb_serial_jtag::UsbSerialJtagRx,
 };
-use static_cell::StaticCell;
+use static_cell::{ConstStaticCell, StaticCell};
 
 use crate::{
     app::{
-        App, AppEffect, AppInput, AppView, BookId, BookOrigin, Direction, HomeItem,
-        ReaderPreferences, ReadingLocation, ResumePoint, SettingsItem,
+        App, AppEffect, AppInput, AppPreferences, AppView, BookId, BookOrigin, Direction, HomeItem,
+        ImageId, ReadingLocation, ResumePoint, SettingsItem, SleepScreenMode, SleepScreenSource,
     },
     bounded_layout::{BoundedPage, MAX_PAGE_LINES, layout_xhtml_page_into},
     bounded_xml::FixedString,
@@ -39,9 +39,11 @@ use crate::{
         framebuffer::{FRAME_BYTES, Rotation},
         ssd1677::{BufferedDisplay, RefreshPolicy, RefreshPolicyMode, Ssd1677, X4DriveProfile},
     },
-    files::{FileItem, render_files},
+    files::{FileItem, FileKind, render_files},
     home::render_home,
-    image::{MonochromeBitmap, MonochromeImage, Size},
+    image::{MonochromeBitmap, MonochromeImage, RenderOptions, ScaleMode, Size},
+    image_decoder::{ImageFormat, decode_jpeg, decode_png},
+    image_viewer::render_image_viewer,
     input::{
         Button, ButtonDebouncer, ButtonEvent, ButtonTransition, PressedButtons,
         control::{ControlCommand, ControlLineBuffer},
@@ -50,16 +52,28 @@ use crate::{
     power::{BatteryEstimator, BatteryLevel, BatteryStatus},
     reader::{ReaderLine, ReaderStyle, ReaderView, render_reader, render_reader_error},
     settings::render_settings,
-    sleep::{SleepView, render_sleep},
-    storage::{BookFile, ReadOnlyFatBookStore, ReadOnlySdCard},
-    x4::{X4InputHardware, X4ReadOnlyFatBlockDevice, X4StorageHardware, decode_buttons},
+    sleep::{CustomSleepImageStatus, SleepView, render_sleep},
+    storage::{BookFile, FatStorage, ImageFile, MAX_DEVICE_IMAGE_BYTES, ReadOnlySdCard},
+    transfer::{FileTransfer, ImageName, UploadRequest},
+    x4::{X4FatBlockDevice, X4InputHardware, X4StorageHardware, decode_buttons},
     zip_stream::{InflateWorkspace, StreamingZip, ZipValidationScratch},
 };
 
 const MAX_DEVICE_BOOKS: usize = 16;
+const MAX_DEVICE_IMAGES: usize = 16;
+const MAX_DEVICE_FILES: usize = MAX_DEVICE_BOOKS + MAX_DEVICE_IMAGES;
 const MAX_CACHED_SPINE_PATHS: usize = 64;
 const MAX_CACHED_SPINE_PATH_BYTES: usize = 2 * 1024;
 const VISIBLE_COVER_SLOTS: usize = 4;
+const UPLOAD_CHUNK_BYTES: usize = 4 * 1024;
+const UPLOAD_IDLE_POLLS: usize = 1_500;
+const IMAGE_DECODER_BYTES: usize = MAX_DEVICE_RESOURCE_BYTES - MAX_DEVICE_IMAGE_BYTES;
+const _: () = {
+    assert!(core::mem::size_of::<CoverDecodeWorkspace>() <= FRAME_BYTES);
+    assert!(core::mem::size_of::<JpegDecodeWorkspace>() <= FRAME_BYTES);
+    assert!(core::mem::size_of::<CoverDecodeWorkspace>() <= IMAGE_DECODER_BYTES);
+    assert!(core::mem::size_of::<JpegDecodeWorkspace>() <= IMAGE_DECODER_BYTES);
+};
 const SHELF_COVER_WIDTH: usize = 88;
 const SHELF_COVER_HEIGHT: usize = 132;
 const SHELF_COVER_BYTES: usize = SHELF_COVER_WIDTH * SHELF_COVER_HEIGHT / 8;
@@ -71,7 +85,7 @@ const DISPLAY_REFRESH: &str = match option_env!("BREWTHINK_DISPLAY_REFRESH") {
     Some(mode) => mode,
     None => "automatic",
 };
-type DeviceStore = ReadOnlyFatBookStore<X4ReadOnlyFatBlockDevice<'static>, FixedTimeSource>;
+type DeviceStore = FatStorage<X4FatBlockDevice<'static>, FixedTimeSource>;
 
 struct ReaderDisplay {
     display: BufferedDisplay<'static>,
@@ -225,6 +239,41 @@ impl DeviceLibrary {
     }
 }
 
+struct DeviceImages {
+    files: [Option<ImageFile>; MAX_DEVICE_IMAGES],
+    length: usize,
+}
+
+impl DeviceImages {
+    const fn empty() -> Self {
+        Self {
+            files: [None; MAX_DEVICE_IMAGES],
+            length: 0,
+        }
+    }
+
+    fn file(&self, image: ImageId) -> Option<&ImageFile> {
+        self.files.get(image.index()).and_then(Option::as_ref)
+    }
+
+    fn selected(&self, name: Option<ImageName>) -> Option<ImageId> {
+        name.and_then(|name| {
+            self.files[..self.length]
+                .iter()
+                .flatten()
+                .position(|image| *image.name() == name)
+                .map(ImageId::new)
+        })
+        .or_else(|| (self.length > 0).then(|| ImageId::new(0)))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct DeviceCatalogs<'a> {
+    library: &'a DeviceLibrary,
+    images: &'a DeviceImages,
+}
+
 #[repr(C, align(8))]
 struct FrameCodecWorkspace {
     bytes: [u8; FRAME_BYTES],
@@ -260,22 +309,14 @@ impl FrameCodecWorkspace {
     }
 
     fn with_png<R>(&mut self, function: impl FnOnce(&mut CoverDecodeWorkspace) -> R) -> R {
-        const {
-            assert!(core::mem::size_of::<CoverDecodeWorkspace>() <= FRAME_BYTES);
-            assert!(core::mem::align_of::<CoverDecodeWorkspace>() == 1);
-        }
-        // SAFETY: the workspace contains only byte arrays, fits, and has byte alignment.
-        let workspace = unsafe { &mut *self.bytes.as_mut_ptr().cast::<CoverDecodeWorkspace>() };
+        let workspace = CoverDecodeWorkspace::in_buffer(&mut self.bytes)
+            .expect("the frame allocation fits the PNG workspace");
         function(workspace)
     }
 
     fn with_jpeg<R>(&mut self, function: impl FnOnce(&mut JpegDecodeWorkspace) -> R) -> R {
-        const {
-            assert!(core::mem::size_of::<JpegDecodeWorkspace>() <= FRAME_BYTES);
-            assert!(core::mem::align_of::<JpegDecodeWorkspace>() == 1);
-        }
-        // SAFETY: the workspace contains one byte array, fits, and has byte alignment.
-        let workspace = unsafe { &mut *self.bytes.as_mut_ptr().cast::<JpegDecodeWorkspace>() };
+        let workspace = JpegDecodeWorkspace::in_buffer(&mut self.bytes)
+            .expect("the frame allocation fits the JPEG workspace");
         function(workspace)
     }
 }
@@ -313,15 +354,16 @@ struct ResumeRecord {
 #[derive(Clone, Copy)]
 struct RetainedApp {
     resume: ResumePoint,
-    preferences: ReaderPreferences,
+    preferences: AppPreferences,
 }
 
-const RESUME_MAGIC: u32 = 0x4257_5232;
+const RESUME_MAGIC: u32 = 0x4257_5233;
 const HOME_KIND: u32 = 1;
 const BOOKS_KIND: u32 = 2;
 const FILES_KIND: u32 = 3;
 const SETTINGS_KIND: u32 = 4;
 const READER_KIND: u32 = 5;
+const IMAGE_KIND: u32 = 6;
 
 #[esp_hal::ram(unstable(rtc_fast, persistent))]
 static mut RETAINED_RESUME: [u32; 8] = [0; 8];
@@ -393,40 +435,59 @@ pub async fn reader_app_task(
     wakeup_cause: SleepSource,
 ) {
     static STORE: StaticCell<DeviceStore> = StaticCell::new();
-    static LIBRARY: StaticCell<DeviceLibrary> = StaticCell::new();
-    static ZIP: StaticCell<ZipValidationScratch> = StaticCell::new();
-    static PACKAGE: StaticCell<DevicePackageScratch> = StaticCell::new();
-    static FRAME_CODEC: StaticCell<FrameCodecWorkspace> = StaticCell::new();
-    static PAGE: StaticCell<BoundedPage> = StaticCell::new();
-    static RESOURCE: StaticCell<[u8; MAX_DEVICE_RESOURCE_BYTES]> = StaticCell::new();
-    static COVER: StaticCell<[u8; COVER_BYTES]> = StaticCell::new();
-    static SHELF_COVERS: StaticCell<[[u8; SHELF_COVER_BYTES]; VISIBLE_COVER_SLOTS]> =
-        StaticCell::new();
+    static LIBRARY: ConstStaticCell<DeviceLibrary> = ConstStaticCell::new(DeviceLibrary::empty());
+    static IMAGES: ConstStaticCell<DeviceImages> = ConstStaticCell::new(DeviceImages::empty());
+    static ZIP: ConstStaticCell<ZipValidationScratch> =
+        ConstStaticCell::new(ZipValidationScratch::new());
+    static PACKAGE: ConstStaticCell<DevicePackageScratch> =
+        ConstStaticCell::new(DevicePackageScratch::new());
+    static FRAME_CODEC: ConstStaticCell<FrameCodecWorkspace> =
+        ConstStaticCell::new(FrameCodecWorkspace::new());
+    static PAGE: ConstStaticCell<BoundedPage> = ConstStaticCell::new(BoundedPage::new());
+    static RESOURCE: ConstStaticCell<[u8; MAX_DEVICE_RESOURCE_BYTES]> =
+        ConstStaticCell::new([0; MAX_DEVICE_RESOURCE_BYTES]);
+    static COVER: ConstStaticCell<[u8; COVER_BYTES]> = ConstStaticCell::new([0xFF; COVER_BYTES]);
+    static SHELF_COVERS: ConstStaticCell<[[u8; SHELF_COVER_BYTES]; VISIBLE_COVER_SLOTS]> =
+        ConstStaticCell::new([[0xFF; SHELF_COVER_BYTES]; VISIBLE_COVER_SLOTS]);
+    static UPLOAD_BUFFER: ConstStaticCell<[u8; UPLOAD_CHUNK_BYTES]> =
+        ConstStaticCell::new([0; UPLOAD_CHUNK_BYTES]);
 
     let mut card = ReadOnlySdCard::new(hardware);
+    info!("reader startup: SD initialization start");
     if card.initialize().is_err() {
         stop("reader SD initialization failed").await;
     }
-    let store = STORE.init(ReadOnlyFatBookStore::new(
-        X4ReadOnlyFatBlockDevice::new(card),
-        FixedTimeSource,
-    ));
-    let mut workspaces = Workspaces {
-        zip: ZIP.init(ZipValidationScratch::new()),
-        package: PACKAGE.init(DevicePackageScratch::new()),
-        frame_codec: FRAME_CODEC.init(FrameCodecWorkspace::new()),
-        page: PAGE.init_with(BoundedPage::new),
-        resource: RESOURCE.init([0; MAX_DEVICE_RESOURCE_BYTES]),
-        cover: COVER.init([0xFF; COVER_BYTES]),
-        shelf_covers: SHELF_COVERS.init([[0xFF; SHELF_COVER_BYTES]; VISIBLE_COVER_SLOTS]),
-    };
-    let library = LIBRARY.init(DeviceLibrary::empty());
-    if load_library(store, library, &mut workspaces).is_err() {
-        stop("reader /BOOKS scan failed").await;
+    info!("reader startup: SD initialization done");
+    let store = STORE.init_with(|| {
+        FatStorage::new(X4FatBlockDevice::new(card.enable_writes()), FixedTimeSource)
+    });
+    info!("reader startup: layout initialization start");
+    if store.ensure_layout().is_err() {
+        stop("reader SD layout initialization failed").await;
     }
+    info!("reader startup: layout initialization done");
+    let mut workspaces = Workspaces {
+        zip: ZIP.take(),
+        package: PACKAGE.take(),
+        frame_codec: FRAME_CODEC.take(),
+        page: PAGE.take(),
+        resource: RESOURCE.take(),
+        cover: COVER.take(),
+        shelf_covers: SHELF_COVERS.take(),
+    };
+    info!("reader startup: workspace initialization done");
+    let library = LIBRARY.take();
+    info!("reader startup: book scan start");
+    if load_library(store, library, &mut workspaces).is_err() {
+        stop("reader /books scan failed").await;
+    }
+    info!("reader startup: book scan done");
+    let images = IMAGES.take();
+    load_images(store, images);
+    info!("reader startup: image scan done");
     info!(
-        "reader catalog ready: books={} cached_spines={} path_bytes={}",
-        library.length, library.spine_path_count, library.spine_path_byte_length
+        "reader catalog ready: books={} images={} cached_spines={} path_bytes={}",
+        library.length, images.length, library.spine_path_count, library.spine_path_byte_length
     );
 
     let Some(profile) = X4DriveProfile::parse(X4_DRIVE_PROFILE) else {
@@ -448,11 +509,26 @@ pub async fn reader_app_task(
         resume: ResumePoint::Home {
             selected: HomeItem::Books,
         },
-        preferences: ReaderPreferences::default(),
+        preferences: AppPreferences::default(),
     });
-    let (mut app, first_effect) =
-        App::from_resume(library.length, retained.preferences, retained.resume)
-            .unwrap_or((App::new(library.length), AppEffect::RenderHome));
+    let preferences = store
+        .app_data()
+        .read_preferences()
+        .ok()
+        .flatten()
+        .unwrap_or(retained.preferences);
+    let selected_image = images.selected(store.app_data().read_selected_image());
+    let (mut app, first_effect) = App::from_resume_with_catalog(
+        library.length,
+        images.length,
+        selected_image,
+        preferences,
+        retained.resume,
+    )
+    .unwrap_or((
+        App::with_catalog(library.length, images.length, selected_image, preferences),
+        AppEffect::RenderHome,
+    ));
     if let Some(status) = BATTERY_STATUS.try_take() {
         let _ = app.set_battery(status);
     }
@@ -460,7 +536,7 @@ pub async fn reader_app_task(
     match run_effect(
         first_effect,
         &mut app,
-        library,
+        DeviceCatalogs { library, images },
         store,
         &mut panel,
         &mut workspaces,
@@ -476,7 +552,7 @@ pub async fn reader_app_task(
         info!("reader resumed after GPIO3 deep-sleep wake");
     }
 
-    let mut control_lines = ControlLineBuffer::new();
+    let mut control_runtime = UsbControlRuntime::new(UPLOAD_BUFFER.take());
     esp_println::println!(
         "BREWCTL/1 READY version=1 width=480 height=800 bytes={}",
         FRAME_BYTES
@@ -486,10 +562,13 @@ pub async fn reader_app_task(
     loop {
         if let Some(status) = BATTERY_STATUS.try_take() {
             let effect = app.set_battery(status);
+            if control_runtime.is_upload_active() {
+                continue;
+            }
             match run_effect(
                 effect,
                 &mut app,
-                library,
+                DeviceCatalogs { library, images },
                 store,
                 &mut panel,
                 &mut workspaces,
@@ -502,22 +581,36 @@ pub async fn reader_app_task(
                 Err(status) => stop(status).await,
             }
         }
-        if let Some(button) = poll_control(
-            &mut control,
-            &mut control_lines,
-            &app,
-            workspaces.frame_codec.frame(),
-        ) {
-            match (ReaderRuntime {
-                app: &mut app,
-                library,
-                store,
-                panel: &mut panel,
-                workspaces: &mut workspaces,
-                loaded: &mut loaded,
-            })
-            .run_input(InputSource::Usb, button)
-            {
+        if let Some(event) =
+            control_runtime.poll(&mut control, &app, workspaces.frame_codec.frame(), store)
+        {
+            let result = match event {
+                ControlEvent::Button(button) => (ReaderRuntime {
+                    app: &mut app,
+                    library,
+                    images,
+                    store,
+                    panel: &mut panel,
+                    workspaces: &mut workspaces,
+                    loaded: &mut loaded,
+                })
+                .run_input(InputSource::Usb, button),
+                ControlEvent::ImagesChanged => {
+                    load_images(store, images);
+                    let selected = images.selected(store.app_data().read_selected_image());
+                    let effect = app.replace_image_catalog(images.length, selected);
+                    run_effect(
+                        effect,
+                        &mut app,
+                        DeviceCatalogs { library, images },
+                        store,
+                        &mut panel,
+                        &mut workspaces,
+                        &mut loaded,
+                    )
+                }
+            };
+            match result {
                 Ok(Some(resume)) => {
                     enter_sleep(resume, app.preferences(), store, panel, low_power).await;
                 }
@@ -530,13 +623,14 @@ pub async fn reader_app_task(
         let Either::First(event) = select(INPUT_EVENTS.receive(), next_control_poll).await else {
             continue;
         };
-        if event.transition() != ButtonTransition::Pressed {
+        if event.transition() != ButtonTransition::Pressed || control_runtime.is_upload_active() {
             continue;
         }
 
         match (ReaderRuntime {
             app: &mut app,
             library,
+            images,
             store,
             panel: &mut panel,
             workspaces: &mut workspaces,
@@ -571,6 +665,7 @@ impl InputSource {
 struct ReaderRuntime<'a> {
     app: &'a mut App,
     library: &'a DeviceLibrary,
+    images: &'a DeviceImages,
     store: &'a DeviceStore,
     panel: &'a mut ReaderDisplay,
     workspaces: &'a mut Workspaces,
@@ -589,10 +684,15 @@ impl ReaderRuntime<'_> {
             source.name(),
             button.name()
         );
+        let previous_preferences = self.app.preferences();
+        let previous_image = self.app.selected_sleep_image();
         let result = run_effect(
             self.app.input(map_button(button)),
             self.app,
-            self.library,
+            DeviceCatalogs {
+                library: self.library,
+                images: self.images,
+            },
             self.store,
             self.panel,
             self.workspaces,
@@ -601,6 +701,37 @@ impl ReaderRuntime<'_> {
 
         match result {
             Ok(resume) => {
+                if self.app.selected_sleep_image() != previous_image
+                    && let Some(image) = self.app.selected_sleep_image()
+                    && let Some(file) = self.images.file(image)
+                {
+                    if self
+                        .store
+                        .app_data()
+                        .write_selected_image(*file.name())
+                        .is_err()
+                    {
+                        esp_println::println!(
+                            "BREWCTL/1 LOG stage=sleep-image state=volatile reason=app-data-unavailable"
+                        );
+                    } else {
+                        esp_println::println!("BREWCTL/1 LOG stage=sleep-image state=persisted");
+                    }
+                }
+                if self.app.preferences() != previous_preferences {
+                    if self
+                        .store
+                        .app_data()
+                        .write_preferences(self.app.preferences())
+                        .is_err()
+                    {
+                        esp_println::println!(
+                            "BREWCTL/1 LOG stage=preferences state=volatile reason=app-data-unavailable"
+                        );
+                    } else {
+                        esp_println::println!("BREWCTL/1 LOG stage=preferences state=persisted");
+                    }
+                }
                 if source == InputSource::Usb {
                     write_control_status(self.app);
                     esp_println::println!("BREWCTL/1 DONE command=tap status=ok");
@@ -618,33 +749,160 @@ impl ReaderRuntime<'_> {
     }
 }
 
-fn poll_control(
-    control: &mut UsbSerialJtagRx<'static, Blocking>,
-    lines: &mut ControlLineBuffer,
-    app: &App,
-    frame: &[u8; FRAME_BYTES],
-) -> Option<Button> {
-    while let Ok(byte) = control.read_byte() {
-        let Some(parsed) = lines.push(byte) else {
-            continue;
-        };
-        match parsed {
-            Ok(ControlCommand::Tap(button)) => return Some(button),
-            Ok(ControlCommand::Status) => {
-                write_control_status(app);
-                esp_println::println!("BREWCTL/1 DONE command=status status=ok");
+enum ControlEvent {
+    Button(Button),
+    ImagesChanged,
+}
+
+struct UsbControlRuntime<'a> {
+    lines: ControlLineBuffer,
+    transfer: FileTransfer,
+    upload_buffer: &'a mut [u8; UPLOAD_CHUNK_BYTES],
+    upload_buffer_length: usize,
+    idle_polls: usize,
+}
+
+impl<'a> UsbControlRuntime<'a> {
+    fn new(upload_buffer: &'a mut [u8; UPLOAD_CHUNK_BYTES]) -> Self {
+        Self {
+            lines: ControlLineBuffer::new(),
+            transfer: FileTransfer::new(),
+            upload_buffer,
+            upload_buffer_length: 0,
+            idle_polls: 0,
+        }
+    }
+
+    fn is_upload_active(&self) -> bool {
+        self.transfer.is_active()
+    }
+
+    fn poll(
+        &mut self,
+        control: &mut UsbSerialJtagRx<'static, Blocking>,
+        app: &App,
+        frame: &[u8; FRAME_BYTES],
+        store: &DeviceStore,
+    ) -> Option<ControlEvent> {
+        if self.transfer.is_active() {
+            self.idle_polls = self.idle_polls.saturating_add(1);
+            if self.idle_polls >= UPLOAD_IDLE_POLLS {
+                self.abort_upload(store, "timeout");
             }
-            Ok(ControlCommand::Screen) => {
-                write_control_screen(frame);
-                esp_println::println!("BREWCTL/1 DONE command=screen status=ok");
+        }
+
+        while let Ok(byte) = control.read_byte() {
+            self.idle_polls = 0;
+            if self.transfer.is_active() {
+                self.upload_buffer[self.upload_buffer_length] = byte;
+                self.upload_buffer_length += 1;
+                let request = self
+                    .transfer
+                    .request()
+                    .expect("active upload has a request");
+                let remaining = request.length() - self.transfer.received();
+                if self.upload_buffer_length == remaining.min(UPLOAD_CHUNK_BYTES)
+                    && self.flush_upload_chunk(store)
+                {
+                    return Some(ControlEvent::ImagesChanged);
+                }
+                continue;
+            }
+
+            let Some(parsed) = self.lines.push(byte) else {
+                continue;
+            };
+            match parsed {
+                Ok(ControlCommand::Tap(button)) => return Some(ControlEvent::Button(button)),
+                Ok(ControlCommand::Status) => {
+                    write_control_status(app);
+                    esp_println::println!("BREWCTL/1 DONE command=status status=ok");
+                }
+                Ok(ControlCommand::Screen) => {
+                    write_control_screen(frame);
+                    esp_println::println!("BREWCTL/1 DONE command=screen status=ok");
+                }
+                Ok(ControlCommand::Upload(request)) => self.begin_upload(request, store),
+                Ok(ControlCommand::AbortUpload) => self.abort_upload(store, "requested"),
+                Err(error) => {
+                    esp_println::println!("BREWCTL/1 ERROR command=parse reason={}", error.name());
+                    esp_println::println!("BREWCTL/1 DONE command=parse status=error");
+                }
+            }
+        }
+        None
+    }
+
+    fn begin_upload(&mut self, request: UploadRequest, store: &DeviceStore) {
+        let mut app_data = store.app_data();
+        match self.transfer.begin(request, &mut app_data) {
+            Ok(()) => {
+                self.upload_buffer_length = 0;
+                esp_println::println!(
+                    "BREWCTL/1 READY command=upload chunk={} bytes={}",
+                    UPLOAD_CHUNK_BYTES,
+                    request.length()
+                );
             }
             Err(error) => {
-                esp_println::println!("BREWCTL/1 ERROR command=parse reason={}", error.name());
-                esp_println::println!("BREWCTL/1 DONE command=parse status=error");
+                esp_println::println!("BREWCTL/1 ERROR command=upload reason={}", error.name());
+                esp_println::println!("BREWCTL/1 DONE command=upload status=error");
             }
         }
     }
-    None
+
+    fn flush_upload_chunk(&mut self, store: &DeviceStore) -> bool {
+        let length = self.upload_buffer_length;
+        let mut app_data = store.app_data();
+        if let Err(error) = self
+            .transfer
+            .append(&self.upload_buffer[..length], &mut app_data)
+        {
+            let _ = self.transfer.abort(&mut app_data);
+            self.upload_buffer_length = 0;
+            esp_println::println!("BREWCTL/1 ERROR command=upload reason={}", error.name());
+            esp_println::println!("BREWCTL/1 DONE command=upload status=error");
+            return false;
+        }
+        self.upload_buffer_length = 0;
+        let request = self
+            .transfer
+            .request()
+            .expect("active upload has a request");
+        esp_println::println!(
+            "BREWCTL/1 ACK command=upload received={} total={}",
+            self.transfer.received(),
+            request.length()
+        );
+        if self.transfer.received() != request.length() {
+            return false;
+        }
+        match self.transfer.finish(&mut app_data, self.upload_buffer) {
+            Ok(_) => {
+                esp_println::println!("BREWCTL/1 DONE command=upload status=ok");
+                true
+            }
+            Err(error) => {
+                esp_println::println!("BREWCTL/1 ERROR command=upload reason={}", error.name());
+                esp_println::println!("BREWCTL/1 DONE command=upload status=error");
+                false
+            }
+        }
+    }
+
+    fn abort_upload(&mut self, store: &DeviceStore, reason: &str) {
+        let mut app_data = store.app_data();
+        let was_active = self.transfer.is_active();
+        let result = self.transfer.abort(&mut app_data);
+        self.upload_buffer_length = 0;
+        self.idle_polls = 0;
+        if was_active || result.is_err() {
+            esp_println::println!("BREWCTL/1 ERROR command=upload reason={}", reason);
+            esp_println::println!("BREWCTL/1 DONE command=upload status=error");
+        } else {
+            esp_println::println!("BREWCTL/1 DONE command=upload-abort status=ok");
+        }
+    }
 }
 
 fn write_control_status(app: &App) {
@@ -668,13 +926,15 @@ fn write_control_status(app: &App) {
         },
         AppView::Files(state) => match state.selected() {
             Some(selected) => esp_println::println!(
-                "BREWCTL/1 STATUS view=files selected={} books={}",
+                "BREWCTL/1 STATUS view=files selected={} files={} images={}",
                 selected.index(),
-                state.book_count()
+                state.file_count(),
+                app.image_count()
             ),
             None => esp_println::println!(
-                "BREWCTL/1 STATUS view=files selected=none books={}",
-                state.book_count()
+                "BREWCTL/1 STATUS view=files selected=none files={} images={}",
+                state.file_count(),
+                app.image_count()
             ),
         },
         AppView::Settings(state) => {
@@ -695,6 +955,13 @@ fn write_control_status(app: &App) {
                 location.spine_index(),
                 location.page_index(),
                 location.page_count()
+            );
+        }
+        AppView::Image(image) => {
+            esp_println::println!(
+                "BREWCTL/1 STATUS view=image image={} selected={}",
+                image.index(),
+                app.selected_sleep_image() == Some(image)
             );
         }
         AppView::Error { book, origin: _ } => {
@@ -748,13 +1015,24 @@ fn load_library(
     library: &mut DeviceLibrary,
     workspaces: &mut Workspaces,
 ) -> Result<(), ()> {
+    info!("reader startup: book directory scan start");
     let catalog = store.scan::<MAX_DEVICE_BOOKS>().map_err(|_| ())?;
-    for file in catalog.books().copied() {
+    info!(
+        "reader startup: book directory scan done entries={}",
+        catalog.len()
+    );
+    for (catalog_index, file) in catalog.books().copied().enumerate() {
+        info!(
+            "reader startup: book validation start index={} bytes={}",
+            catalog_index,
+            file.size()
+        );
         let inflate = workspaces.frame_codec.prepare_inflate();
         let reader = match store.open_reader(file) {
             Ok(reader) => reader,
             Err(_) => continue,
         };
+        info!("reader startup: book open done index={}", catalog_index);
         let book = match DeviceEpub::open(
             reader,
             workspaces.zip,
@@ -765,6 +1043,10 @@ fn load_library(
             Ok(book) => book,
             Err(_) => continue,
         };
+        info!(
+            "reader startup: book validation done index={}",
+            catalog_index
+        );
         let publication = book.publication();
         let Ok(title) = FixedString::try_from_str(publication.title()) else {
             continue;
@@ -796,6 +1078,17 @@ fn load_library(
     Ok(())
 }
 
+fn load_images(store: &DeviceStore, images: &mut DeviceImages) {
+    *images = DeviceImages::empty();
+    let Ok(catalog) = store.app_data().scan_images::<MAX_DEVICE_IMAGES>() else {
+        return;
+    };
+    for image in catalog.images() {
+        images.files[images.length] = Some(image);
+        images.length += 1;
+    }
+}
+
 fn initialize_panel(
     store: &DeviceStore,
     profile: X4DriveProfile,
@@ -821,16 +1114,17 @@ fn initialize_panel(
     })
 }
 
-#[inline(always)]
 fn run_effect(
     mut effect: AppEffect,
     app: &mut App,
-    library: &DeviceLibrary,
+    catalogs: DeviceCatalogs<'_>,
     store: &DeviceStore,
     panel: &mut ReaderDisplay,
     workspaces: &mut Workspaces,
     loaded: &mut Option<LoadedChapter>,
 ) -> Result<Option<ResumePoint>, &'static str> {
+    let library = catalogs.library;
+    let images = catalogs.images;
     loop {
         effect = match effect {
             AppEffect::None => return Ok(None),
@@ -852,12 +1146,12 @@ fn run_effect(
                 return Ok(None);
             }
             AppEffect::RenderFiles => {
-                render_files_frame(app, library, workspaces.frame_codec.frame())?;
+                render_files_frame(app, library, images, workspaces.frame_codec.frame())?;
                 refresh(store, panel, workspaces.frame_codec.frame())?;
                 return Ok(None);
             }
             AppEffect::RenderSettings => {
-                render_settings_frame(app, workspaces.frame_codec.frame())?;
+                render_settings_frame(app, images, store, workspaces)?;
                 refresh(store, panel, workspaces.frame_codec.frame())?;
                 return Ok(None);
             }
@@ -877,7 +1171,7 @@ fn run_effect(
                         match layout_xhtml_page_into(
                             &workspaces.resource[..chapter.length],
                             0,
-                            app.preferences(),
+                            app.reader_preferences(),
                             workspaces.page,
                         ) {
                             Ok(()) => app
@@ -936,6 +1230,11 @@ fn run_effect(
                 );
                 return Ok(None);
             }
+            AppEffect::RenderImage(image) => {
+                render_image_frame(app, image, images, store, workspaces)?;
+                refresh(store, panel, workspaces.frame_codec.frame())?;
+                return Ok(None);
+            }
             AppEffect::RenderError { book } => {
                 esp_println::println!("BREWCTL/1 LOG stage=render-error state=start");
                 render_error(app, book, library, workspaces.frame_codec.frame())?;
@@ -945,7 +1244,7 @@ fn run_effect(
             }
             AppEffect::RenderSleep { resume } => {
                 esp_println::println!("BREWCTL/1 LOG stage=render-sleep state=start");
-                render_sleep_frame(resume, app.battery(), library, store, workspaces)?;
+                render_sleep_frame(app, resume, library, images, store, workspaces)?;
                 refresh(store, panel, workspaces.frame_codec.frame())?;
                 esp_println::println!("BREWCTL/1 LOG stage=render-sleep state=done");
                 info!("reader retained sleep frame refreshed");
@@ -957,7 +1256,6 @@ fn run_effect(
     }
 }
 
-#[inline(always)]
 fn load_chapter(
     selected: BookId,
     spine_index: usize,
@@ -1075,6 +1373,74 @@ fn decode_book_cover(
     Ok(true)
 }
 
+fn decode_image_preview(
+    file: &ImageFile,
+    store: &DeviceStore,
+    workspaces: &mut Workspaces,
+) -> CustomSleepImageStatus {
+    let loaded = match store.app_data().read_image(
+        *file.name(),
+        &mut workspaces.resource[..MAX_DEVICE_IMAGE_BYTES],
+    ) {
+        Ok(loaded) => loaded,
+        Err(_) => return CustomSleepImageStatus::Invalid,
+    };
+    let encoded = &workspaces.resource[..loaded.length()];
+    let output = &mut *workspaces.cover;
+    let decoded = match loaded.format() {
+        ImageFormat::Jpeg => workspaces
+            .frame_codec
+            .with_jpeg(|workspace| decode_jpeg_cover(encoded, output, workspace)),
+        ImageFormat::Png => workspaces
+            .frame_codec
+            .with_png(|workspace| decode_png_cover(encoded, output, workspace)),
+    };
+    if decoded.is_ok() {
+        CustomSleepImageStatus::Ready
+    } else {
+        CustomSleepImageStatus::Invalid
+    }
+}
+
+fn decode_image_frame(
+    file: &ImageFile,
+    scale: ScaleMode,
+    store: &DeviceStore,
+    workspaces: &mut Workspaces,
+) -> Result<(), &'static str> {
+    let (encoded_buffer, decoder_buffer) = workspaces.resource.split_at_mut(MAX_DEVICE_IMAGE_BYTES);
+    let loaded = store
+        .app_data()
+        .read_image(*file.name(), encoded_buffer)
+        .map_err(|_| "reader image read failed")?;
+    let encoded = &encoded_buffer[..loaded.length()];
+    let frame = workspaces.frame_codec.frame();
+    let mut target = MonochromeImage::new(frame_size(), frame)
+        .map_err(|_| "reader frame buffer has the wrong size")?;
+    let options = RenderOptions {
+        scale,
+        ..RenderOptions::default()
+    };
+    match loaded.format() {
+        ImageFormat::Jpeg => decode_jpeg(
+            encoded,
+            &mut target,
+            options,
+            JpegDecodeWorkspace::in_buffer(decoder_buffer)
+                .ok_or("reader JPEG workspace does not fit")?,
+        ),
+        ImageFormat::Png => decode_png(
+            encoded,
+            &mut target,
+            options,
+            CoverDecodeWorkspace::in_buffer(decoder_buffer)
+                .ok_or("reader PNG workspace does not fit")?,
+        ),
+    }
+    .map_err(|_| "reader image decode failed")?;
+    Ok(())
+}
+
 fn render_home_frame(app: &App, frame: &mut [u8; FRAME_BYTES]) -> Result<(), &'static str> {
     let mut image = MonochromeImage::new(frame_size(), frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
@@ -1084,32 +1450,109 @@ fn render_home_frame(app: &App, frame: &mut [u8; FRAME_BYTES]) -> Result<(), &'s
 fn render_files_frame(
     app: &App,
     library: &DeviceLibrary,
+    images: &DeviceImages,
     frame: &mut [u8; FRAME_BYTES],
 ) -> Result<(), &'static str> {
-    let mut files = [FileItem::new("", 0); MAX_DEVICE_BOOKS];
+    let mut files = [FileItem::new("", 0, FileKind::Epub); MAX_DEVICE_FILES];
     for (index, file) in files[..library.length].iter_mut().enumerate() {
         let book = BookId::new(index);
-        *file = FileItem::new(library.file_name(book), library.file_size(book));
+        *file = FileItem::new(
+            library.file_name(book),
+            library.file_size(book),
+            FileKind::Epub,
+        );
+    }
+    for (index, file) in files[library.length..library.length + images.length]
+        .iter_mut()
+        .enumerate()
+    {
+        let image = images
+            .file(ImageId::new(index))
+            .ok_or("image catalog mismatch")?;
+        let kind = match image.format() {
+            ImageFormat::Jpeg => FileKind::Jpeg,
+            ImageFormat::Png => FileKind::Png,
+        };
+        *file = FileItem::new(image.name().as_str(), image.size(), kind);
     }
     let mut image = MonochromeImage::new(frame_size(), frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
     render_files(
         app.files(),
-        &files[..library.length],
+        &files[..library.length + images.length],
         app.battery(),
         &mut image,
     )
     .map_err(|_| "reader files render failed")
 }
 
-fn render_settings_frame(app: &App, frame: &mut [u8; FRAME_BYTES]) -> Result<(), &'static str> {
+fn render_settings_frame(
+    app: &App,
+    images: &DeviceImages,
+    store: &DeviceStore,
+    workspaces: &mut Workspaces,
+) -> Result<(), &'static str> {
     let AppView::Settings(settings) = app.view() else {
         return Err("reader settings render requested outside settings");
     };
-    let mut image = MonochromeImage::new(frame_size(), frame)
+    let show_custom_preview = settings.selected() == SettingsItem::SleepScreen
+        && settings.draft().sleep_screen() != SleepScreenMode::BookCover;
+    let selected_file = app
+        .selected_sleep_image()
+        .and_then(|image| images.file(image));
+    let custom_image_status = if show_custom_preview {
+        selected_file.map_or(CustomSleepImageStatus::Missing, |file| {
+            decode_image_preview(file, store, workspaces)
+        })
+    } else {
+        CustomSleepImageStatus::Missing
+    };
+    let custom_image_preview = (show_custom_preview
+        && custom_image_status == CustomSleepImageStatus::Ready)
+        .then(|| bitmap(workspaces.cover));
+    let mut image = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
         .map_err(|_| "reader frame buffer has the wrong size")?;
-    render_settings(settings, app.battery(), &mut image)
-        .map_err(|_| "reader settings render failed")
+    render_settings(
+        settings,
+        app.battery(),
+        custom_image_status,
+        selected_file.map(|file| file.name().as_str()),
+        custom_image_preview,
+        &mut image,
+    )
+    .map_err(|_| "reader settings render failed")
+}
+
+fn render_image_frame(
+    app: &App,
+    image: ImageId,
+    images: &DeviceImages,
+    store: &DeviceStore,
+    workspaces: &mut Workspaces,
+) -> Result<(), &'static str> {
+    let file = images
+        .file(image)
+        .ok_or("image selection is out of bounds")?;
+    if decode_image_frame(file, ScaleMode::Contain, store, workspaces).is_err() {
+        let mut target = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
+            .map_err(|_| "reader frame buffer has the wrong size")?;
+        return render_reader_error(
+            file.name().as_str(),
+            "This image could not be opened.",
+            app.battery(),
+            &mut target,
+        )
+        .map_err(|_| "reader image error render failed");
+    }
+    let mut target = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
+        .map_err(|_| "reader frame buffer has the wrong size")?;
+    render_image_viewer(
+        file.name().as_str(),
+        app.selected_sleep_image() == Some(image),
+        app.battery(),
+        &mut target,
+    )
+    .map_err(|_| "reader image viewer render failed")
 }
 
 fn render_library(
@@ -1184,7 +1627,7 @@ fn render_page(
     page: &mut BoundedPage,
     frame: &mut [u8; FRAME_BYTES],
 ) -> Result<(), &'static str> {
-    layout_xhtml_page_into(xhtml, location.page_index(), app.preferences(), page)
+    layout_xhtml_page_into(xhtml, location.page_index(), app.reader_preferences(), page)
         .map_err(|_| "reader requested page layout failed")?;
     let mut lines = [ReaderLine::new("", ReaderStyle::Body); MAX_PAGE_LINES];
     let mut line_count = 0;
@@ -1197,7 +1640,7 @@ fn render_page(
         page.chapter_title(),
         &lines[..line_count],
         location,
-        app.preferences(),
+        app.reader_preferences(),
         app.battery(),
     );
     let mut image = MonochromeImage::new(frame_size(), frame)
@@ -1206,17 +1649,13 @@ fn render_page(
 }
 
 fn render_sleep_frame(
+    app: &App,
     resume: ResumePoint,
-    battery: BatteryStatus,
     library: &DeviceLibrary,
+    images: &DeviceImages,
     store: &DeviceStore,
     workspaces: &mut Workspaces,
 ) -> Result<(), &'static str> {
-    let selected = match resume {
-        ResumePoint::Books { selected } | ResumePoint::Files { selected } => selected,
-        ResumePoint::Reader { book, .. } => Some(book),
-        ResumePoint::Home { .. } | ResumePoint::Settings { .. } => None,
-    };
     let mut status = FixedString::<64>::new();
     match resume {
         ResumePoint::Reader {
@@ -1242,20 +1681,56 @@ fn render_sleep_frame(
         ResumePoint::Settings { .. } => status
             .push_str("SETTINGS POSITION SAVED")
             .map_err(|_| "reader sleep status overflowed")?,
+        ResumePoint::Image { .. } => status
+            .push_str("IMAGE POSITION SAVED")
+            .map_err(|_| "reader sleep status overflowed")?,
     }
-    let has_cover = selected
-        .is_some_and(|book| decode_book_cover(book, library, store, workspaces).unwrap_or(false));
-    let (title, creator) = selected.map_or(("Brewthink", ""), |book| {
-        (library.title(book), library.creator(book))
-    });
-    let cover = has_cover.then(|| bitmap(workspaces.cover));
-    let mut image = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
-        .map_err(|_| "reader frame buffer has the wrong size")?;
-    render_sleep(
-        SleepView::new(title, creator, status.as_str(), cover, battery),
-        &mut image,
-    )
-    .map_err(|_| "reader sleep frame render failed")
+
+    for source in app.sleep_screen_plan(resume).sources() {
+        match source {
+            SleepScreenSource::CustomImage(image) => {
+                let Some(file) = images.file(image) else {
+                    continue;
+                };
+                if decode_image_frame(file, ScaleMode::Cover, store, workspaces).is_ok() {
+                    esp_println::println!(
+                        "BREWCTL/1 LOG stage=sleep-frame source=custom image={} crc32={:08x}",
+                        image.index(),
+                        crc32fast::hash(workspaces.frame_codec.frame())
+                    );
+                    return Ok(());
+                }
+            }
+            SleepScreenSource::BookCover(book) => {
+                if !decode_book_cover(book, library, store, workspaces).unwrap_or(false) {
+                    continue;
+                }
+                let mut image = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
+                    .map_err(|_| "reader frame buffer has the wrong size")?;
+                return render_sleep(
+                    SleepView::book_cover(
+                        library.title(book),
+                        library.creator(book),
+                        status.as_str(),
+                        bitmap(workspaces.cover),
+                        app.battery(),
+                    ),
+                    &mut image,
+                )
+                .map_err(|_| "reader sleep frame render failed");
+            }
+            SleepScreenSource::BuiltIn => {
+                let mut image = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
+                    .map_err(|_| "reader frame buffer has the wrong size")?;
+                return render_sleep(
+                    SleepView::built_in(status.as_str(), app.battery()),
+                    &mut image,
+                )
+                .map_err(|_| "reader sleep frame render failed");
+            }
+        }
+    }
+    Err("reader sleep plan has no renderable source")
 }
 
 fn render_error(
@@ -1306,7 +1781,7 @@ fn refresh(
 
 async fn enter_sleep(
     resume: ResumePoint,
-    preferences: ReaderPreferences,
+    preferences: AppPreferences,
     store: &'static DeviceStore,
     panel: ReaderDisplay,
     low_power: LPWR<'static>,
@@ -1376,12 +1851,12 @@ fn read_resume() -> Option<RetainedApp> {
     if record.magic != RESUME_MAGIC || record.checksum != resume_checksum(record) {
         return None;
     }
-    let preferences = ReaderPreferences::from_packed(record.preferences)?;
-    let selected = || {
+    let preferences = AppPreferences::from_packed(record.preferences)?;
+    let selected_index = || {
         if record.primary == u32::MAX {
             Some(None)
         } else {
-            Some(Some(BookId::new(usize::try_from(record.primary).ok()?)))
+            Some(Some(usize::try_from(record.primary).ok()?))
         }
     };
     let resume = match record.kind {
@@ -1389,20 +1864,23 @@ fn read_resume() -> Option<RetainedApp> {
             selected: HomeItem::from_index(usize::try_from(record.primary).ok()?)?,
         },
         BOOKS_KIND => ResumePoint::Books {
-            selected: selected()?,
+            selected: selected_index()?.map(BookId::new),
         },
         FILES_KIND => ResumePoint::Files {
-            selected: selected()?,
+            selected: selected_index()?.map(crate::app::FileId::new),
         },
         SETTINGS_KIND => ResumePoint::Settings {
             selected: SettingsItem::from_index(usize::try_from(record.primary).ok()?)?,
-            draft: ReaderPreferences::from_packed(record.detail)?,
+            draft: AppPreferences::from_packed(record.detail)?,
         },
         READER_KIND => ResumePoint::Reader {
             book: BookId::new(usize::try_from(record.primary).ok()?),
             spine_index: usize::try_from(record.secondary).ok()?,
             page_index: usize::try_from(record.tertiary).ok()?,
             origin: BookOrigin::from_index(usize::try_from(record.detail).ok()?)?,
+        },
+        IMAGE_KIND => ResumePoint::Image {
+            image: ImageId::new(usize::try_from(record.primary).ok()?),
         },
         _ => return None,
     };
@@ -1412,11 +1890,23 @@ fn read_resume() -> Option<RetainedApp> {
     })
 }
 
-fn write_resume(resume: ResumePoint, preferences: ReaderPreferences) {
+fn write_resume(resume: ResumePoint, preferences: AppPreferences) {
     let (kind, primary, secondary, tertiary, detail) = match resume {
         ResumePoint::Home { selected } => (HOME_KIND, selected.index() as u32, 0, 0, 0),
-        ResumePoint::Books { selected } => (BOOKS_KIND, packed_book(selected), 0, 0, 0),
-        ResumePoint::Files { selected } => (FILES_KIND, packed_book(selected), 0, 0, 0),
+        ResumePoint::Books { selected } => (
+            BOOKS_KIND,
+            packed_index(selected.map(BookId::index)),
+            0,
+            0,
+            0,
+        ),
+        ResumePoint::Files { selected } => (
+            FILES_KIND,
+            packed_index(selected.map(crate::app::FileId::index)),
+            0,
+            0,
+            0,
+        ),
         ResumePoint::Settings { selected, draft } => {
             (SETTINGS_KIND, selected.index() as u32, 0, 0, draft.packed())
         }
@@ -1431,6 +1921,13 @@ fn write_resume(resume: ResumePoint, preferences: ReaderPreferences) {
             u32::try_from(spine_index).unwrap_or(u32::MAX),
             u32::try_from(page_index).unwrap_or(u32::MAX),
             origin.index() as u32,
+        ),
+        ResumePoint::Image { image } => (
+            IMAGE_KIND,
+            u32::try_from(image.index()).unwrap_or(u32::MAX),
+            0,
+            0,
+            0,
         ),
     };
     let mut record = ResumeRecord {
@@ -1458,8 +1955,9 @@ fn write_resume(resume: ResumePoint, preferences: ReaderPreferences) {
     unsafe { core::ptr::write_volatile(&raw mut RETAINED_RESUME, words) };
 }
 
-fn packed_book(book: Option<BookId>) -> u32 {
-    book.and_then(|book| u32::try_from(book.index()).ok())
+fn packed_index(index: Option<usize>) -> u32 {
+    index
+        .and_then(|index| u32::try_from(index).ok())
         .unwrap_or(u32::MAX)
 }
 

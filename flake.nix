@@ -45,6 +45,8 @@
               pkgs.bun
               pkgs.espflash
               pkgs.esptool
+              pkgs.llvmPackages.llvm
+              pkgs.python3
               pkgs.wasm-bindgen-cli
             ];
           };

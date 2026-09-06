@@ -5,6 +5,7 @@ pub enum DiagnosticStage {
     Heartbeat,
     Input(InputDiagnosticStage),
     StorageReadOnly,
+    StorageUsb,
     StorageWriteTest,
     IntegratedDevice,
     SleepWake,
@@ -19,6 +20,7 @@ impl DiagnosticStage {
             Self::Heartbeat => stage_names::HEARTBEAT,
             Self::Input(stage) => stage.name(),
             Self::StorageReadOnly => stage_names::STORAGE_READONLY,
+            Self::StorageUsb => stage_names::STORAGE_USB,
             Self::StorageWriteTest => stage_names::STORAGE_WRITE_TEST,
             Self::IntegratedDevice => stage_names::INTEGRATED_DEVICE,
             Self::SleepWake => stage_names::SLEEP_WAKE,
@@ -59,6 +61,7 @@ impl core::str::FromStr for DiagnosticStage {
             stage_names::INPUTS_EVENTS => Ok(Self::Input(InputDiagnosticStage::Events)),
             stage_names::POWER_USB => Ok(Self::Input(InputDiagnosticStage::PowerUsb)),
             stage_names::STORAGE_READONLY => Ok(Self::StorageReadOnly),
+            stage_names::STORAGE_USB => Ok(Self::StorageUsb),
             stage_names::STORAGE_WRITE_TEST => Ok(Self::StorageWriteTest),
             stage_names::INTEGRATED_DEVICE => Ok(Self::IntegratedDevice),
             stage_names::SLEEP_WAKE => Ok(Self::SleepWake),
@@ -132,6 +135,7 @@ mod tests {
                 DiagnosticStage::Input(InputDiagnosticStage::PowerUsb),
             ),
             ("storage-readonly", DiagnosticStage::StorageReadOnly),
+            ("storage-usb", DiagnosticStage::StorageUsb),
             ("storage-write-test", DiagnosticStage::StorageWriteTest),
             ("integrated-device", DiagnosticStage::IntegratedDevice),
             ("sleep-wake", DiagnosticStage::SleepWake),
@@ -183,7 +187,7 @@ mod tests {
 
     #[test]
     fn stage_name_list_matches_the_parser() {
-        assert_eq!(stage_names::ALL_STAGES.len(), 17);
+        assert_eq!(stage_names::ALL_STAGES.len(), 18);
         for name in stage_names::ALL_STAGES {
             let parsed: DiagnosticStage = name.parse().unwrap();
             assert_eq!(parsed.name(), *name);

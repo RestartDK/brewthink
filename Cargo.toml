@@ -6,12 +6,15 @@ version      = "0.1.0"
 
 [features]
 default             = []
-device-control      = ["dep:crc32fast", "dep:image", "dep:libc"]
-device-reader       = ["sd-card", "dep:crc32fast", "dep:embedded-io", "dep:embedded-png", "dep:miniz_oxide", "dep:tjpgd-rs"]
+device-control      = ["image-decoder", "dep:image", "dep:libc"]
+device-reader       = ["image-decoder", "sd-card-write", "dep:miniz_oxide"]
 epub                = ["dep:quick-xml", "dep:zip"]
 host-image-tools    = ["dep:image"]
+image-decoder       = ["dep:crc32fast", "dep:embedded-io", "dep:embedded-png", "dep:tjpgd-rs"]
 sd-card             = ["dep:embedded-sdmmc"]
-sd-write-diagnostic = ["sd-card"]
+sd-diagnostic       = ["dep:crc32fast"]
+sd-card-write       = ["sd-card"]
+sd-write-diagnostic = ["sd-card-write"]
 web-sim             = ["dep:image", "dep:wasm-bindgen", "epub"]
 
 [[bin]]

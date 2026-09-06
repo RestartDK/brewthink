@@ -10,13 +10,23 @@ const WIDTH = 480;
 const HEIGHT = 800;
 const FRAME_BYTES = 48_000;
 const MAX_EPUB_BYTES = 32 * 1024 * 1024;
-const READER_PREFERENCES_KEY = "brewthink.reader-preferences.v1";
-const INVALID_READER_PREFERENCES = 0xffff_ffff;
+const APP_PREFERENCES_KEY = "brewthink.reader-preferences.v1";
+const SLEEP_IMAGE_KEY = "brewthink.sleep-image.v1";
+const INVALID_APP_PREFERENCES = 0xffff_ffff;
+const NO_SLEEP_IMAGE = 0xffff_ffff;
 const INK_SHADE = { red: 27, green: 27, blue: 24 };
 const PAPER_SHADE = { red: 230, green: 227, blue: 211 };
 const integerFormat = new Intl.NumberFormat("en-US");
 
-type Screen = "home" | "library" | "files" | "settings" | "reader" | "sleep" | "error";
+type Screen =
+  | "home"
+  | "library"
+  | "files"
+  | "settings"
+  | "reader"
+  | "image"
+  | "sleep"
+  | "error";
 
 type ViewState =
   | Readonly<{ kind: "booting" }>
@@ -247,7 +257,7 @@ document.addEventListener("keydown", (event) => {
 
 resetButton.addEventListener("click", () => {
   replaceLibrary(
-    WebLibrary.withPreferences(readStoredPreferences()),
+    WebLibrary.withPreferences(readStoredPreferences(), readStoredSleepImage()),
     "Built-in public-domain sample",
   );
 });
@@ -265,7 +275,7 @@ async function initializeRenderer(): Promise<void> {
     runtimeLabel.textContent = `Rust/WASM ${renderer_version()}`;
     fileInput.disabled = false;
     replaceLibrary(
-      WebLibrary.withPreferences(readStoredPreferences()),
+      WebLibrary.withPreferences(readStoredPreferences(), readStoredSleepImage()),
       "Built-in public-domain sample",
     );
   } catch (error: unknown) {
@@ -294,7 +304,12 @@ async function loadEpub(file: File): Promise<void> {
       return;
     }
     replaceLibrary(
-      WebLibrary.fromEpub(bytes, file.name, readStoredPreferences()),
+      WebLibrary.fromEpub(
+        bytes,
+        file.name,
+        readStoredPreferences(),
+        readStoredSleepImage(),
+      ),
       file.name,
     );
   } catch (error: unknown) {
@@ -325,7 +340,8 @@ function sendInput(input: WebInput): void {
   } else {
     library.input(input);
   }
-  localStorage.setItem(READER_PREFERENCES_KEY, String(library.preferences));
+  localStorage.setItem(APP_PREFERENCES_KEY, String(library.preferences));
+  localStorage.setItem(SLEEP_IMAGE_KEY, String(library.selectedImage));
   renderApplication();
 }
 
@@ -450,9 +466,9 @@ function renderReadyState(state: Extract<ViewState, { kind: "ready" }>): void {
       selectionPosition.textContent = `${state.selected + 1} / ${state.itemCount}`;
       pageLabel.textContent = "File page";
       viewPosition.textContent = `${state.page + 1} / ${state.pageCount}`;
-      confirmLabel.textContent = "Open EPUB";
+      confirmLabel.textContent = "Open file";
       confirmHint.textContent = state.title;
-      message.textContent = "Files shows the EPUB source names and sizes from the read-only catalog.";
+      message.textContent = "Files shows EPUB books and selectable sleep images.";
       canvas.setAttribute(
         "aria-label",
         `Brewthink file browser. Selected: ${state.title}.`,
@@ -471,6 +487,16 @@ function renderReadyState(state: Extract<ViewState, { kind: "ready" }>): void {
         "aria-label",
         `Brewthink reader settings. Selected: ${state.title}. Value: ${state.creator}.`,
       );
+      break;
+    case "image":
+      previewHeading.textContent = "Image viewer · 480 × 800";
+      selectionPosition.textContent = `${state.selected + 1} / ${state.itemCount}`;
+      pageLabel.textContent = "Sleep image";
+      viewPosition.textContent = state.creator;
+      confirmLabel.textContent = "Select";
+      confirmHint.textContent = "Use as custom sleep image";
+      message.textContent = "Confirm selects this image. Back returns to Files.";
+      canvas.setAttribute("aria-label", `Brewthink image viewer. ${state.title}.`);
       break;
     case "reader":
       previewHeading.textContent = "EPUB reader · 480 × 800";
@@ -555,6 +581,7 @@ function parseScreen(value: string): Screen {
     value === "files" ||
     value === "settings" ||
     value === "reader" ||
+    value === "image" ||
     value === "sleep" ||
     value === "error"
   ) {
@@ -604,13 +631,25 @@ function handleDragLeave(event: DragEvent): void {
 }
 
 function readStoredPreferences(): number {
-  const stored = localStorage.getItem(READER_PREFERENCES_KEY);
+  const stored = localStorage.getItem(APP_PREFERENCES_KEY);
   if (stored === null) {
-    return INVALID_READER_PREFERENCES;
+    return INVALID_APP_PREFERENCES;
   }
   const value = Number(stored);
   if (!Number.isSafeInteger(value) || value < 0 || value > 0xffff_ffff) {
-    return INVALID_READER_PREFERENCES;
+    return INVALID_APP_PREFERENCES;
+  }
+  return value;
+}
+
+function readStoredSleepImage(): number {
+  const stored = localStorage.getItem(SLEEP_IMAGE_KEY);
+  if (stored === null) {
+    return NO_SLEEP_IMAGE;
+  }
+  const value = Number(stored);
+  if (!Number.isSafeInteger(value) || value < 0 || value > 0xffff_ffff) {
+    return NO_SLEEP_IMAGE;
   }
   return value;
 }

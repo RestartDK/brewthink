@@ -19,7 +19,7 @@ The wordmark occupies the upper-left. The active section appears beneath it. A b
 
 ## Selection
 
-A one-pixel outline is neutral. A three or four-pixel outline is selected. Selection never depends on color. Up and Down move through vertical lists. Left and Right change settings values. Confirm opens or applies. Back returns to the parent screen. On X4 hardware, the buttons labeled Back and Confirm emit Up and Down. USB control keeps the semantic Back and Confirm inputs.
+A one-pixel outline is neutral. A three or four-pixel outline is selected. Selection never depends on color. Up and Down move through vertical lists. Left and Right change settings values. Confirm opens or applies. Back returns to the parent screen.
 
 ## Reader typography
 
@@ -28,8 +28,15 @@ Reader typography is separate from application chrome. The settings are bounded 
 - Font is Noto Serif, Compact, or Mono.
 - Text size is Small, Medium, or Large.
 - Line spacing is Compact, Normal, or Relaxed.
+- Sleep screen is Automatic, Custom Image, or Book Cover.
 
 One resolved `ReaderTheme` supplies glyph metrics to both pagination and rendering. The default Noto Serif and Medium combination matches CrossPoint Reader's Noto Serif 14 pt default. The Brewthink wordmark and application chrome remain on their existing bitmap fonts.
+
+## Sleep screen
+
+Automatic uses the current book cover only when sleep begins in Reader and uses the selected custom image elsewhere. Custom Image always prefers the selected image. Book Cover uses the associated reader or selected-book cover. Files combines EPUBs from `/books` with images from `/files`; opening an image shows a full-screen preview and Confirm selects it for sleep. Every missing or invalid asset falls back to the built-in Brewthink screen. Settings shows the selected mode, image name, status, and a bounded preview.
+
+The current writable FAT layout uses the 8.3-compatible `/brew`, `/brew/cache`, `/brew/bookmark`, and `/files` paths. Firmware creates missing directories. Application records and transfer state stay under `/brew`; user images stay under `/files`. The filesystem layer will migrate `/brew` to `/.brew` when it can create VFAT long names.
 
 ## Simulator
 

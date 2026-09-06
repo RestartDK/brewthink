@@ -3,7 +3,7 @@ const CMD8_SEND_IF_COND: u8 = 8;
 const CMD9_SEND_CSD: u8 = 9;
 const CMD16_SET_BLOCKLEN: u8 = 16;
 const CMD17_READ_SINGLE_BLOCK: u8 = 17;
-#[cfg(feature = "sd-write-diagnostic")]
+#[cfg(feature = "sd-card-write")]
 const CMD24_WRITE_SINGLE_BLOCK: u8 = 24;
 const CMD41_APP_SEND_OP_COND: u8 = 41;
 const CMD55_APP_CMD: u8 = 55;
@@ -17,7 +17,7 @@ const READY_POLLS: usize = 10_000;
 const RESPONSE_POLLS: usize = 8;
 const DATA_TOKEN_POLLS: usize = 10_000;
 const DATA_START_TOKEN: u8 = 0xFE;
-#[cfg(feature = "sd-write-diagnostic")]
+#[cfg(feature = "sd-card-write")]
 const DATA_RESPONSE_ACCEPTED: u8 = 0x05;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -107,9 +107,9 @@ pub enum SdProtocolError {
         block: u32,
         block_count: u64,
     },
-    #[cfg(feature = "sd-write-diagnostic")]
+    #[cfg(feature = "sd-card-write")]
     WriteRejected(u8),
-    #[cfg(feature = "sd-write-diagnostic")]
+    #[cfg(feature = "sd-card-write")]
     WriteBusyTimeout,
 }
 
@@ -131,9 +131,9 @@ impl SdProtocolError {
             Self::InvalidCapacity => "invalid_capacity",
             Self::AddressOverflow(_) => "address_overflow",
             Self::BlockOutOfRange { .. } => "block_out_of_range",
-            #[cfg(feature = "sd-write-diagnostic")]
+            #[cfg(feature = "sd-card-write")]
             Self::WriteRejected(_) => "write_rejected",
-            #[cfg(feature = "sd-write-diagnostic")]
+            #[cfg(feature = "sd-card-write")]
             Self::WriteBusyTimeout => "write_busy_timeout",
         }
     }
@@ -182,8 +182,8 @@ pub struct ReadOnlySdCard<B> {
     info: Option<CardInfo>,
 }
 
-#[cfg(feature = "sd-write-diagnostic")]
-pub struct ExplicitWriteSdCard<B> {
+#[cfg(feature = "sd-card-write")]
+pub struct WritableSdCard<B> {
     inner: ReadOnlySdCard<B>,
 }
 
@@ -327,9 +327,9 @@ where
         &mut self.bus
     }
 
-    #[cfg(feature = "sd-write-diagnostic")]
-    pub fn enable_write_diagnostic(self) -> ExplicitWriteSdCard<B> {
-        ExplicitWriteSdCard { inner: self }
+    #[cfg(feature = "sd-card-write")]
+    pub fn enable_writes(self) -> WritableSdCard<B> {
+        WritableSdCard { inner: self }
     }
 
     pub fn into_bus(self) -> B {
@@ -431,7 +431,7 @@ where
         self.finish(result)
     }
 
-    #[cfg(feature = "sd-write-diagnostic")]
+    #[cfg(feature = "sd-card-write")]
     fn write_block_data(
         &mut self,
         block_index: u32,
@@ -551,8 +551,8 @@ where
     }
 }
 
-#[cfg(feature = "sd-write-diagnostic")]
-impl<B> ExplicitWriteSdCard<B>
+#[cfg(feature = "sd-card-write")]
+impl<B> WritableSdCard<B>
 where
     B: ReadOnlySdSpi,
 {
@@ -746,9 +746,9 @@ mod tests {
         idle_clock_bytes: usize,
         selected: bool,
         sector_zero: [u8; Sector::LEN],
-        #[cfg(feature = "sd-write-diagnostic")]
+        #[cfg(feature = "sd-card-write")]
         write_stage: u8,
-        #[cfg(feature = "sd-write-diagnostic")]
+        #[cfg(feature = "sd-card-write")]
         written_sector: [u8; Sector::LEN],
     }
 
@@ -763,9 +763,9 @@ mod tests {
                 idle_clock_bytes: 0,
                 selected: false,
                 sector_zero,
-                #[cfg(feature = "sd-write-diagnostic")]
+                #[cfg(feature = "sd-card-write")]
                 write_stage: 0,
-                #[cfg(feature = "sd-write-diagnostic")]
+                #[cfg(feature = "sd-card-write")]
                 written_sector: [0; Sector::LEN],
             }
         }
@@ -777,7 +777,7 @@ mod tests {
             self.response.extend(crc16(bytes).to_be_bytes());
         }
 
-        #[cfg(feature = "sd-write-diagnostic")]
+        #[cfg(feature = "sd-card-write")]
         fn accept_write_data(&mut self, bytes: &[u8]) {
             match self.write_stage {
                 1 => {
@@ -821,7 +821,7 @@ mod tests {
 
         fn write(&mut self, bytes: &[u8]) -> Result<(), Self::Error> {
             assert!(self.selected);
-            #[cfg(feature = "sd-write-diagnostic")]
+            #[cfg(feature = "sd-card-write")]
             if bytes.len() != 6 {
                 self.accept_write_data(bytes);
                 return Ok(());
@@ -850,7 +850,7 @@ mod tests {
                     let sector = self.sector_zero;
                     self.queue_data(&sector);
                 }
-                #[cfg(feature = "sd-write-diagnostic")]
+                #[cfg(feature = "sd-card-write")]
                 super::CMD24_WRITE_SINGLE_BLOCK => {
                     self.response.push_back(0);
                     self.write_stage = 1;
@@ -915,12 +915,12 @@ mod tests {
         assert_eq!(bus.idle_clock_bytes, 18);
     }
 
-    #[cfg(feature = "sd-write-diagnostic")]
+    #[cfg(feature = "sd-card-write")]
     #[test]
     fn explicit_write_capability_writes_one_crc_protected_block() {
         let mut card = ReadOnlySdCard::new(ScriptedCard::new());
         card.initialize().unwrap();
-        let mut card = card.enable_write_diagnostic();
+        let mut card = card.enable_writes();
         let block = [0xA5; Sector::LEN];
 
         card.write_block(7, &block).unwrap();

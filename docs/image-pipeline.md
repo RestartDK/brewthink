@@ -1,6 +1,6 @@
 # Image pipeline
 
-Brewthink's host preparation command converts source images into the SSD1677's packed 1-bit format before the firmware build. The decoder never runs on the ESP32-C3. Shared rendering lives in `src/image/`, not in `build.rs`.
+Brewthink has two bounded image paths. The host preparation command converts build-time assets into the SSD1677's packed 1-bit format. The runtime decoder converts JPEG and PNG data from EPUBs or named image files under `/files` directly into a packed target on the ESP32-C3. Shared RGB rendering lives in `src/image/`; bounded embedded decoding lives in `src/image_decoder.rs`.
 
 ## Build an image
 
@@ -21,6 +21,8 @@ It does not write hardware. Flashing still uses the guarded app1 write/readback 
 ## Supported input and rendering
 
 The host-only `prepare-image` binary accepts JPEG, PNG, BMP, and PNM. It detects the format from the file contents. The portable `brewthink::image` module performs scaling and monochrome conversion for host, WASM, and firmware callers.
+
+The runtime decoder accepts JPEG and non-interlaced PNG. It detects the format from magic bytes, enforces a 1,536-pixel dimension and 1,572,864-pixel work limit, composites PNG alpha onto white, scales with `contain` or `cover`, and applies the same ordered monochrome dither. EPUB covers, the Files image viewer, and custom sleep images call this shared decoder with different scaling policies.
 
 The preparation and firmware build perform these steps:
 
@@ -56,9 +58,9 @@ Rotation accepts `0`, `90`, `180`, or `270`. Scale accepts `contain` or `cover`.
 
 ## Memory boundary
 
-A 720 × 720 RGB8 decode needs 1,555,200 bytes before decoder overhead. The X4 has 400 KB SRAM and no PSRAM. Brewthink therefore keeps JPEG and PNG decoding on the host for this milestone.
+A 720 × 720 RGB8 decode needs 1,555,200 bytes before decoder overhead. The X4 has 400 KB SRAM and no PSRAM, so runtime decoding never allocates a full RGB image.
 
-The firmware stores only the packed 48,000-byte frame in mapped flash. It uses the existing 256-byte transfer buffer during display writes. Runtime SD-card decoding remains separate work and will require a decoder that can downscale or emit rows without allocating a full RGB image.
+PNG emits pixels from bounded deflate and scanline workspaces. JPEG emits grayscale blocks from a bounded decoder workspace. Both write directly into the packed monochrome destination. EPUB cover decoding overlays the decoder workspace onto the 48,000-byte frame workspace while writing a separate 5,808-byte cover. Full sleep-image decoding stores at most 96 KiB of encoded data in the resource buffer and initializes the decoder workspace in the unused tail of that same allocation while writing the 48,000-byte frame.
 
 ## Verified sample
 

@@ -20,6 +20,9 @@ pub mod files;
 mod fonts;
 pub mod home;
 pub mod image;
+#[cfg(feature = "image-decoder")]
+pub mod image_decoder;
+pub mod image_viewer;
 pub mod input;
 pub mod library;
 pub mod power;
@@ -27,6 +30,8 @@ pub mod reader;
 pub mod settings;
 pub mod sleep;
 pub mod storage;
+#[cfg(feature = "image-decoder")]
+pub mod transfer;
 pub mod ui;
 pub mod x4;
 #[cfg(feature = "device-reader")]

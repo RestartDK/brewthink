@@ -1,19 +1,23 @@
 use super::Button;
+use crate::transfer::{ImageName, UploadRequest};
 
 const PREFIX: &str = "BREWCTL/1 ";
-const MAX_LINE_BYTES: usize = 32;
+const MAX_LINE_BYTES: usize = 96;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ControlCommand {
     Tap(Button),
     Status,
     Screen,
+    Upload(UploadRequest),
+    AbortUpload,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ControlParseError {
     InvalidEncoding,
     LineTooLong,
+    InvalidUpload,
     UnknownCommand,
 }
 
@@ -22,6 +26,7 @@ impl ControlParseError {
         match self {
             Self::InvalidEncoding => "invalid-encoding",
             Self::LineTooLong => "line-too-long",
+            Self::InvalidUpload => "invalid-upload",
             Self::UnknownCommand => "unknown-command",
         }
     }
@@ -94,12 +99,41 @@ pub fn parse_control_command(line: &[u8]) -> Result<ControlCommand, ControlParse
     match command {
         "status" => Ok(ControlCommand::Status),
         "screen" => Ok(ControlCommand::Screen),
-        _ => command
-            .strip_prefix("tap ")
-            .and_then(Button::from_name)
-            .map(ControlCommand::Tap)
-            .ok_or(ControlParseError::UnknownCommand),
+        "upload-abort" => Ok(ControlCommand::AbortUpload),
+        _ => {
+            if let Some(arguments) = command.strip_prefix("upload ") {
+                return parse_upload(arguments).map(ControlCommand::Upload);
+            }
+            command
+                .strip_prefix("tap ")
+                .and_then(Button::from_name)
+                .map(ControlCommand::Tap)
+                .ok_or(ControlParseError::UnknownCommand)
+        }
     }
+}
+
+fn parse_upload(arguments: &str) -> Result<UploadRequest, ControlParseError> {
+    let mut fields = arguments.split(' ');
+    if fields.next() != Some("image") {
+        return Err(ControlParseError::InvalidUpload);
+    }
+    let name = fields
+        .next()
+        .and_then(|value| ImageName::parse(value).ok())
+        .ok_or(ControlParseError::InvalidUpload)?;
+    let length = fields
+        .next()
+        .and_then(|value| value.parse::<usize>().ok())
+        .ok_or(ControlParseError::InvalidUpload)?;
+    let crc32 = fields
+        .next()
+        .and_then(|value| u32::from_str_radix(value, 16).ok())
+        .ok_or(ControlParseError::InvalidUpload)?;
+    if fields.next().is_some() {
+        return Err(ControlParseError::InvalidUpload);
+    }
+    Ok(UploadRequest::image(name, length, crc32))
 }
 
 #[cfg(test)]
@@ -107,7 +141,10 @@ mod tests {
     extern crate std;
 
     use super::{ControlCommand, ControlLineBuffer, ControlParseError, parse_control_command};
-    use crate::input::Button;
+    use crate::{
+        input::Button,
+        transfer::{ImageName, UploadRequest},
+    };
 
     #[test]
     fn parses_every_button_tap() {
@@ -132,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_status_and_screen() {
+    fn parses_status_screen_and_upload() {
         assert_eq!(
             parse_control_command(b"BREWCTL/1 status"),
             Ok(ControlCommand::Status)
@@ -141,10 +178,22 @@ mod tests {
             parse_control_command(b"BREWCTL/1 screen"),
             Ok(ControlCommand::Screen)
         );
+        assert_eq!(
+            parse_control_command(b"BREWCTL/1 upload image NICE.PNG 123 89abcdef"),
+            Ok(ControlCommand::Upload(UploadRequest::image(
+                ImageName::parse("NICE.PNG").unwrap(),
+                123,
+                0x89AB_CDEF,
+            )))
+        );
+        assert_eq!(
+            parse_control_command(b"BREWCTL/1 upload-abort"),
+            Ok(ControlCommand::AbortUpload)
+        );
     }
 
     #[test]
-    fn rejects_unframed_and_unknown_commands() {
+    fn rejects_unframed_unknown_and_malformed_commands() {
         assert_eq!(
             parse_control_command(b"tap right"),
             Err(ControlParseError::UnknownCommand)
@@ -152,6 +201,10 @@ mod tests {
         assert_eq!(
             parse_control_command(b"BREWCTL/1 reset"),
             Err(ControlParseError::UnknownCommand)
+        );
+        assert_eq!(
+            parse_control_command(b"BREWCTL/1 upload image bad.gif 12 nope"),
+            Err(ControlParseError::InvalidUpload)
         );
     }
 
@@ -164,7 +217,7 @@ mod tests {
         }
         assert_eq!(result, Some(Ok(ControlCommand::Tap(Button::Right))));
 
-        for byte in [b'x'; 40] {
+        for byte in [b'x'; 100] {
             assert_eq!(buffer.push(byte), None);
         }
         assert_eq!(

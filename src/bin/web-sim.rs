@@ -2,13 +2,14 @@ use std::io::Cursor;
 
 use brewthink::{
     app::{
-        App, AppEffect, AppInput, AppView, Direction, FilesState, ReaderPreferences,
-        ReadingLocation, ResumePoint, SettingsState,
+        App, AppEffect, AppInput, AppPreferences, AppView, Direction, FilesState, ImageId,
+        ReaderPreferences, ReadingLocation, ResumePoint, SettingsState, SleepScreenSource,
     },
     epub::{ChapterContent, ContentStyle, EpubBook},
-    files::{FileItem, render_files},
+    files::{FileItem, FileKind, render_files},
     home::render_home,
     image::{Dither, MonochromeBitmap, MonochromeImage, RenderOptions, RgbImage, ScaleMode, Size},
+    image_viewer::render_image_viewer,
     input::UsbState,
     library::{ShelfBook, render_shelf},
     power::BatteryStatus,
@@ -16,7 +17,7 @@ use brewthink::{
         ReaderLine, ReaderStyle, ReaderTheme, ReaderView, render_reader, render_reader_error,
     },
     settings::render_settings,
-    sleep::{SleepView, render_sleep},
+    sleep::{CustomSleepImageStatus, SleepView, render_sleep},
 };
 use image::{ImageReader, Limits};
 use wasm_bindgen::prelude::*;
@@ -134,6 +135,7 @@ impl RenderedFrame {
 #[wasm_bindgen]
 pub struct WebLibrary {
     books: Vec<OwnedBook>,
+    images: Vec<OwnedImage>,
     app: App,
 }
 
@@ -141,19 +143,24 @@ pub struct WebLibrary {
 impl WebLibrary {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
-        Self::with_preferences(ReaderPreferences::default().packed())
+        Self::with_preferences(ReaderPreferences::default().packed(), u32::MAX)
     }
 
     #[wasm_bindgen(js_name = withPreferences)]
-    pub fn with_preferences(packed: u32) -> Self {
-        let preferences = ReaderPreferences::from_packed(packed).unwrap_or_default();
+    pub fn with_preferences(packed: u32, selected_image: u32) -> Self {
+        let preferences = AppPreferences::from_packed(packed).unwrap_or_default();
         let mut books = sample_books();
         for book in &mut books {
-            book.layout(preferences);
+            book.layout(preferences.reader());
         }
-        let mut app = App::with_preferences(books.len(), preferences);
+        let images = sample_images();
+        let selected_image = usize::try_from(selected_image)
+            .ok()
+            .filter(|index| *index < images.len())
+            .map(ImageId::new);
+        let mut app = App::with_catalog(books.len(), images.len(), selected_image, preferences);
         app.set_battery(BatteryStatus::from_percent(82, UsbState::Disconnected));
-        Self { books, app }
+        Self { books, images, app }
     }
 
     #[wasm_bindgen(js_name = fromEpub)]
@@ -161,22 +168,36 @@ impl WebLibrary {
         encoded: &[u8],
         file_name: String,
         packed_preferences: u32,
+        selected_image: u32,
     ) -> Result<WebLibrary, JsValue> {
-        let preferences = ReaderPreferences::from_packed(packed_preferences).unwrap_or_default();
+        let preferences = AppPreferences::from_packed(packed_preferences).unwrap_or_default();
         let imported = OwnedBook::from_epub(encoded, &file_name)?;
         let mut books = sample_books();
         books[0] = imported;
         for book in &mut books {
-            book.layout(preferences);
+            book.layout(preferences.reader());
         }
-        let mut app = App::with_preferences(books.len(), preferences);
+        let images = sample_images();
+        let selected_image = usize::try_from(selected_image)
+            .ok()
+            .filter(|index| *index < images.len())
+            .map(ImageId::new);
+        let mut app = App::with_catalog(books.len(), images.len(), selected_image, preferences);
         app.set_battery(BatteryStatus::from_percent(82, UsbState::Disconnected));
-        Ok(Self { books, app })
+        Ok(Self { books, images, app })
     }
 
     #[wasm_bindgen(getter)]
     pub fn preferences(&self) -> u32 {
         self.app.preferences().packed()
+    }
+
+    #[wasm_bindgen(getter, js_name = selectedImage)]
+    pub fn selected_image(&self) -> u32 {
+        self.app
+            .selected_sleep_image()
+            .and_then(|image| u32::try_from(image.index()).ok())
+            .unwrap_or(u32::MAX)
     }
 
     pub fn move_selection(&mut self, direction: ShelfDirection) -> bool {
@@ -224,16 +245,31 @@ impl WebLibrary {
             AppView::Library => self.render_library(&mut frame)?,
             AppView::Files(state) => self.render_files(state, &mut frame)?,
             AppView::Settings(state) => {
-                render_settings(state, self.app.battery(), &mut frame).map_err(js_error)?;
+                let selected = self
+                    .app
+                    .selected_sleep_image()
+                    .and_then(|image| self.images.get(image.index()));
+                render_settings(
+                    state,
+                    self.app.battery(),
+                    selected.map_or(CustomSleepImageStatus::Missing, |_| {
+                        CustomSleepImageStatus::Ready
+                    }),
+                    selected.map(|image| image.name.as_str()),
+                    selected.map(OwnedImage::bitmap),
+                    &mut frame,
+                )
+                .map_err(js_error)?;
                 FrameMetadata::selection(
                     "settings",
                     state.selected().label(),
                     setting_value(state),
                     state.selected().index(),
-                    4,
+                    5,
                 )
             }
             AppView::Reader(session) => self.render_reader(session.location(), &mut frame)?,
+            AppView::Image(image) => self.render_image(image, &mut frame)?,
             AppView::Sleeping { resume } => self.render_sleep(resume, &mut frame)?,
             AppView::Error { book, .. } => {
                 let book = &self.books[book.index()];
@@ -274,9 +310,9 @@ impl WebLibrary {
         let previous_preferences = self.app.preferences();
         let effect = self.app.input(input);
         let changed = effect != AppEffect::None;
-        if self.app.preferences() != previous_preferences {
+        if self.app.reader_preferences() != previous_preferences.reader() {
             for book in &mut self.books {
-                book.layout(self.app.preferences());
+                book.layout(self.app.reader_preferences());
             }
         }
         self.resolve_effect(effect);
@@ -318,6 +354,7 @@ impl WebLibrary {
                 | AppEffect::RenderFiles
                 | AppEffect::RenderSettings
                 | AppEffect::RenderReader(_)
+                | AppEffect::RenderImage(_)
                 | AppEffect::RenderError { .. }
                 | AppEffect::EnterDeepSleep { .. } => return changed,
             };
@@ -361,15 +398,32 @@ impl WebLibrary {
         let files = self
             .books
             .iter()
-            .map(|book| FileItem::new(&book.file_name, book.file_size))
+            .map(|book| FileItem::new(&book.file_name, book.file_size, FileKind::Epub))
+            .chain(
+                self.images
+                    .iter()
+                    .map(|image| FileItem::new(&image.name, image.size, image.kind)),
+            )
             .collect::<Vec<_>>();
         render_files(state, &files, self.app.battery(), target).map_err(js_error)?;
         let selected = state.selected().expect("the web catalog is non-empty");
-        let book = &self.books[selected.index()];
+        let (title, creator) = if selected.index() < self.books.len() {
+            let book = &self.books[selected.index()];
+            (
+                book.file_name.clone(),
+                format!("{} KiB · EPUB", book.file_size.div_ceil(1024)),
+            )
+        } else {
+            let image = &self.images[selected.index() - self.books.len()];
+            (
+                image.name.clone(),
+                format!("{} KiB · {}", image.size.div_ceil(1024), image.kind.label()),
+            )
+        };
         Ok(FrameMetadata {
             screen: "files",
-            title: book.file_name.clone(),
-            creator: format!("{} KiB · EPUB", book.file_size.div_ceil(1024)),
+            title,
+            creator,
             selected: selected.index(),
             item_count: files.len(),
             page: state.page(),
@@ -377,6 +431,37 @@ impl WebLibrary {
             chapter: 0,
             chapter_count: 0,
         })
+    }
+
+    fn render_image(
+        &self,
+        image: ImageId,
+        target: &mut MonochromeImage<'_>,
+    ) -> Result<FrameMetadata, JsValue> {
+        let image = &self.images[image.index()];
+        render_sleep(
+            SleepView::custom(image.bitmap(), self.app.battery()),
+            target,
+        )
+        .map_err(js_error)?;
+        render_image_viewer(
+            &image.name,
+            self.app.selected_sleep_image() == Some(ImageId::new(image.index)),
+            self.app.battery(),
+            target,
+        )
+        .map_err(js_error)?;
+        Ok(FrameMetadata::selection(
+            "image",
+            &image.name,
+            if self.app.selected_sleep_image() == Some(ImageId::new(image.index)) {
+                "Selected for sleep"
+            } else {
+                "Confirm to select for sleep"
+            },
+            image.index,
+            self.images.len(),
+        ))
     }
 
     fn render_reader(
@@ -398,7 +483,7 @@ impl WebLibrary {
                 &chapter.title,
                 &lines,
                 location,
-                self.app.preferences(),
+                self.app.reader_preferences(),
                 self.app.battery(),
             ),
             target,
@@ -422,15 +507,6 @@ impl WebLibrary {
         resume: ResumePoint,
         target: &mut MonochromeImage<'_>,
     ) -> Result<FrameMetadata, JsValue> {
-        let selected = match resume {
-            ResumePoint::Reader { book, .. } => Some(book.index()),
-            ResumePoint::Books { selected } | ResumePoint::Files { selected } => {
-                selected.map(|book| book.index())
-            }
-            ResumePoint::Home { .. } | ResumePoint::Settings { .. } => None,
-        }
-        .unwrap_or(0);
-        let book = &self.books[selected];
         let status = match resume {
             ResumePoint::Reader {
                 spine_index,
@@ -445,21 +521,60 @@ impl WebLibrary {
             ResumePoint::Books { .. } => "BOOKS POSITION SAVED".into(),
             ResumePoint::Files { .. } => "FILES POSITION SAVED".into(),
             ResumePoint::Settings { .. } => "SETTINGS POSITION SAVED".into(),
+            ResumePoint::Image { .. } => "IMAGE POSITION SAVED".into(),
         };
-        render_sleep(
-            SleepView::new(
-                &book.title,
-                &book.creator,
-                &status,
-                book.cover.as_ref().map(OwnedCover::bitmap),
-                self.app.battery(),
-            ),
-            target,
-        )
-        .map_err(js_error)?;
-        let mut metadata = FrameMetadata::book("sleep", book);
-        metadata.selected = selected;
-        Ok(metadata)
+
+        for source in self.app.sleep_screen_plan(resume).sources() {
+            match source {
+                SleepScreenSource::CustomImage(image_id) => {
+                    let image = &self.images[image_id.index()];
+                    render_sleep(
+                        SleepView::custom(image.bitmap(), self.app.battery()),
+                        target,
+                    )
+                    .map_err(js_error)?;
+                    return Ok(FrameMetadata::selection(
+                        "sleep",
+                        &image.name,
+                        "Selected custom sleep image",
+                        image_id.index(),
+                        self.images.len(),
+                    ));
+                }
+                SleepScreenSource::BookCover(book_id) => {
+                    let book = &self.books[book_id.index()];
+                    let Some(cover) = book.cover.as_ref().map(OwnedCover::bitmap) else {
+                        continue;
+                    };
+                    render_sleep(
+                        SleepView::book_cover(
+                            &book.title,
+                            &book.creator,
+                            &status,
+                            cover,
+                            self.app.battery(),
+                        ),
+                        target,
+                    )
+                    .map_err(js_error)?;
+                    let mut metadata = FrameMetadata::book("sleep", book);
+                    metadata.selected = book_id.index();
+                    return Ok(metadata);
+                }
+                SleepScreenSource::BuiltIn => {
+                    render_sleep(SleepView::built_in(&status, self.app.battery()), target)
+                        .map_err(js_error)?;
+                    return Ok(FrameMetadata::selection(
+                        "sleep",
+                        "Brewthink",
+                        "Built-in fallback",
+                        0,
+                        0,
+                    ));
+                }
+            }
+        }
+        Err(JsValue::from_str("sleep plan has no renderable source"))
     }
 }
 
@@ -513,9 +628,10 @@ impl FrameMetadata {
 
 fn setting_value(state: SettingsState) -> &'static str {
     match state.selected() {
-        brewthink::app::SettingsItem::Font => state.draft().font().label(),
-        brewthink::app::SettingsItem::Size => state.draft().size().label(),
-        brewthink::app::SettingsItem::Spacing => state.draft().spacing().label(),
+        brewthink::app::SettingsItem::Font => state.draft().reader().font().label(),
+        brewthink::app::SettingsItem::Size => state.draft().reader().size().label(),
+        brewthink::app::SettingsItem::Spacing => state.draft().reader().spacing().label(),
+        brewthink::app::SettingsItem::SleepScreen => state.draft().sleep_screen().label(),
         brewthink::app::SettingsItem::Apply => "Confirm to save",
     }
 }
@@ -645,6 +761,43 @@ impl OwnedCover {
     }
 }
 
+struct OwnedImage {
+    index: usize,
+    name: String,
+    size: u32,
+    kind: FileKind,
+    pixels: Vec<u8>,
+}
+
+impl OwnedImage {
+    fn sample(index: usize, name: &str, kind: FileKind) -> Self {
+        let mut pixels = vec![0xFF; WIDTH * HEIGHT / 8];
+        let step = 22 + index * 7;
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                let border = x < 20 || x >= WIDTH - 20 || y < 20 || y >= HEIGHT - 20;
+                let diagonal = (x / step + y / step + index).is_multiple_of(5);
+                if border || diagonal {
+                    let pixel = y * WIDTH + x;
+                    pixels[pixel / 8] &= !(0x80 >> (pixel % 8));
+                }
+            }
+        }
+        Self {
+            index,
+            name: name.into(),
+            size: 48_000,
+            kind,
+            pixels,
+        }
+    }
+
+    fn bitmap(&self) -> MonochromeBitmap<'_> {
+        MonochromeBitmap::new(Size::new(WIDTH, HEIGHT).unwrap(), &self.pixels)
+            .expect("sample image has the exact frame shape")
+    }
+}
+
 fn paginate(source: &[OwnedLine], preferences: ReaderPreferences) -> Vec<OwnedPage> {
     let theme = ReaderTheme::from_preferences(preferences);
     let mut pages = Vec::new();
@@ -755,6 +908,19 @@ const fn reader_style(style: ContentStyle) -> ReaderStyle {
         ContentStyle::Preformatted => ReaderStyle::Preformatted,
         ContentStyle::Caption => ReaderStyle::Caption,
     }
+}
+
+fn sample_images() -> Vec<OwnedImage> {
+    [
+        ("ANOTHE.JPG", FileKind::Jpeg),
+        ("AYA.JPG", FileKind::Jpeg),
+        ("MOOD.JPG", FileKind::Jpeg),
+        ("NICE.JPG", FileKind::Jpeg),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (name, kind))| OwnedImage::sample(index, name, kind))
+    .collect()
 }
 
 fn sample_books() -> Vec<OwnedBook> {

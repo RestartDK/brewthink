@@ -107,7 +107,7 @@ Goal: display a real picture after raw rendering works.
 - [x] Add build-time PNG decoding.
 - [x] Add build-time baseline and progressive JPEG decoding.
 - [x] Keep decoded RGB data on the host; embed only the 48,000-byte packed frame in firmware flash.
-- [ ] Design bounded-memory runtime decoding for files read from microSD.
+- [x] Add bounded-memory JPEG and PNG decoding directly into packed targets for EPUB covers and custom sleep images.
 
 ## Milestone 6.5 — WASM/web simulator
 
@@ -209,7 +209,12 @@ Goal: turn on/off safely and preserve battery.
 - [x] Wake reliably with the power button and reopen USB without host reset controls.
 - [x] Render and retain a diagnostic sleep screen before sleeping.
 - [x] Hardware-reset the SSD1677 out of deep sleep and refresh after wake.
-- [ ] Allow a user-selected sleep image.
+- [x] Add Custom Image, Book Cover, and context-sensitive Automatic sleep modes.
+- [x] Add checksummed RTC and `/brew` preference persistence with safe fallback.
+- [x] Add transactional named-image USB uploads with a shared transport-independent transfer core.
+- [x] List, preview, and select multiple `/files` images from Files.
+- [x] Define the future Wi-Fi HTTP upload boundary without starting a network stack.
+- [ ] Verify all three sleep modes and USB upload on the physical X4.
 - [ ] Measure or estimate current draw if possible.
 
 ## Milestone 10 — Offline-first library app
@@ -219,6 +224,7 @@ Goal: move from diagnostics to the EPUB-first reader application.
 - [x] Define host-testable library selection and paging state.
 - [x] Define the initial title, creator, and cover shelf item model.
 - [x] Scan read-only local storage for EPUB books.
+- [ ] Add writable VFAT long-filename support, preserve lowercase names, and migrate `/brew` to `/.brew`.
 - [x] Create the shared 2 × 2 cover library screen.
 - [x] Store checksummed book/chapter/page resume state across deep sleep.
 - [x] Connect the X4 shelf, chapter pagination, controls, display refresh, and sleep/wake loop.
@@ -262,7 +268,8 @@ Do this late; radios add RAM pressure, power cost, and async complexity.
 
 Goal: sync useful content while staying offline-first.
 
-- [ ] Add simple local file transfer protocol or endpoint.
+- [x] Add a typed transactional USB protocol for custom sleep images.
+- [ ] Implement the authenticated Wi-Fi HTTP adapter over the shared transfer core.
 - [ ] Add download queue.
 - [ ] Add offline cache structure.
 - [ ] Investigate Komga API and OPDS support.
@@ -275,7 +282,7 @@ Goal: sync useful content while staying offline-first.
 
 - [ ] Full theming with changing font, font size, spacing etc
 - [ ] OTA for device. should be made easy to help with actual dev of it with proper ci cd for this
-- [ ] Sleep screen
+- [x] Configurable custom-image, book-cover, and automatic sleep screens
 - [ ] nearby file transfer on same network
 - [ ] Fully supported web app for interacting with it if wanted to tweak settings easily on local device
 
@@ -283,7 +290,7 @@ Goal: sync useful content while staying offline-first.
 
 - [x] Define host-testable library selection, paging, and shelf item state.
 - [x] Render the first 2 × 2, 480 × 800 library screen in the simulator with fixture items.
-- [ ] Add a normal-firmware, read-only FAT32 catalog for `/Books`.
+- [ ] Add a normal-firmware, read-only FAT32 catalog for `/books`.
 - [ ] Show real SD files and explicit empty, missing-card, and unsupported-file states.
 - [ ] Open the first bounded-memory content format from the library.
 - [ ] Reuse the verified power-button sleep path from the library application.

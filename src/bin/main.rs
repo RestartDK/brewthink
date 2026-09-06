@@ -38,6 +38,10 @@ use embedded_sdmmc::{
     Error as FilesystemError, Mode, TimeSource, Timestamp, VolumeIdx, VolumeManager,
 };
 use esp_backtrace as _;
+#[cfg(feature = "device-reader")]
+use esp_hal::interrupt::{Priority, software::SoftwareInterrupt};
+#[cfg(any(feature = "device-reader", feature = "sd-diagnostic"))]
+use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_hal::{
     clock::CpuClock,
     delay::Delay,
@@ -49,11 +53,6 @@ use esp_hal::{
     },
     system::SleepSource,
     timer::timg::TimerGroup,
-};
-#[cfg(feature = "device-reader")]
-use esp_hal::{
-    interrupt::{Priority, software::SoftwareInterrupt},
-    usb_serial_jtag::UsbSerialJtag,
 };
 use esp_println as _;
 #[cfg(feature = "device-reader")]
@@ -163,6 +162,33 @@ fn initialize(spawner: Spawner) {
                 "SPI2 storage configuration failed",
             );
             run_storage_readonly_diagnostic(hardware);
+        }
+        DiagnosticStage::StorageUsb => {
+            #[cfg(not(feature = "sd-diagnostic"))]
+            hold(chip_selects, "SD USB diagnostic feature is disabled");
+
+            #[cfg(feature = "sd-diagnostic")]
+            {
+                let hardware = storage_hardware_or_hold(
+                    X4SharedSpiPeripherals::new(
+                        peripherals.SPI2,
+                        peripherals.GPIO8,
+                        peripherals.GPIO10,
+                        peripherals.GPIO7,
+                        peripherals.GPIO4,
+                        peripherals.GPIO5,
+                        peripherals.GPIO6,
+                    ),
+                    chip_selects,
+                    "SPI2 storage configuration failed",
+                );
+                let (control, _control_tx) = UsbSerialJtag::new(peripherals.USB_DEVICE).split();
+                let task = match brewthink::x4::storage_diagnostic_task(hardware, control) {
+                    Ok(task) => task,
+                    Err(_) => hold((), "SD diagnostic task allocation failed"),
+                };
+                spawner.spawn(task);
+            }
         }
         DiagnosticStage::StorageWriteTest => {
             #[cfg(not(feature = "sd-write-diagnostic"))]
@@ -888,7 +914,7 @@ fn run_storage_write_diagnostic(hardware: X4StorageHardware<'static>) -> ! {
         hold(card.into_bus(), "SD write-test initialization failed");
     }
 
-    let device = X4FatBlockDevice::new(card.enable_write_diagnostic());
+    let device = X4FatBlockDevice::new(card.enable_writes());
     static VOLUME_MANAGER: StaticCell<WriteVolumeManager<'static>> = StaticCell::new();
     let volume_manager = VOLUME_MANAGER
         .init_with(|| VolumeManager::new_with_limits(device, DiagnosticTimeSource, 7_000));

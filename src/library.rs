@@ -172,7 +172,7 @@ fn draw_empty_state(target: &mut MonochromeImage<'_>) {
     .draw(&mut display)
     .ok();
     Text::with_baseline(
-        "Add DRM-free EPUB files to /Books",
+        "Add DRM-free EPUB files to /books",
         Point::new(135, 382),
         body,
         Baseline::Top,

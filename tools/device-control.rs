@@ -1,6 +1,8 @@
 #[cfg(not(unix))]
 compile_error!("device-control requires a Unix host");
 
+mod sd_export;
+
 use std::{
     env,
     fs::{self, File, OpenOptions},
@@ -12,8 +14,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-use brewthink::input::Button;
-use image::ImageEncoder;
+use brewthink::{
+    image::{MonochromeImage, RenderOptions, ScaleMode, Size},
+    image_decoder::{
+        ImageFormat, JpegDecodeWorkspace, PngDecodeWorkspace, decode_jpeg, decode_png,
+    },
+    input::Button,
+    transfer::{ImageName, MAX_IMAGE_BYTES},
+};
+use image::{ExtendedColorType, ImageEncoder, codecs::jpeg::JpegEncoder, imageops::FilterType};
 
 const CONTROL_PREFIX: &[u8] = b"BREWCTL/1 ";
 const FRAME_WIDTH: u32 = 480;
@@ -27,8 +36,21 @@ enum Command {
     Tap(Button),
     Status,
     Screen(PathBuf),
+    PutImage(PathBuf),
+    SdInfo,
+    SdRead {
+        start: u32,
+        count: u32,
+        output: PathBuf,
+    },
     Monitor,
     Help,
+}
+
+struct PreparedImage {
+    name: ImageName,
+    bytes: Vec<u8>,
+    transcoded: bool,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -194,6 +216,24 @@ fn run() -> io::Result<()> {
         return monitor(arguments.port.as_deref());
     }
 
+    let prepared_image = match &arguments.command {
+        Command::PutImage(input) => {
+            let prepared = prepare_image(input)?;
+            println!(
+                "host: prepared {} as {} bytes={}{}",
+                input.display(),
+                prepared.name.as_str(),
+                prepared.bytes.len(),
+                if prepared.transcoded {
+                    " transcoded=yes"
+                } else {
+                    ""
+                }
+            );
+            Some(prepared)
+        }
+        _ => None,
+    };
     let port = find_port(arguments.port.as_deref())?;
     let mut connection = Connection::open(&port, true)?;
     match arguments.command {
@@ -203,7 +243,19 @@ fn run() -> io::Result<()> {
             arguments.timeout,
         ),
         Command::Status => run_text_command(&mut connection, "status", arguments.timeout),
+        Command::SdInfo => sd_export::info(&mut connection, arguments.timeout).map(|_| ()),
+        Command::SdRead {
+            start,
+            count,
+            output,
+        } => sd_export::export(&mut connection, start, count, &output, arguments.timeout),
         Command::Screen(output) => capture_screen(&mut connection, &output, arguments.timeout),
+        Command::PutImage(input) => upload_image(
+            &mut connection,
+            &input,
+            prepared_image.expect("put-image preparation ran before opening the port"),
+            arguments.timeout,
+        ),
         Command::Monitor | Command::Help => unreachable!(),
     }
 }
@@ -248,6 +300,30 @@ fn parse_arguments(
         Some("screen") => {
             Command::Screen(PathBuf::from(required_argument(&mut arguments, "screen")?))
         }
+        Some("put-image") => Command::PutImage(PathBuf::from(required_argument(
+            &mut arguments,
+            "put-image",
+        )?)),
+        Some("sd-info") => Command::SdInfo,
+        Some("sd-read") => {
+            let start = required_argument(&mut arguments, "start sector")?
+                .parse()
+                .map_err(|_| invalid_input("start sector must be a u32 decimal integer"))?;
+            let count = required_argument(&mut arguments, "sector count")?
+                .parse()
+                .map_err(|_| invalid_input("sector count must be a u32 decimal integer"))?;
+            if count == 0 || u64::from(start) + u64::from(count) > u64::from(u32::MAX) + 1 {
+                return Err(invalid_input(
+                    "SD range is empty or overflows sector addressing",
+                ));
+            }
+            let output = PathBuf::from(required_argument(&mut arguments, "output file")?);
+            Command::SdRead {
+                start,
+                count,
+                output,
+            }
+        }
         Some("monitor") => Command::Monitor,
         Some("--help" | "-h") => Command::Help,
         Some(_) => return Err(invalid_input("unknown command")),
@@ -277,7 +353,7 @@ fn required_argument(
 fn print_usage() {
     println!(
         "Usage: device-control [--port PATH] [--timeout SECONDS] <COMMAND>\n\n\
-         Commands:\n  tap <back|confirm|left|right|up|down|power>\n  status\n  screen <OUTPUT.png>\n  monitor"
+         Commands:\n  tap <back|confirm|left|right|up|down|power>\n  status\n  screen <OUTPUT.png>\n  put-image <INPUT.jpg|INPUT.png>\n  sd-info\n  sd-read <START_SECTOR> <SECTOR_COUNT> <OUTPUT.bin>\n  monitor"
     );
 }
 
@@ -389,6 +465,214 @@ fn capture_screen(connection: &mut Connection, output: &Path, timeout: Duration)
         output.display()
     );
     Ok(())
+}
+
+fn upload_image(
+    connection: &mut Connection,
+    input: &Path,
+    prepared: PreparedImage,
+    timeout: Duration,
+) -> io::Result<()> {
+    let bytes = &prepared.bytes;
+    let deadline = Instant::now() + timeout;
+    let crc32 = crc32fast::hash(bytes);
+    connection.drain()?;
+    connection.write_all(
+        format!(
+            "BREWCTL/1 upload image {} {} {crc32:08x}\n",
+            prepared.name.as_str(),
+            bytes.len()
+        )
+        .as_bytes(),
+        deadline,
+    )?;
+    loop {
+        let line = connection.read_line(deadline)?;
+        print_control_line(&line);
+        if line.starts_with(b"BREWCTL/1 READY command=upload ") {
+            break;
+        }
+        if line.starts_with(b"BREWCTL/1 DONE command=upload status=error") {
+            return Err(invalid_data("device rejected the upload"));
+        }
+    }
+
+    let mut sent = 0usize;
+    for chunk in bytes.chunks(4 * 1024) {
+        connection.write_all(chunk, deadline)?;
+        sent += chunk.len();
+        loop {
+            let line = connection.read_line(deadline)?;
+            print_control_line(&line);
+            if line.starts_with(b"BREWCTL/1 ACK command=upload ") {
+                let received = parse_control_field::<usize>(&line, "received")?;
+                if received != sent {
+                    return Err(invalid_data(format!(
+                        "upload acknowledgement expected {sent} bytes, got {received}"
+                    )));
+                }
+                break;
+            }
+            if line.starts_with(b"BREWCTL/1 DONE command=upload status=error") {
+                return Err(invalid_data("device upload failed"));
+            }
+        }
+    }
+
+    loop {
+        let line = connection.read_line(deadline)?;
+        print_control_line(&line);
+        if line.starts_with(b"BREWCTL/1 DONE command=upload ") {
+            if !line.ends_with(b"status=ok") {
+                return Err(invalid_data(String::from_utf8_lossy(&line)));
+            }
+            break;
+        }
+    }
+    println!(
+        "host: uploaded {} as {} bytes={} crc32={crc32:08x}",
+        input.display(),
+        prepared.name.as_str(),
+        bytes.len()
+    );
+    Ok(())
+}
+
+fn prepare_image(input: &Path) -> io::Result<PreparedImage> {
+    let source = fs::read(input)?;
+    if source.is_empty() {
+        return Err(invalid_input("image is empty"));
+    }
+    let source_format =
+        ImageFormat::detect(&source).ok_or_else(|| invalid_input("image must be a JPEG or PNG"))?;
+    let source_name = device_image_name(input, source_format)?;
+    if source.len() <= MAX_IMAGE_BYTES && validate_device_image(source_format, &source).is_ok() {
+        return Ok(PreparedImage {
+            name: source_name,
+            bytes: source,
+            transcoded: false,
+        });
+    }
+
+    transcode_image(input, &source)
+}
+
+fn transcode_image(input: &Path, source: &[u8]) -> io::Result<PreparedImage> {
+    let decoded = image::load_from_memory(source)
+        .map_err(|error| invalid_input(format!("image could not be decoded: {error}")))?;
+    let resized = decoded
+        .resize_to_fill(FRAME_WIDTH, FRAME_HEIGHT, FilterType::Lanczos3)
+        .to_rgba8();
+    let mut rgb = Vec::with_capacity(FRAME_WIDTH as usize * FRAME_HEIGHT as usize * 3);
+    for pixel in resized.pixels() {
+        let alpha = u32::from(pixel[3]);
+        for channel in &pixel.0[..3] {
+            rgb.push(((u32::from(*channel) * alpha + 255 * (255 - alpha) + 127) / 255) as u8);
+        }
+    }
+    let name = device_image_name(input, ImageFormat::Jpeg)?;
+    for quality in [85, 70, 55, 40, 30, 20, 10] {
+        let mut encoded = Vec::new();
+        JpegEncoder::new_with_quality(&mut encoded, quality)
+            .encode(&rgb, FRAME_WIDTH, FRAME_HEIGHT, ExtendedColorType::Rgb8)
+            .map_err(|error| invalid_data(format!("JPEG conversion failed: {error}")))?;
+        if encoded.len() <= MAX_IMAGE_BYTES
+            && validate_device_image(ImageFormat::Jpeg, &encoded).is_ok()
+        {
+            return Ok(PreparedImage {
+                name,
+                bytes: encoded,
+                transcoded: true,
+            });
+        }
+    }
+    Err(invalid_input("image could not fit the device upload limit"))
+}
+
+fn device_image_name(input: &Path, format: ImageFormat) -> io::Result<ImageName> {
+    let stem = input
+        .file_stem()
+        .ok_or_else(|| invalid_input("image filename has no stem"))?
+        .to_string_lossy();
+    let extension = match format {
+        ImageFormat::Jpeg => "JPG",
+        ImageFormat::Png => "PNG",
+    };
+    if let Ok(name) = ImageName::parse(&format!("{stem}.{extension}")) {
+        return Ok(name);
+    }
+
+    let mut prefix = String::with_capacity(3);
+    for character in stem
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+    {
+        prefix.push(character.to_ascii_uppercase());
+        if prefix.len() == 3 {
+            break;
+        }
+    }
+    if prefix.is_empty() {
+        prefix.push_str("IMG");
+    }
+    let suffix = crc32fast::hash(stem.as_bytes()) as u16;
+    ImageName::parse(&format!("{prefix}~{suffix:04X}.{extension}"))
+        .map_err(|_| invalid_input("image filename could not be converted to FAT 8.3"))
+}
+
+fn validate_device_image(format: ImageFormat, encoded: &[u8]) -> io::Result<()> {
+    let mut frame = vec![0xFF; FRAME_BYTES];
+    let mut target = MonochromeImage::new(
+        Size::new(FRAME_WIDTH as usize, FRAME_HEIGHT as usize).unwrap(),
+        &mut frame,
+    )
+    .expect("the host validation frame has the exact required length");
+    let options = RenderOptions {
+        scale: ScaleMode::Cover,
+        ..RenderOptions::default()
+    };
+    let result = match format {
+        ImageFormat::Jpeg => {
+            let mut bytes = vec![0; core::mem::size_of::<JpegDecodeWorkspace>()];
+            decode_jpeg(
+                encoded,
+                &mut target,
+                options,
+                JpegDecodeWorkspace::in_buffer(&mut bytes)
+                    .expect("the JPEG validation workspace has the exact required length"),
+            )
+        }
+        ImageFormat::Png => {
+            let mut bytes = vec![0; core::mem::size_of::<PngDecodeWorkspace>()];
+            decode_png(
+                encoded,
+                &mut target,
+                options,
+                PngDecodeWorkspace::in_buffer(&mut bytes)
+                    .expect("the PNG validation workspace has the exact required length"),
+            )
+        }
+    };
+    result
+        .map(|_| ())
+        .map_err(|error| invalid_input(format!("image is not device-decodable: {error:?}")))
+}
+
+fn parse_control_field<T>(line: &[u8], name: &str) -> io::Result<T>
+where
+    T: std::str::FromStr,
+{
+    let line = std::str::from_utf8(line).map_err(|_| invalid_data("control line is not UTF-8"))?;
+    line.split_whitespace()
+        .find_map(|field| {
+            field
+                .split_once('=')
+                .filter(|(field_name, _)| *field_name == name)
+        })
+        .map(|(_, value)| value)
+        .ok_or_else(|| invalid_data(format!("control field {name} is missing")))?
+        .parse()
+        .map_err(|_| invalid_data(format!("control field {name} is invalid")))
 }
 
 fn parse_screen_header(line: &[u8]) -> io::Result<ScreenHeader> {
@@ -518,15 +802,21 @@ fn disconnected() -> io::Error {
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsString, io::Cursor, path::PathBuf, time::Duration};
+    use std::{
+        ffi::OsString,
+        io::Cursor,
+        path::{Path, PathBuf},
+        time::Duration,
+    };
 
     use image::GenericImageView;
 
     use super::{
         Arguments, Command, ControlStream, DEFAULT_TIMEOUT, FRAME_BYTES, FRAME_HEIGHT, FRAME_WIDTH,
-        ScreenHeader, encode_frame_png, parse_arguments, parse_screen_header,
+        ScreenHeader, device_image_name, encode_frame_png, parse_arguments, parse_screen_header,
+        transcode_image, validate_device_image,
     };
-    use brewthink::input::Button;
+    use brewthink::{image_decoder::ImageFormat, input::Button};
 
     #[test]
     fn parses_cli_commands() {
@@ -548,6 +838,14 @@ mod tests {
                 port: Some(PathBuf::from("/dev/cu.usbmodem-test")),
                 timeout: Duration::from_secs_f64(12.5),
                 command: Command::Status,
+            }
+        );
+        assert_eq!(
+            parse_arguments(["put-image".into(), "sleep.png".into()], None).unwrap(),
+            Arguments {
+                port: None,
+                timeout: DEFAULT_TIMEOUT,
+                command: Command::PutImage(PathBuf::from("sleep.png")),
             }
         );
     }
@@ -593,6 +891,59 @@ mod tests {
                 crc32: 0xe4e7_3d7c,
             }
         );
+    }
+
+    #[test]
+    fn rewrites_external_image_names_to_deterministic_fat_names() {
+        assert_eq!(
+            device_image_name(Path::new("nice.png"), ImageFormat::Png)
+                .unwrap()
+                .as_str(),
+            "NICE.PNG"
+        );
+        let long = device_image_name(Path::new("Summer Holiday Portrait.jpeg"), ImageFormat::Jpeg)
+            .unwrap();
+        assert!(long.as_str().starts_with("SUM~"));
+        assert!(long.as_str().ends_with(".JPG"));
+        assert_eq!(
+            long,
+            device_image_name(Path::new("Summer Holiday Portrait.jpeg"), ImageFormat::Jpeg,)
+                .unwrap()
+        );
+        assert!(
+            device_image_name(Path::new("CON.png"), ImageFormat::Png)
+                .unwrap()
+                .as_str()
+                .starts_with("CON~")
+        );
+    }
+
+    #[test]
+    fn validates_images_with_the_device_decoder() {
+        validate_device_image(
+            ImageFormat::Jpeg,
+            include_bytes!("../web/tests/fixtures/cover.jpg"),
+        )
+        .unwrap();
+        validate_device_image(
+            ImageFormat::Png,
+            include_bytes!("../web/tests/fixtures/transparent.png"),
+        )
+        .unwrap();
+        assert!(validate_device_image(ImageFormat::Jpeg, b"\xff\xd8broken").is_err());
+    }
+
+    #[test]
+    fn transcodes_sources_into_bounded_baseline_jpegs() {
+        let prepared = transcode_image(
+            std::path::Path::new("sample.png"),
+            include_bytes!("../web/tests/fixtures/transparent.png"),
+        )
+        .unwrap();
+        assert_eq!(prepared.name.as_str(), "SAMPLE.JPG");
+        assert!(prepared.transcoded);
+        assert!(prepared.bytes.len() <= super::MAX_IMAGE_BYTES);
+        validate_device_image(ImageFormat::Jpeg, &prepared.bytes).unwrap();
     }
 
     #[test]
