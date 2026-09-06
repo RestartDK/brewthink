@@ -38,6 +38,18 @@ Automatic uses the current book cover only when sleep begins in Reader and uses 
 
 The current writable FAT layout uses the 8.3-compatible `/brew`, `/brew/cache`, `/brew/bookmark`, and `/files` paths. Firmware creates missing directories. Application records and transfer state stay under `/brew`; user images stay under `/files`. The filesystem layer will migrate `/brew` to `/.brew` when it can create VFAT long names.
 
+## UI architecture
+
+`App` owns behavior and emits effects. `AppFrame` is a borrowed snapshot containing the state and data needed for a shared screen render. Both the X4 runtime and the WASM simulator pass snapshots to `render_app`.
+
+Image rendering also has in-place paths. The X4 decodes full-screen images directly into its reusable framebuffer, and `render_image_viewer` overlays shared controls. The X4 shelf draws decoded covers after its base frame. These paths avoid retaining another full-size image buffer.
+
+Screens compose short-lived Rust values with `ui!` and `ui_column!`. The macros build `embedded-layout` view chains, draw them directly into `FrameTarget`, and retain no widget tree after the frame is complete. `embedded-graphics` remains the source of geometry, clipping, text, primitives, and `DrawTarget` behavior.
+
+Shared components own recurring visual rules: `AppBar`, `CommandBar`, `Label`, menu rows, value rows, action rows, and file rows. Semantic `TextRole` values resolve application typography centrally. Reader typography continues to resolve through `ReaderTheme` and never changes application chrome.
+
+Home, Books, Files, Settings, Reader, Image, Error, and Sleep renders are pinned as PBM fixtures with exact 48,000-byte pixel payloads. Coverage includes empty catalogs, filename clipping, and sleep-image previews. PBM uses the opposite bit polarity from the device framebuffer. A component or layout change must preserve those frames unless the visual change is deliberate and the fixtures are reviewed.
+
 ## Simulator
 
 The browser shell remains a restrained developer tool around the exact packed X4 frame. Its warm neutral palette and system typography do not replace or reinterpret the device UI. The canvas always displays the same 48,000-byte frame consumed by the SSD1677 backend.

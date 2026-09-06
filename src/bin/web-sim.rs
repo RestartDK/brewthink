@@ -6,18 +6,15 @@ use brewthink::{
         ReaderPreferences, ReadingLocation, ResumePoint, SettingsState, SleepScreenSource,
     },
     epub::{ChapterContent, ContentStyle, EpubBook},
-    files::{FileItem, FileKind, render_files},
-    home::render_home,
+    files::{FileItem, FileKind},
     image::{Dither, MonochromeBitmap, MonochromeImage, RenderOptions, RgbImage, ScaleMode, Size},
     image_viewer::render_image_viewer,
     input::UsbState,
-    library::{ShelfBook, render_shelf},
+    library::ShelfBook,
     power::BatteryStatus,
-    reader::{
-        ReaderLine, ReaderStyle, ReaderTheme, ReaderView, render_reader, render_reader_error,
-    },
-    settings::render_settings,
-    sleep::{CustomSleepImageStatus, SleepView, render_sleep},
+    reader::{ReaderLine, ReaderStyle, ReaderTheme, ReaderView},
+    sleep::{CustomSleepImageStatus, SleepView},
+    ui::{AppFrame, render_app},
 };
 use image::{ImageReader, Limits};
 use wasm_bindgen::prelude::*;
@@ -233,7 +230,14 @@ impl WebLibrary {
             .map_err(js_error)?;
         let metadata = match self.app.view() {
             AppView::Home(state) => {
-                render_home(state, self.app.battery(), &mut frame).map_err(js_error)?;
+                render_app(
+                    AppFrame::Home {
+                        state,
+                        battery: self.app.battery(),
+                    },
+                    &mut frame,
+                )
+                .map_err(js_error)?;
                 FrameMetadata::selection(
                     "home",
                     state.selected().label(),
@@ -249,14 +253,17 @@ impl WebLibrary {
                     .app
                     .selected_sleep_image()
                     .and_then(|image| self.images.get(image.index()));
-                render_settings(
-                    state,
-                    self.app.battery(),
-                    selected.map_or(CustomSleepImageStatus::Missing, |_| {
-                        CustomSleepImageStatus::Ready
-                    }),
-                    selected.map(|image| image.name.as_str()),
-                    selected.map(OwnedImage::bitmap),
+                render_app(
+                    AppFrame::Settings {
+                        state,
+                        battery: self.app.battery(),
+                        custom_image_status: selected
+                            .map_or(CustomSleepImageStatus::Missing, |_| {
+                                CustomSleepImageStatus::Ready
+                            }),
+                        custom_image_name: selected.map(|image| image.name.as_str()),
+                        custom_image_preview: selected.map(OwnedImage::bitmap),
+                    },
                     &mut frame,
                 )
                 .map_err(js_error)?;
@@ -273,10 +280,12 @@ impl WebLibrary {
             AppView::Sleeping { resume } => self.render_sleep(resume, &mut frame)?,
             AppView::Error { book, .. } => {
                 let book = &self.books[book.index()];
-                render_reader_error(
-                    &book.title,
-                    "This EPUB or chapter could not be opened.",
-                    self.app.battery(),
+                render_app(
+                    AppFrame::Error {
+                        book_title: &book.title,
+                        message: "This EPUB or chapter could not be opened.",
+                        battery: self.app.battery(),
+                    },
                     &mut frame,
                 )
                 .map_err(js_error)?;
@@ -374,7 +383,15 @@ impl WebLibrary {
             })
             .collect::<Vec<_>>();
         let state = self.app.library();
-        render_shelf(state, &books, self.app.battery(), target).map_err(js_error)?;
+        render_app(
+            AppFrame::Library {
+                state,
+                books: &books,
+                battery: self.app.battery(),
+            },
+            target,
+        )
+        .map_err(js_error)?;
         let selected = state.selected().expect("the web catalog is non-empty");
         let book = &self.books[selected.index()];
         Ok(FrameMetadata {
@@ -405,7 +422,15 @@ impl WebLibrary {
                     .map(|image| FileItem::new(&image.name, image.size, image.kind)),
             )
             .collect::<Vec<_>>();
-        render_files(state, &files, self.app.battery(), target).map_err(js_error)?;
+        render_app(
+            AppFrame::Files {
+                state,
+                files: &files,
+                battery: self.app.battery(),
+            },
+            target,
+        )
+        .map_err(js_error)?;
         let selected = state.selected().expect("the web catalog is non-empty");
         let (title, creator) = if selected.index() < self.books.len() {
             let book = &self.books[selected.index()];
@@ -439,8 +464,8 @@ impl WebLibrary {
         target: &mut MonochromeImage<'_>,
     ) -> Result<FrameMetadata, JsValue> {
         let image = &self.images[image.index()];
-        render_sleep(
-            SleepView::custom(image.bitmap(), self.app.battery()),
+        render_app(
+            AppFrame::Sleep(SleepView::custom(image.bitmap(), self.app.battery())),
             target,
         )
         .map_err(js_error)?;
@@ -477,15 +502,15 @@ impl WebLibrary {
             .iter()
             .map(|line| ReaderLine::new(&line.text, line.style))
             .collect::<Vec<_>>();
-        render_reader(
-            ReaderView::new(
+        render_app(
+            AppFrame::Reader(ReaderView::new(
                 &book.title,
                 &chapter.title,
                 &lines,
                 location,
                 self.app.reader_preferences(),
                 self.app.battery(),
-            ),
+            )),
             target,
         )
         .map_err(js_error)?;
@@ -528,8 +553,8 @@ impl WebLibrary {
             match source {
                 SleepScreenSource::CustomImage(image_id) => {
                     let image = &self.images[image_id.index()];
-                    render_sleep(
-                        SleepView::custom(image.bitmap(), self.app.battery()),
+                    render_app(
+                        AppFrame::Sleep(SleepView::custom(image.bitmap(), self.app.battery())),
                         target,
                     )
                     .map_err(js_error)?;
@@ -546,14 +571,14 @@ impl WebLibrary {
                     let Some(cover) = book.cover.as_ref().map(OwnedCover::bitmap) else {
                         continue;
                     };
-                    render_sleep(
-                        SleepView::book_cover(
+                    render_app(
+                        AppFrame::Sleep(SleepView::book_cover(
                             &book.title,
                             &book.creator,
                             &status,
                             cover,
                             self.app.battery(),
-                        ),
+                        )),
                         target,
                     )
                     .map_err(js_error)?;
@@ -562,8 +587,11 @@ impl WebLibrary {
                     return Ok(metadata);
                 }
                 SleepScreenSource::BuiltIn => {
-                    render_sleep(SleepView::built_in(&status, self.app.battery()), target)
-                        .map_err(js_error)?;
+                    render_app(
+                        AppFrame::Sleep(SleepView::built_in(&status, self.app.battery())),
+                        target,
+                    )
+                    .map_err(js_error)?;
                     return Ok(FrameMetadata::selection(
                         "sleep",
                         "Brewthink",
@@ -775,7 +803,7 @@ impl OwnedImage {
         let step = 22 + index * 7;
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
-                let border = x < 20 || x >= WIDTH - 20 || y < 20 || y >= HEIGHT - 20;
+                let border = !(20..WIDTH - 20).contains(&x) || !(20..HEIGHT - 20).contains(&y);
                 let diagonal = (x / step + y / step + index).is_multiple_of(5);
                 if border || diagonal {
                     let pixel = y * WIDTH + x;

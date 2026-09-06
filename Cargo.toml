@@ -50,6 +50,7 @@ required-features = ["web-sim"]
 crc32fast         = { version = "=1.5.0", optional = true, default-features = false }
 embedded-graphics = "0.8.1"
 embedded-hal      = "1.0.0"
+embedded-layout   = "0.4.2"
 embedded-io       = { version = "=0.7.1", optional = true, default-features = false }
 embedded-png      = { version = "=0.1.1", optional = true, default-features = false }
 embedded-sdmmc    = { version = "=0.10.0", optional = true }

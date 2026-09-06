@@ -1,0 +1,97 @@
+use crate::{
+    app::{FilesState, HomeState, LibraryState, SettingsState},
+    files::{FileItem, FilesRenderError, render_files},
+    home::{HomeRenderError, render_home},
+    image::{MonochromeBitmap, MonochromeImage},
+    library::{ShelfBook, ShelfRenderError, render_shelf},
+    power::BatteryStatus,
+    reader::{ReaderRenderError, ReaderView, render_reader, render_reader_error},
+    settings::{SettingsRenderError, render_settings},
+    sleep::{CustomSleepImageStatus, SleepRenderError, SleepView, render_sleep},
+};
+
+#[derive(Clone, Copy)]
+pub enum AppFrame<'a> {
+    Home {
+        state: HomeState,
+        battery: BatteryStatus,
+    },
+    Library {
+        state: LibraryState,
+        books: &'a [ShelfBook<'a>],
+        battery: BatteryStatus,
+    },
+    Files {
+        state: FilesState,
+        files: &'a [FileItem<'a>],
+        battery: BatteryStatus,
+    },
+    Settings {
+        state: SettingsState,
+        battery: BatteryStatus,
+        custom_image_status: CustomSleepImageStatus,
+        custom_image_name: Option<&'a str>,
+        custom_image_preview: Option<MonochromeBitmap<'a>>,
+    },
+    Reader(ReaderView<'a>),
+    Sleep(SleepView<'a>),
+    Error {
+        book_title: &'a str,
+        message: &'a str,
+        battery: BatteryStatus,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AppRenderError {
+    Home(HomeRenderError),
+    Library(ShelfRenderError),
+    Files(FilesRenderError),
+    Settings(SettingsRenderError),
+    Reader(ReaderRenderError),
+    Sleep(SleepRenderError),
+}
+
+pub fn render_app(
+    frame: AppFrame<'_>,
+    target: &mut MonochromeImage<'_>,
+) -> Result<(), AppRenderError> {
+    match frame {
+        AppFrame::Home { state, battery } => {
+            render_home(state, battery, target).map_err(AppRenderError::Home)
+        }
+        AppFrame::Library {
+            state,
+            books,
+            battery,
+        } => render_shelf(state, books, battery, target).map_err(AppRenderError::Library),
+        AppFrame::Files {
+            state,
+            files,
+            battery,
+        } => render_files(state, files, battery, target).map_err(AppRenderError::Files),
+        AppFrame::Settings {
+            state,
+            battery,
+            custom_image_status,
+            custom_image_name,
+            custom_image_preview,
+        } => render_settings(
+            state,
+            battery,
+            custom_image_status,
+            custom_image_name,
+            custom_image_preview,
+            target,
+        )
+        .map_err(AppRenderError::Settings),
+        AppFrame::Reader(view) => render_reader(view, target).map_err(AppRenderError::Reader),
+        AppFrame::Sleep(view) => render_sleep(view, target).map_err(AppRenderError::Sleep),
+        AppFrame::Error {
+            book_title,
+            message,
+            battery,
+        } => render_reader_error(book_title, message, battery, target)
+            .map_err(AppRenderError::Reader),
+    }
+}

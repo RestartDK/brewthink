@@ -39,8 +39,7 @@ use crate::{
         framebuffer::{FRAME_BYTES, Rotation},
         ssd1677::{BufferedDisplay, RefreshPolicy, RefreshPolicyMode, Ssd1677, X4DriveProfile},
     },
-    files::{FileItem, FileKind, render_files},
-    home::render_home,
+    files::{FileItem, FileKind},
     image::{MonochromeBitmap, MonochromeImage, RenderOptions, ScaleMode, Size},
     image_decoder::{ImageFormat, decode_jpeg, decode_png},
     image_viewer::render_image_viewer,
@@ -48,13 +47,13 @@ use crate::{
         Button, ButtonDebouncer, ButtonEvent, ButtonTransition, PressedButtons,
         control::{ControlCommand, ControlLineBuffer},
     },
-    library::{ShelfBook, render_shelf, render_shelf_cover},
+    library::{ShelfBook, render_shelf_cover},
     power::{BatteryEstimator, BatteryLevel, BatteryStatus},
-    reader::{ReaderLine, ReaderStyle, ReaderView, render_reader, render_reader_error},
-    settings::render_settings,
-    sleep::{CustomSleepImageStatus, SleepView, render_sleep},
+    reader::{ReaderLine, ReaderStyle, ReaderView},
+    sleep::{CustomSleepImageStatus, SleepView},
     storage::{BookFile, FatStorage, ImageFile, MAX_DEVICE_IMAGE_BYTES, ReadOnlySdCard},
     transfer::{FileTransfer, ImageName, UploadRequest},
+    ui::{AppFrame, render_app},
     x4::{X4FatBlockDevice, X4InputHardware, X4StorageHardware, decode_buttons},
     zip_stream::{InflateWorkspace, StreamingZip, ZipValidationScratch},
 };
@@ -1444,7 +1443,14 @@ fn decode_image_frame(
 fn render_home_frame(app: &App, frame: &mut [u8; FRAME_BYTES]) -> Result<(), &'static str> {
     let mut image = MonochromeImage::new(frame_size(), frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
-    render_home(app.home(), app.battery(), &mut image).map_err(|_| "reader home render failed")
+    render_app(
+        AppFrame::Home {
+            state: app.home(),
+            battery: app.battery(),
+        },
+        &mut image,
+    )
+    .map_err(|_| "reader home render failed")
 }
 
 fn render_files_frame(
@@ -1477,10 +1483,12 @@ fn render_files_frame(
     }
     let mut image = MonochromeImage::new(frame_size(), frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
-    render_files(
-        app.files(),
-        &files[..library.length + images.length],
-        app.battery(),
+    render_app(
+        AppFrame::Files {
+            state: app.files(),
+            files: &files[..library.length + images.length],
+            battery: app.battery(),
+        },
         &mut image,
     )
     .map_err(|_| "reader files render failed")
@@ -1512,12 +1520,14 @@ fn render_settings_frame(
         .then(|| bitmap(workspaces.cover));
     let mut image = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
         .map_err(|_| "reader frame buffer has the wrong size")?;
-    render_settings(
-        settings,
-        app.battery(),
-        custom_image_status,
-        selected_file.map(|file| file.name().as_str()),
-        custom_image_preview,
+    render_app(
+        AppFrame::Settings {
+            state: settings,
+            battery: app.battery(),
+            custom_image_status,
+            custom_image_name: selected_file.map(|file| file.name().as_str()),
+            custom_image_preview,
+        },
         &mut image,
     )
     .map_err(|_| "reader settings render failed")
@@ -1536,10 +1546,12 @@ fn render_image_frame(
     if decode_image_frame(file, ScaleMode::Contain, store, workspaces).is_err() {
         let mut target = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
             .map_err(|_| "reader frame buffer has the wrong size")?;
-        return render_reader_error(
-            file.name().as_str(),
-            "This image could not be opened.",
-            app.battery(),
+        return render_app(
+            AppFrame::Error {
+                book_title: file.name().as_str(),
+                message: "This image could not be opened.",
+                battery: app.battery(),
+            },
             &mut target,
         )
         .map_err(|_| "reader image error render failed");
@@ -1598,10 +1610,12 @@ fn render_library(
     let full_cover = &*workspaces.cover;
     let mut image = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
         .map_err(|_| "reader frame buffer has the wrong size")?;
-    render_shelf(
-        app.library(),
-        &books[..library.length],
-        app.battery(),
+    render_app(
+        AppFrame::Library {
+            state: app.library(),
+            books: &books[..library.length],
+            battery: app.battery(),
+        },
         &mut image,
     )
     .map_err(|_| "reader shelf render failed")?;
@@ -1645,7 +1659,7 @@ fn render_page(
     );
     let mut image = MonochromeImage::new(frame_size(), frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
-    render_reader(view, &mut image).map_err(|_| "reader page render failed")
+    render_app(AppFrame::Reader(view), &mut image).map_err(|_| "reader page render failed")
 }
 
 fn render_sleep_frame(
@@ -1707,14 +1721,14 @@ fn render_sleep_frame(
                 }
                 let mut image = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
                     .map_err(|_| "reader frame buffer has the wrong size")?;
-                return render_sleep(
-                    SleepView::book_cover(
+                return render_app(
+                    AppFrame::Sleep(SleepView::book_cover(
                         library.title(book),
                         library.creator(book),
                         status.as_str(),
                         bitmap(workspaces.cover),
                         app.battery(),
-                    ),
+                    )),
                     &mut image,
                 )
                 .map_err(|_| "reader sleep frame render failed");
@@ -1722,8 +1736,8 @@ fn render_sleep_frame(
             SleepScreenSource::BuiltIn => {
                 let mut image = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
                     .map_err(|_| "reader frame buffer has the wrong size")?;
-                return render_sleep(
-                    SleepView::built_in(status.as_str(), app.battery()),
+                return render_app(
+                    AppFrame::Sleep(SleepView::built_in(status.as_str(), app.battery())),
                     &mut image,
                 )
                 .map_err(|_| "reader sleep frame render failed");
@@ -1741,10 +1755,12 @@ fn render_error(
 ) -> Result<(), &'static str> {
     let mut image = MonochromeImage::new(frame_size(), frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
-    render_reader_error(
-        library.title(book),
-        "This EPUB or chapter could not be opened.",
-        app.battery(),
+    render_app(
+        AppFrame::Error {
+            book_title: library.title(book),
+            message: "This EPUB or chapter could not be opened.",
+            battery: app.battery(),
+        },
         &mut image,
     )
     .map_err(|_| "reader error frame render failed")

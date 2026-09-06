@@ -1,23 +1,15 @@
-use embedded_graphics::{
-    Drawable,
-    geometry::{Point, Size as GraphicsSize},
-    pixelcolor::BinaryColor,
-    prelude::Primitive,
-    primitives::{PrimitiveStyle, Rectangle},
-    text::{Baseline, Text},
-};
+use embedded_graphics::{Drawable, geometry::Point};
+use embedded_layout::View;
 
 use crate::{
     app::{HomeItem, HomeState},
     image::{MonochromeImage, Size},
     power::BatteryStatus,
     ui::{
-        CONTENT_LEFT, CONTENT_WIDTH, FRAME_HEIGHT, FRAME_WIDTH, FrameTarget, brand_style,
-        chrome_style, draw_app_bar, draw_footer_rule,
+        AppBar, CONTENT_LEFT, CommandBar, FRAME_HEIGHT, FRAME_WIDTH, FrameTarget, Label, MenuRow,
+        Selection, TextRole, ui, ui_column,
     },
 };
-
-const ROW_TOPS: [i32; 3] = [150, 282, 414];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HomeRenderError {
@@ -38,71 +30,35 @@ pub fn render_home(
     }
 
     target.clear_white();
-    draw_app_bar(target, "HOME", battery);
-    let mut display = FrameTarget::new(target);
-    Text::with_baseline(
-        "CHOOSE WHERE TO GO",
-        Point::new(CONTENT_LEFT, 92),
-        chrome_style(),
-        Baseline::Top,
+    let selected = state.selected();
+    let rows = ui_column!(
+        40;
+        menu_row(HomeItem::Books, selected),
+        menu_row(HomeItem::Files, selected),
+        menu_row(HomeItem::Settings, selected),
     )
-    .draw(&mut display)
-    .ok();
-
-    for (index, item) in HomeItem::ALL.into_iter().enumerate() {
-        draw_row(
-            &mut display,
-            item,
-            ROW_TOPS[index],
-            item == state.selected(),
-        );
-    }
-
-    draw_footer_rule(target, 748);
-    Text::with_baseline(
-        "UP/DOWN  MOVE     CONFIRM  OPEN",
-        Point::new(CONTENT_LEFT, 768),
-        chrome_style(),
-        Baseline::Top,
-    )
-    .draw(&mut FrameTarget::new(target))
-    .ok();
+    .translate(Point::new(CONTENT_LEFT, 150));
+    let screen = ui!(
+        AppBar::new("HOME", battery),
+        Label::new("CHOOSE WHERE TO GO", TextRole::Body).at(Point::new(CONTENT_LEFT, 92)),
+        rows,
+        CommandBar::new("UP/DOWN  MOVE     CONFIRM  OPEN"),
+    );
+    screen.draw(&mut FrameTarget::new(target)).ok();
     Ok(())
 }
 
-fn draw_row(display: &mut FrameTarget<'_, '_>, item: HomeItem, top: i32, selected: bool) {
-    Rectangle::new(
-        Point::new(CONTENT_LEFT, top),
-        GraphicsSize::new(CONTENT_WIDTH, 92),
-    )
-    .into_styled(PrimitiveStyle::with_stroke(
-        BinaryColor::On,
-        if selected { 4 } else { 1 },
-    ))
-    .draw(display)
-    .ok();
-
-    Text::with_baseline(
-        item.label(),
-        Point::new(42, top + 22),
-        brand_style(),
-        Baseline::Top,
-    )
-    .draw(display)
-    .ok();
+fn menu_row(item: HomeItem, selected: HomeItem) -> MenuRow<'static> {
     let detail = match item {
         HomeItem::Books => "COVERS AND READING PROGRESS",
         HomeItem::Files => "EPUB FILES ON MICROSD",
         HomeItem::Settings => "FONT, SIZE, AND SPACING",
     };
-    Text::with_baseline(
+    MenuRow::new(
+        item.label(),
         detail,
-        Point::new(42, top + 55),
-        chrome_style(),
-        Baseline::Top,
+        Selection::from_selected(item == selected),
     )
-    .draw(display)
-    .ok();
 }
 
 #[cfg(test)]

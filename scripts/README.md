@@ -10,6 +10,16 @@ scripts/check-board-abstraction.sh
 
 This runs formatting, host pin-map/display tests, a WASM library check, embedded checks, Clippy, and app1 image inspection. It does not write device flash.
 
+## UI frame contract
+
+Home, Books, Files, Settings, Reader, Image, Error, and Sleep have byte-exact PBM fixtures under `tests/fixtures/ui`. Empty catalogs, filename clipping, and sleep previews are included. After an intentional visual change, regenerate them with:
+
+```bash
+scripts/update-ui-frame-contract.sh
+```
+
+Review the rendered fixture changes before committing them. The script runs on the host and does not access the device.
+
 ## Display diagnostic images
 
 The default build uses diagnostic stage `heartbeat`. Select a display diagnostic explicitly when building:

@@ -4,16 +4,12 @@ use embedded_graphics::{
     pixelcolor::BinaryColor,
     prelude::Primitive,
     primitives::{PrimitiveStyle, Rectangle},
-    text::{Baseline, Text},
 };
 
 use crate::{
     image::{MonochromeImage, Size},
     power::BatteryStatus,
-    ui::{
-        CONTENT_LEFT, FRAME_HEIGHT, FRAME_WIDTH, FrameTarget, chrome_style, draw_app_bar,
-        draw_footer_rule,
-    },
+    ui::{AppBar, CommandBar, FRAME_HEIGHT, FRAME_WIDTH, FrameTarget, ui},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -46,21 +42,14 @@ pub fn render_image_viewer(
     .into_styled(PrimitiveStyle::with_fill(BinaryColor::Off))
     .draw(&mut display)
     .ok();
-    draw_app_bar(target, name, battery);
-    draw_footer_rule(target, 748);
     let footer = if selected_for_sleep {
         "SLEEP IMAGE SELECTED     BACK  FILES"
     } else {
         "CONFIRM  SELECT SLEEP     BACK  FILES"
     };
-    Text::with_baseline(
-        footer,
-        Point::new(CONTENT_LEFT, 768),
-        chrome_style(),
-        Baseline::Top,
-    )
-    .draw(&mut FrameTarget::new(target))
-    .ok();
+    ui!(AppBar::new(name, battery), CommandBar::new(footer))
+        .draw(&mut display)
+        .ok();
     Ok(())
 }
 
