@@ -1,26 +1,9 @@
 use embedded_hal::delay::DelayNs;
 
+use super::grayscale::{
+    ADJUSTMENT_WAVEFORM, EIGHT_RECIPES, FACTORY_WAVEFORM, SettledBus, TransitionRecipe, write_pass,
+};
 use super::ssd1677::{DisplayBus, Error, FRAME_BYTES, Ssd1677, WIDTH, X4DriveProfile};
-
-const FACTORY_WAVEFORM: [u8; 110] = [
-    0x00, 0x4A, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x62, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x88, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA8, 0x44,
-    0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x08, 0x0B, 0x02, 0x03, 0x00, 0x0C, 0x02, 0x07, 0x02, 0x00, 0x01, 0x00, 0x02, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x01, 0x22, 0x22, 0x22, 0x22, 0x22, 0x17, 0x41, 0xA8, 0x32, 0x30,
-];
-
-const ADJUSTMENT_WAVEFORM: [u8; 110] = [
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x54, 0x54, 0x40, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0xAA, 0xA0, 0xA8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA2, 0x22,
-    0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x00, 0x01, 0x01, 0x01, 0x01, 0x00, 0x01, 0x01, 0x01, 0x01,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x8F, 0x8F, 0x8F, 0x8F, 0x8F, 0x17, 0x41, 0xA8, 0x32, 0x30,
-];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Pattern {
@@ -68,47 +51,6 @@ impl Pattern {
         }
     }
 }
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct TransitionRecipe {
-    base: u8,
-    adjustment: u8,
-}
-
-const EIGHT_RECIPES: [TransitionRecipe; 8] = [
-    TransitionRecipe {
-        base: 3,
-        adjustment: 0,
-    },
-    TransitionRecipe {
-        base: 2,
-        adjustment: 1,
-    },
-    TransitionRecipe {
-        base: 2,
-        adjustment: 0,
-    },
-    TransitionRecipe {
-        base: 1,
-        adjustment: 1,
-    },
-    TransitionRecipe {
-        base: 0,
-        adjustment: 1,
-    },
-    TransitionRecipe {
-        base: 1,
-        adjustment: 0,
-    },
-    TransitionRecipe {
-        base: 1,
-        adjustment: 2,
-    },
-    TransitionRecipe {
-        base: 0,
-        adjustment: 0,
-    },
-];
 
 const EIGHT_LAYOUT: [[usize; 4]; 4] = [[0, 4, 2, 6], [7, 3, 5, 1], [6, 2, 4, 0], [1, 5, 3, 7]];
 
@@ -254,34 +196,9 @@ pub fn paint<B: DisplayBus, D: DelayNs>(
             })?;
             continue;
         };
-        for (command, bit) in [(0x24, 0), (0x26, 1)] {
-            bus.command(0x4E, &[0x00, 0x00]).map_err(Error::Bus)?;
-            bus.command(0x4F, &[0xDF, 0x01]).map_err(Error::Bus)?;
-            bus.begin_ram_write(command).map_err(Error::Bus)?;
-            let mut bytes = [0; 256];
-            for offset in (0..FRAME_BYTES).step_by(bytes.len()) {
-                let count = bytes.len().min(FRAME_BYTES - offset);
-                fill_plane(pass, bit, offset, &mut bytes[..count]);
-                if let Err(error) = bus.write_ram(&bytes[..count]) {
-                    let _ = bus.end_ram_write();
-                    return Err(Error::Bus(error));
-                }
-            }
-            bus.end_ram_write().map_err(Error::Bus)?;
-        }
-        for (command, bytes) in [
-            (0x32, &waveform[..105]),
-            (0x03, &waveform[105..106]),
-            (0x04, &waveform[106..109]),
-            (0x2C, &waveform[109..110]),
-            (0x3C, &[0xC0][..]),
-            (0x21, &[0x00, 0x00][..]),
-            (0x22, &[control2][..]),
-            (0x20, &[][..]),
-        ] {
-            bus.command(command, bytes).map_err(Error::Bus)?;
-        }
-        bus.wait_ready().map_err(Error::Bus)?;
+        write_pass(&mut bus, waveform, control2, |bit, offset, output| {
+            fill_plane(pass, bit, offset, output);
+        })?;
     }
     display.enter_deep_sleep(&mut bus)
 }
@@ -295,38 +212,6 @@ fn fill_plane(pass: PaintPass, bit: u8, offset: usize, output: &mut [u8]) {
             let y = pixel % WIDTH;
             *byte |= ((pass.ram_state(x, y) >> bit) & 1) << (7 - shift);
         }
-    }
-}
-
-struct SettledBus<'a, B, D> {
-    inner: &'a mut B,
-    delay: &'a mut D,
-}
-
-impl<B: DisplayBus, D: DelayNs> DisplayBus for SettledBus<'_, B, D> {
-    type Error = B::Error;
-    fn reset(&mut self) {
-        self.inner.reset();
-    }
-    fn command(&mut self, command: u8, bytes: &[u8]) -> Result<(), Self::Error> {
-        self.inner.command(command, bytes)?;
-        // BUSY can assert after the first sample following reset or activation.
-        if command == 0x12 || command == 0x20 {
-            self.delay.delay_ms(10);
-        }
-        Ok(())
-    }
-    fn begin_ram_write(&mut self, command: u8) -> Result<(), Self::Error> {
-        self.inner.begin_ram_write(command)
-    }
-    fn write_ram(&mut self, bytes: &[u8]) -> Result<(), Self::Error> {
-        self.inner.write_ram(bytes)
-    }
-    fn end_ram_write(&mut self) -> Result<(), Self::Error> {
-        self.inner.end_ram_write()
-    }
-    fn wait_ready(&mut self) -> Result<(), Self::Error> {
-        self.inner.wait_ready()
     }
 }
 
