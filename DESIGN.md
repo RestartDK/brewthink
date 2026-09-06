@@ -30,7 +30,7 @@ Reader typography is separate from application chrome. The settings are bounded 
 - Line spacing is Compact, Normal, or Relaxed.
 - Sleep screen is Automatic, Custom Image, or Book Cover.
 
-One resolved `ReaderTheme` supplies glyph metrics to both pagination and rendering. The default Noto Serif and Medium combination matches CrossPoint Reader's Noto Serif 14 pt default. The Brewthink wordmark and application chrome remain on their existing bitmap fonts.
+One resolved `ReaderTheme` supplies glyph metrics to both pagination and rendering. The default Noto Serif and Medium combination uses 14 pt text. The Brewthink wordmark and application chrome remain on their existing bitmap fonts.
 
 ## Sleep screen
 
