@@ -1,13 +1,10 @@
 use core::fmt::Write;
 
-use embedded_graphics::{
-    Drawable,
-    draw_target::DrawTargetExt,
-    geometry::{Point, Size as GraphicsSize},
-    pixelcolor::BinaryColor,
-    prelude::Primitive,
-    primitives::{PrimitiveStyle, Rectangle},
-    text::{Baseline, Text},
+use embedded_graphics::{Drawable, geometry::Point};
+use embedded_layout::{
+    View,
+    layout::linear::{FixedMargin, LinearLayout},
+    view_group::Views,
 };
 
 use crate::{
@@ -15,8 +12,8 @@ use crate::{
     image::{MonochromeImage, Size},
     power::BatteryStatus,
     ui::{
-        CONTENT_LEFT, CONTENT_WIDTH, FRAME_HEIGHT, FRAME_WIDTH, FixedText, FrameTarget,
-        brand_style, chrome_style, draw_app_bar, draw_footer_rule,
+        AppBar, CONTENT_LEFT, CommandBar, FRAME_HEIGHT, FRAME_WIDTH, FileRow, FixedText,
+        FrameTarget, Label, Selection, TextRole, ui,
     },
 };
 
@@ -89,61 +86,39 @@ pub fn render_files(
     }
 
     target.clear_white();
-    draw_app_bar(target, "FILES", battery);
+    let mut display = FrameTarget::new(target);
     if files.is_empty() {
-        draw_empty_state(target);
+        ui!(
+            AppBar::new("FILES", battery),
+            Label::new("NO EPUB OR IMAGE FILES", TextRole::Heading).at(Point::new(166, 326)),
+            Label::new("Add EPUBs to /books or images to /files", TextRole::Body)
+                .at(Point::new(135, 368)),
+            CommandBar::new("BACK  HOME"),
+        )
+        .draw(&mut display)
+        .ok();
         return Ok(());
     }
 
-    let mut display = FrameTarget::new(target);
     let range = state.visible_range();
+    let mut row_views = [FileRow::new("", 0, "", Selection::Idle); 8];
     for (row, index) in range.clone().enumerate() {
-        let top = 86 + row as i32 * 76;
-        let selected = state
-            .selected()
-            .is_some_and(|selected| selected.index() == index);
-        Rectangle::new(
-            Point::new(CONTENT_LEFT, top),
-            GraphicsSize::new(CONTENT_WIDTH, 62),
-        )
-        .into_styled(PrimitiveStyle::with_stroke(
-            BinaryColor::On,
-            if selected { 3 } else { 1 },
-        ))
-        .draw(&mut display)
-        .ok();
-
-        let name_clip = Rectangle::new(Point::new(32, top + 12), GraphicsSize::new(330, 18));
-        Text::with_baseline(
-            files[index].name,
-            Point::new(32, top + 12),
-            brand_style(),
-            Baseline::Top,
-        )
-        .draw(&mut display.clipped(&name_clip))
-        .ok();
-
-        let mut size = FixedText::<24>::new();
-        write!(size, "{} KiB", files[index].size.div_ceil(1024)).ok();
-        Text::with_baseline(
-            size.as_str(),
-            Point::new(382, top + 20),
-            chrome_style(),
-            Baseline::Top,
-        )
-        .draw(&mut display)
-        .ok();
-        Text::with_baseline(
-            files[index].kind.label(),
-            Point::new(32, top + 39),
-            chrome_style(),
-            Baseline::Top,
-        )
-        .draw(&mut display)
-        .ok();
+        row_views[row] = FileRow::new(
+            files[index].name(),
+            files[index].size(),
+            files[index].kind().label(),
+            Selection::from_selected(
+                state
+                    .selected()
+                    .is_some_and(|selected| selected.index() == index),
+            ),
+        );
     }
+    let rows = LinearLayout::vertical(Views::new(&mut row_views[..range.len()]))
+        .with_spacing(FixedMargin(14))
+        .arrange()
+        .translate(Point::new(CONTENT_LEFT, 86));
 
-    draw_footer_rule(target, 748);
     let mut footer = FixedText::<64>::new();
     write!(
         footer,
@@ -153,44 +128,14 @@ pub fn render_files(
         files.len()
     )
     .ok();
-    Text::with_baseline(
-        footer.as_str(),
-        Point::new(CONTENT_LEFT, 768),
-        chrome_style(),
-        Baseline::Top,
+    ui!(
+        AppBar::new("FILES", battery),
+        rows,
+        CommandBar::new(footer.as_str()),
     )
-    .draw(&mut FrameTarget::new(target))
+    .draw(&mut display)
     .ok();
     Ok(())
-}
-
-fn draw_empty_state(target: &mut MonochromeImage<'_>) {
-    let mut display = FrameTarget::new(target);
-    Text::with_baseline(
-        "NO EPUB OR IMAGE FILES",
-        Point::new(166, 326),
-        brand_style(),
-        Baseline::Top,
-    )
-    .draw(&mut display)
-    .ok();
-    Text::with_baseline(
-        "Add EPUBs to /books or images to /files",
-        Point::new(135, 368),
-        chrome_style(),
-        Baseline::Top,
-    )
-    .draw(&mut display)
-    .ok();
-    draw_footer_rule(target, 748);
-    Text::with_baseline(
-        "BACK  HOME",
-        Point::new(CONTENT_LEFT, 768),
-        chrome_style(),
-        Baseline::Top,
-    )
-    .draw(&mut FrameTarget::new(target))
-    .ok();
 }
 
 #[cfg(test)]

@@ -33,6 +33,8 @@ pub mod storage;
 #[cfg(feature = "image-decoder")]
 pub mod transfer;
 pub mod ui;
+#[cfg(test)]
+mod ui_contract;
 pub mod x4;
 #[cfg(feature = "device-reader")]
 pub mod zip_stream;

@@ -39,8 +39,7 @@ use crate::{
         framebuffer::{FRAME_BYTES, Rotation},
         ssd1677::{BufferedDisplay, RefreshPolicy, RefreshPolicyMode, Ssd1677, X4DriveProfile},
     },
-    files::{FileItem, FileKind, render_files},
-    home::render_home,
+    files::{FileItem, FileKind},
     image::{MonochromeBitmap, MonochromeImage, RenderOptions, ScaleMode, Size},
     image_decoder::{ImageFormat, decode_jpeg, decode_png},
     image_viewer::render_image_viewer,
@@ -48,13 +47,14 @@ use crate::{
         Button, ButtonDebouncer, ButtonEvent, ButtonTransition, PressedButtons,
         control::{ControlCommand, ControlLineBuffer},
     },
-    library::{ShelfBook, render_shelf, render_shelf_cover},
+    library::ShelfBook,
     power::{BatteryEstimator, BatteryLevel, BatteryStatus},
-    reader::{ReaderLine, ReaderStyle, ReaderView, render_reader, render_reader_error},
-    settings::render_settings,
-    sleep::{CustomSleepImageStatus, SleepView, render_sleep},
+    reader::{ReaderLine, ReaderStyle, ReaderView},
+    settings::CustomImagePreview,
+    sleep::SleepView,
     storage::{BookFile, FatStorage, ImageFile, MAX_DEVICE_IMAGE_BYTES, ReadOnlySdCard},
     transfer::{FileTransfer, ImageName, UploadRequest},
+    ui::{AppFrame, render_app},
     x4::{X4FatBlockDevice, X4InputHardware, X4StorageHardware, decode_buttons},
     zip_stream::{InflateWorkspace, StreamingZip, ZipValidationScratch},
 };
@@ -527,7 +527,7 @@ pub async fn reader_app_task(
     )
     .unwrap_or((
         App::with_catalog(library.length, images.length, selected_image, preferences),
-        AppEffect::RenderHome,
+        AppEffect::Render,
     ));
     if let Some(status) = BATTERY_STATUS.try_take() {
         let _ = app.set_battery(status);
@@ -944,7 +944,7 @@ fn write_control_status(app: &App) {
                 state.draft().packed()
             );
         }
-        AppView::Loading => {
+        AppView::Loading(_) => {
             esp_println::println!("BREWCTL/1 STATUS view=loading");
         }
         AppView::Reader(session) => {
@@ -1128,33 +1128,6 @@ fn run_effect(
     loop {
         effect = match effect {
             AppEffect::None => return Ok(None),
-            AppEffect::RenderHome => {
-                render_home_frame(app, workspaces.frame_codec.frame())?;
-                refresh(store, panel, workspaces.frame_codec.frame())?;
-                return Ok(None);
-            }
-            AppEffect::RenderLibrary => {
-                esp_println::println!("BREWCTL/1 LOG stage=render-library state=start");
-                render_library(app, library, store, workspaces)?;
-                esp_println::println!("BREWCTL/1 LOG stage=render-library state=frame-ready");
-                refresh(store, panel, workspaces.frame_codec.frame())?;
-                esp_println::println!("BREWCTL/1 LOG stage=render-library state=done");
-                info!(
-                    "reader shelf refreshed: selected={}",
-                    app.library().selected().map_or(usize::MAX, BookId::index)
-                );
-                return Ok(None);
-            }
-            AppEffect::RenderFiles => {
-                render_files_frame(app, library, images, workspaces.frame_codec.frame())?;
-                refresh(store, panel, workspaces.frame_codec.frame())?;
-                return Ok(None);
-            }
-            AppEffect::RenderSettings => {
-                render_settings_frame(app, images, store, workspaces)?;
-                refresh(store, panel, workspaces.frame_codec.frame())?;
-                return Ok(None);
-            }
             AppEffect::LoadChapter {
                 book,
                 spine_index,
@@ -1193,64 +1166,96 @@ fn run_effect(
                 );
                 next
             }
-            AppEffect::RenderReader(location) => {
-                esp_println::println!(
-                    "BREWCTL/1 LOG stage=render-reader state=start book={} spine={} page={}",
-                    location.book().index(),
-                    location.spine_index(),
-                    location.page_index()
-                );
-                let chapter = loaded.ok_or("reader chapter was not loaded")?;
-                if chapter.book != location.book() || chapter.spine_index != location.spine_index()
-                {
-                    return Err("reader chapter cache mismatch");
+            AppEffect::Render => match app.view() {
+                AppView::Home(_) => {
+                    render_home_frame(app, workspaces.frame_codec.frame())?;
+                    refresh(store, panel, workspaces.frame_codec.frame())?;
+                    return Ok(None);
                 }
-                let xhtml = &workspaces.resource[..chapter.length];
-                render_page(
-                    app,
-                    location,
-                    library,
-                    xhtml,
-                    workspaces.page,
-                    workspaces.frame_codec.frame(),
-                )?;
-                refresh(store, panel, workspaces.frame_codec.frame())?;
-                esp_println::println!(
-                    "BREWCTL/1 LOG stage=render-reader state=done book={} spine={} page={}",
-                    location.book().index(),
-                    location.spine_index(),
-                    location.page_index()
-                );
-                info!(
-                    "reader page refreshed: book={} spine={} page={} pages={}",
-                    location.book().index(),
-                    location.spine_index(),
-                    location.page_index(),
-                    location.page_count()
-                );
-                return Ok(None);
-            }
-            AppEffect::RenderImage(image) => {
-                render_image_frame(app, image, images, store, workspaces)?;
-                refresh(store, panel, workspaces.frame_codec.frame())?;
-                return Ok(None);
-            }
-            AppEffect::RenderError { book } => {
-                esp_println::println!("BREWCTL/1 LOG stage=render-error state=start");
-                render_error(app, book, library, workspaces.frame_codec.frame())?;
-                refresh(store, panel, workspaces.frame_codec.frame())?;
-                esp_println::println!("BREWCTL/1 LOG stage=render-error state=done");
-                return Ok(None);
-            }
-            AppEffect::RenderSleep { resume } => {
-                esp_println::println!("BREWCTL/1 LOG stage=render-sleep state=start");
-                render_sleep_frame(app, resume, library, images, store, workspaces)?;
-                refresh(store, panel, workspaces.frame_codec.frame())?;
-                esp_println::println!("BREWCTL/1 LOG stage=render-sleep state=done");
-                info!("reader retained sleep frame refreshed");
-                app.sleep_frame_ready()
-                    .map_err(|_| "reader application state rejected sleep frame")?
-            }
+                AppView::Library => {
+                    esp_println::println!("BREWCTL/1 LOG stage=render-library state=start");
+                    render_library(app, library, store, workspaces)?;
+                    esp_println::println!("BREWCTL/1 LOG stage=render-library state=frame-ready");
+                    refresh(store, panel, workspaces.frame_codec.frame())?;
+                    esp_println::println!("BREWCTL/1 LOG stage=render-library state=done");
+                    info!(
+                        "reader shelf refreshed: selected={}",
+                        app.library().selected().map_or(usize::MAX, BookId::index)
+                    );
+                    return Ok(None);
+                }
+                AppView::Files(_) => {
+                    render_files_frame(app, library, images, workspaces.frame_codec.frame())?;
+                    refresh(store, panel, workspaces.frame_codec.frame())?;
+                    return Ok(None);
+                }
+                AppView::Settings(_) => {
+                    render_settings_frame(app, images, store, workspaces)?;
+                    refresh(store, panel, workspaces.frame_codec.frame())?;
+                    return Ok(None);
+                }
+                AppView::Loading(_) => return Err("reader render requested while loading"),
+                AppView::Reader(session) => {
+                    let location = session.location();
+                    esp_println::println!(
+                        "BREWCTL/1 LOG stage=render-reader state=start book={} spine={} page={}",
+                        location.book().index(),
+                        location.spine_index(),
+                        location.page_index()
+                    );
+                    let chapter = loaded.ok_or("reader chapter was not loaded")?;
+                    if chapter.book != location.book()
+                        || chapter.spine_index != location.spine_index()
+                    {
+                        return Err("reader chapter cache mismatch");
+                    }
+                    let xhtml = &workspaces.resource[..chapter.length];
+                    render_page(
+                        app,
+                        location,
+                        library,
+                        xhtml,
+                        workspaces.page,
+                        workspaces.frame_codec.frame(),
+                    )?;
+                    refresh(store, panel, workspaces.frame_codec.frame())?;
+                    esp_println::println!(
+                        "BREWCTL/1 LOG stage=render-reader state=done book={} spine={} page={}",
+                        location.book().index(),
+                        location.spine_index(),
+                        location.page_index()
+                    );
+                    info!(
+                        "reader page refreshed: book={} spine={} page={} pages={}",
+                        location.book().index(),
+                        location.spine_index(),
+                        location.page_index(),
+                        location.page_count()
+                    );
+                    return Ok(None);
+                }
+                AppView::Image(image) => {
+                    render_image_frame(app, image, images, store, workspaces)?;
+                    refresh(store, panel, workspaces.frame_codec.frame())?;
+                    return Ok(None);
+                }
+                AppView::Error { book, .. } => {
+                    esp_println::println!("BREWCTL/1 LOG stage=render-error state=start");
+                    render_error(app, book, library, workspaces.frame_codec.frame())?;
+                    refresh(store, panel, workspaces.frame_codec.frame())?;
+                    esp_println::println!("BREWCTL/1 LOG stage=render-error state=done");
+                    return Ok(None);
+                }
+                AppView::Sleeping { resume } => {
+                    esp_println::println!("BREWCTL/1 LOG stage=render-sleep state=start");
+                    render_sleep_frame(app, resume, library, images, store, workspaces)?;
+                    refresh(store, panel, workspaces.frame_codec.frame())?;
+                    esp_println::println!("BREWCTL/1 LOG stage=render-sleep state=done");
+                    info!("reader retained sleep frame refreshed");
+                    app.sleep_frame_ready()
+                        .map_err(|_| "reader application state rejected sleep frame")?
+                }
+            },
             AppEffect::EnterDeepSleep { resume } => return Ok(Some(resume)),
         };
     }
@@ -1377,14 +1382,14 @@ fn decode_image_preview(
     file: &ImageFile,
     store: &DeviceStore,
     workspaces: &mut Workspaces,
-) -> CustomSleepImageStatus {
-    let loaded = match store.app_data().read_image(
-        *file.name(),
-        &mut workspaces.resource[..MAX_DEVICE_IMAGE_BYTES],
-    ) {
-        Ok(loaded) => loaded,
-        Err(_) => return CustomSleepImageStatus::Invalid,
-    };
+) -> Result<(), ()> {
+    let loaded = store
+        .app_data()
+        .read_image(
+            *file.name(),
+            &mut workspaces.resource[..MAX_DEVICE_IMAGE_BYTES],
+        )
+        .map_err(|_| ())?;
     let encoded = &workspaces.resource[..loaded.length()];
     let output = &mut *workspaces.cover;
     let decoded = match loaded.format() {
@@ -1395,11 +1400,7 @@ fn decode_image_preview(
             .frame_codec
             .with_png(|workspace| decode_png_cover(encoded, output, workspace)),
     };
-    if decoded.is_ok() {
-        CustomSleepImageStatus::Ready
-    } else {
-        CustomSleepImageStatus::Invalid
-    }
+    decoded.map(|_| ()).map_err(|_| ())
 }
 
 fn decode_image_frame(
@@ -1444,7 +1445,14 @@ fn decode_image_frame(
 fn render_home_frame(app: &App, frame: &mut [u8; FRAME_BYTES]) -> Result<(), &'static str> {
     let mut image = MonochromeImage::new(frame_size(), frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
-    render_home(app.home(), app.battery(), &mut image).map_err(|_| "reader home render failed")
+    render_app(
+        AppFrame::Home {
+            state: app.home(),
+            battery: app.battery(),
+        },
+        &mut image,
+    )
+    .map_err(|_| "reader home render failed")
 }
 
 fn render_files_frame(
@@ -1477,10 +1485,12 @@ fn render_files_frame(
     }
     let mut image = MonochromeImage::new(frame_size(), frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
-    render_files(
-        app.files(),
-        &files[..library.length + images.length],
-        app.battery(),
+    render_app(
+        AppFrame::Files {
+            state: app.files(),
+            files: &files[..library.length + images.length],
+            battery: app.battery(),
+        },
         &mut image,
     )
     .map_err(|_| "reader files render failed")
@@ -1499,25 +1509,26 @@ fn render_settings_frame(
         && settings.draft().sleep_screen() != SleepScreenMode::BookCover;
     let selected_file = app
         .selected_sleep_image()
+        .filter(|_| show_custom_preview)
         .and_then(|image| images.file(image));
-    let custom_image_status = if show_custom_preview {
-        selected_file.map_or(CustomSleepImageStatus::Missing, |file| {
-            decode_image_preview(file, store, workspaces)
-        })
-    } else {
-        CustomSleepImageStatus::Missing
+    let custom_image = match selected_file {
+        Some(file) => match decode_image_preview(file, store, workspaces) {
+            Ok(()) => CustomImagePreview::Ready {
+                name: file.name().as_str(),
+                bitmap: bitmap(workspaces.cover),
+            },
+            Err(()) => CustomImagePreview::Invalid,
+        },
+        None => CustomImagePreview::Missing,
     };
-    let custom_image_preview = (show_custom_preview
-        && custom_image_status == CustomSleepImageStatus::Ready)
-        .then(|| bitmap(workspaces.cover));
     let mut image = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
         .map_err(|_| "reader frame buffer has the wrong size")?;
-    render_settings(
-        settings,
-        app.battery(),
-        custom_image_status,
-        selected_file.map(|file| file.name().as_str()),
-        custom_image_preview,
+    render_app(
+        AppFrame::Settings {
+            state: settings,
+            battery: app.battery(),
+            custom_image,
+        },
         &mut image,
     )
     .map_err(|_| "reader settings render failed")
@@ -1536,10 +1547,12 @@ fn render_image_frame(
     if decode_image_frame(file, ScaleMode::Contain, store, workspaces).is_err() {
         let mut target = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
             .map_err(|_| "reader frame buffer has the wrong size")?;
-        return render_reader_error(
-            file.name().as_str(),
-            "This image could not be opened.",
-            app.battery(),
+        return render_app(
+            AppFrame::Error {
+                book_title: file.name().as_str(),
+                message: "This image could not be opened.",
+                battery: app.battery(),
+            },
             &mut target,
         )
         .map_err(|_| "reader image error render failed");
@@ -1561,14 +1574,6 @@ fn render_library(
     store: &DeviceStore,
     workspaces: &mut Workspaces,
 ) -> Result<(), &'static str> {
-    let mut books = [ShelfBook::new("", "", None); MAX_DEVICE_BOOKS];
-    for (index, book) in books[..library.length].iter_mut().enumerate() {
-        *book = ShelfBook::new(
-            library.titles[index].as_str(),
-            library.creators[index].as_str(),
-            None,
-        );
-    }
     let visible = app.library().visible_range();
     let selected = app.library().selected().map(BookId::index);
     let mut decoded = [false; VISIBLE_COVER_SLOTS];
@@ -1582,41 +1587,42 @@ fn render_library(
             downsample_cover(workspaces.cover, &mut workspaces.shelf_covers[slot]);
         }
     }
-    let selected_full = selected.is_some_and(|index| {
-        if !visible.contains(&index) {
-            return false;
-        }
-        let slot = index - visible.start;
-        decoded[slot] =
+    if let Some(index) = selected.filter(|index| visible.contains(index)) {
+        decoded[index - visible.start] =
             decode_book_cover(BookId::new(index), library, store, workspaces).unwrap_or(false);
-        if decoded[slot] {
-            downsample_cover(workspaces.cover, &mut workspaces.shelf_covers[slot]);
-        }
-        decoded[slot]
-    });
+    }
     let covers = &*workspaces.shelf_covers;
     let full_cover = &*workspaces.cover;
+    let mut books = [ShelfBook::new("", "", None); MAX_DEVICE_BOOKS];
+    for (index, book) in books[..library.length].iter_mut().enumerate() {
+        let cover = visible
+            .contains(&index)
+            .then(|| index - visible.start)
+            .filter(|&slot| decoded[slot])
+            .map(|slot| {
+                if Some(index) == selected {
+                    bitmap(full_cover)
+                } else {
+                    shelf_bitmap(&covers[slot])
+                }
+            });
+        *book = ShelfBook::new(
+            library.titles[index].as_str(),
+            library.creators[index].as_str(),
+            cover,
+        );
+    }
     let mut image = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
         .map_err(|_| "reader frame buffer has the wrong size")?;
-    render_shelf(
-        app.library(),
-        &books[..library.length],
-        app.battery(),
+    render_app(
+        AppFrame::Library {
+            state: app.library(),
+            books: &books[..library.length],
+            battery: app.battery(),
+        },
         &mut image,
     )
-    .map_err(|_| "reader shelf render failed")?;
-    for (slot, index) in visible.enumerate() {
-        if decoded[slot] {
-            let cover = if selected_full && Some(index) == selected {
-                bitmap(full_cover)
-            } else {
-                shelf_bitmap(&covers[slot])
-            };
-            render_shelf_cover(app.library(), index, cover, &mut image)
-                .map_err(|_| "reader shelf cover render failed")?;
-        }
-    }
-    Ok(())
+    .map_err(|_| "reader shelf render failed")
 }
 
 fn render_page(
@@ -1645,7 +1651,7 @@ fn render_page(
     );
     let mut image = MonochromeImage::new(frame_size(), frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
-    render_reader(view, &mut image).map_err(|_| "reader page render failed")
+    render_app(AppFrame::Reader(view), &mut image).map_err(|_| "reader page render failed")
 }
 
 fn render_sleep_frame(
@@ -1707,14 +1713,14 @@ fn render_sleep_frame(
                 }
                 let mut image = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
                     .map_err(|_| "reader frame buffer has the wrong size")?;
-                return render_sleep(
-                    SleepView::book_cover(
+                return render_app(
+                    AppFrame::Sleep(SleepView::book_cover(
                         library.title(book),
                         library.creator(book),
                         status.as_str(),
                         bitmap(workspaces.cover),
                         app.battery(),
-                    ),
+                    )),
                     &mut image,
                 )
                 .map_err(|_| "reader sleep frame render failed");
@@ -1722,8 +1728,8 @@ fn render_sleep_frame(
             SleepScreenSource::BuiltIn => {
                 let mut image = MonochromeImage::new(frame_size(), workspaces.frame_codec.frame())
                     .map_err(|_| "reader frame buffer has the wrong size")?;
-                return render_sleep(
-                    SleepView::built_in(status.as_str(), app.battery()),
+                return render_app(
+                    AppFrame::Sleep(SleepView::built_in(status.as_str(), app.battery())),
                     &mut image,
                 )
                 .map_err(|_| "reader sleep frame render failed");
@@ -1741,10 +1747,12 @@ fn render_error(
 ) -> Result<(), &'static str> {
     let mut image = MonochromeImage::new(frame_size(), frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
-    render_reader_error(
-        library.title(book),
-        "This EPUB or chapter could not be opened.",
-        app.battery(),
+    render_app(
+        AppFrame::Error {
+            book_title: library.title(book),
+            message: "This EPUB or chapter could not be opened.",
+            battery: app.battery(),
+        },
         &mut image,
     )
     .map_err(|_| "reader error frame render failed")

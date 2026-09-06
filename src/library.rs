@@ -1,21 +1,19 @@
-use core::{convert::Infallible, fmt::Write};
+use core::fmt::Write;
 
 use embedded_graphics::{
     Drawable, Pixel,
-    draw_target::DrawTargetExt,
-    geometry::{OriginDimensions, Point, Size as GraphicsSize},
-    mono_font::{MonoTextStyle, ascii::FONT_6X10, ascii::FONT_9X18_BOLD},
+    geometry::{Point, Size as GraphicsSize},
     pixelcolor::BinaryColor,
     prelude::{DrawTarget, Primitive},
     primitives::{PrimitiveStyle, Rectangle},
-    text::{Baseline, Text},
 };
+use embedded_layout::View;
 
 use crate::{
     app::LibraryState,
-    image::{MonochromeBitmap, MonochromeImage, Region, Size},
+    image::{MonochromeBitmap, MonochromeImage, Size},
     power::BatteryStatus,
-    ui::draw_app_bar,
+    ui::{AppBar, FixedText, FrameTarget, Label, Selection, TextRole, ui},
 };
 
 const FRAME_WIDTH: usize = 480;
@@ -80,74 +78,13 @@ pub fn render_shelf(
             books: books.len(),
         });
     }
+    for index in state.visible_range() {
+        if let Some(cover) = books[index].cover {
+            cover_scale(cover)?;
+        }
+    }
 
     target.clear_white();
-    draw_header(target, state, battery);
-
-    if books.is_empty() {
-        draw_empty_state(target);
-        return Ok(());
-    }
-
-    let page_start = state.visible_range().start;
-    for (visible_index, book_index) in state.visible_range().enumerate() {
-        let book = books[book_index];
-        let column = visible_index % 2;
-        let row = visible_index / 2;
-        let region = Region::new(
-            COVER_LEFT[column],
-            COVER_TOP[row],
-            Size::new(COVER_WIDTH, COVER_HEIGHT).expect("cover dimensions are non-zero"),
-        );
-        match book.cover {
-            Some(cover) => blit_cover(target, region, cover)?,
-            None => draw_cover_placeholder(target, region),
-        }
-        draw_cover_frame(
-            target,
-            region,
-            state.selected().is_some_and(|id| id.index() == book_index),
-        );
-    }
-
-    let selected = state
-        .selected()
-        .expect("a non-empty library always has a selected book");
-    draw_footer(target, books[selected.index()], state, page_start);
-    Ok(())
-}
-
-pub fn render_shelf_cover(
-    state: LibraryState,
-    book_index: usize,
-    cover: MonochromeBitmap<'_>,
-    target: &mut MonochromeImage<'_>,
-) -> Result<(), ShelfRenderError> {
-    if target.size() != Size::new(FRAME_WIDTH, FRAME_HEIGHT).unwrap() {
-        return Err(ShelfRenderError::WrongFrameSize {
-            actual: target.size(),
-        });
-    }
-    let range = state.visible_range();
-    if !range.contains(&book_index) {
-        return Ok(());
-    }
-    let visible_index = book_index - range.start;
-    let region = Region::new(
-        COVER_LEFT[visible_index % 2],
-        COVER_TOP[visible_index / 2],
-        Size::new(COVER_WIDTH, COVER_HEIGHT).unwrap(),
-    );
-    blit_cover(target, region, cover)?;
-    draw_cover_frame(
-        target,
-        region,
-        state.selected().is_some_and(|id| id.index() == book_index),
-    );
-    Ok(())
-}
-
-fn draw_header(target: &mut MonochromeImage<'_>, state: LibraryState, battery: BatteryStatus) {
     let mut section = FixedText::<48>::new();
     write!(
         section,
@@ -156,143 +93,265 @@ fn draw_header(target: &mut MonochromeImage<'_>, state: LibraryState, battery: B
         if state.book_count() == 1 { "" } else { "S" }
     )
     .ok();
-    draw_app_bar(target, section.as_str(), battery);
-}
-
-fn draw_empty_state(target: &mut MonochromeImage<'_>) {
     let mut display = FrameTarget::new(target);
-    let heading = MonoTextStyle::new(&FONT_9X18_BOLD, BinaryColor::On);
-    let body = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-    Text::with_baseline(
-        "NO BOOKS FOUND",
-        Point::new(166, 342),
-        heading,
-        Baseline::Top,
-    )
-    .draw(&mut display)
-    .ok();
-    Text::with_baseline(
-        "Add DRM-free EPUB files to /books",
-        Point::new(135, 382),
-        body,
-        Baseline::Top,
-    )
-    .draw(&mut display)
-    .ok();
-}
-
-fn blit_cover(
-    target: &mut MonochromeImage<'_>,
-    region: Region,
-    cover: MonochromeBitmap<'_>,
-) -> Result<(), ShelfRenderError> {
-    let source = cover.size();
-    let target_size = region.size();
-    let scale = if source == target_size {
-        1
-    } else if source.width().checked_mul(2) == Some(target_size.width())
-        && source.height().checked_mul(2) == Some(target_size.height())
-    {
-        2
-    } else {
-        return Err(ShelfRenderError::CoverSizeMismatch { actual: source });
-    };
-    for y in 0..target_size.height() {
-        for x in 0..target_size.width() {
-            target.set_pixel(
-                region.x() + x,
-                region.y() + y,
-                cover.pixel_is_black(x / scale, y / scale),
-            );
-        }
+    if books.is_empty() {
+        ui!(
+            AppBar::new(section.as_str(), battery),
+            Label::new("NO BOOKS FOUND", TextRole::Heading).at(Point::new(166, 342)),
+            Label::new("Add DRM-free EPUB files to /books", TextRole::Body)
+                .at(Point::new(135, 382)),
+        )
+        .draw(&mut display)
+        .ok();
+        return Ok(());
     }
+
+    let page_start = state.visible_range().start;
+    let selected = state
+        .selected()
+        .expect("a non-empty library always has a selected book");
+    ui!(
+        AppBar::new(section.as_str(), battery),
+        ShelfGrid::new(state, books),
+        ShelfFooter::new(books[selected.index()], state, page_start),
+    )
+    .draw(&mut display)
+    .ok();
     Ok(())
 }
 
-fn draw_cover_placeholder(target: &mut MonochromeImage<'_>, region: Region) {
-    let mut display = FrameTarget::new(target);
-    let rectangle = region_rectangle(region);
-    rectangle
-        .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
-        .draw(&mut display)
-        .ok();
-    let label = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-    Text::with_baseline(
-        "NO COVER",
-        Point::new(region.x() as i32 + 62, region.y() as i32 + 127),
-        label,
-        Baseline::Top,
-    )
-    .draw(&mut display)
-    .ok();
-}
-
-fn draw_cover_frame(target: &mut MonochromeImage<'_>, region: Region, selected: bool) {
-    let mut display = FrameTarget::new(target);
-    let width = if selected { 4 } else { 1 };
-    Rectangle::new(
-        Point::new(region.x() as i32 - 7, region.y() as i32 - 7),
-        GraphicsSize::new(
-            (region.size().width() + 14) as u32,
-            (region.size().height() + 14) as u32,
-        ),
-    )
-    .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, width))
-    .draw(&mut display)
-    .ok();
-}
-
-fn draw_footer(
-    target: &mut MonochromeImage<'_>,
-    book: ShelfBook<'_>,
+#[derive(Clone, Copy)]
+struct ShelfGrid<'a> {
     state: LibraryState,
-    page_start: usize,
-) {
-    let mut display = FrameTarget::new(target);
-    Rectangle::new(Point::new(18, 650), GraphicsSize::new(444, 2))
-        .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
-        .draw(&mut display)
-        .ok();
+    books: &'a [ShelfBook<'a>],
+    origin: Point,
+}
 
-    let title = MonoTextStyle::new(&FONT_9X18_BOLD, BinaryColor::On);
-    let title_clip = Rectangle::new(Point::new(18, 670), GraphicsSize::new(444, 42));
-    let (first_line, second_line) = split_title(book.title, 48);
-    Text::with_baseline(first_line, Point::new(18, 670), title, Baseline::Top)
-        .draw(&mut display.clipped(&title_clip))
-        .ok();
-    if let Some(second_line) = second_line {
-        Text::with_baseline(second_line, Point::new(18, 691), title, Baseline::Top)
-            .draw(&mut display.clipped(&title_clip))
-            .ok();
+impl<'a> ShelfGrid<'a> {
+    const fn new(state: LibraryState, books: &'a [ShelfBook<'a>]) -> Self {
+        Self {
+            state,
+            books,
+            origin: Point::zero(),
+        }
+    }
+}
+
+impl View for ShelfGrid<'_> {
+    fn translate_impl(&mut self, by: Point) {
+        self.origin += by;
     }
 
-    let body = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-    let creator_clip = Rectangle::new(Point::new(18, 723), GraphicsSize::new(340, 12));
-    Text::with_baseline(book.creator, Point::new(18, 723), body, Baseline::Top)
-        .draw(&mut display.clipped(&creator_clip))
-        .ok();
+    fn bounds(&self) -> Rectangle {
+        Rectangle::new(
+            self.origin + Point::new(25, 68),
+            GraphicsSize::new(438, 565),
+        )
+    }
+}
 
-    let mut page = FixedText::<48>::new();
-    let page_end = (page_start + 4).min(state.book_count());
-    write!(
-        page,
-        "{}-{} / {}",
-        page_start + 1,
-        page_end,
-        state.book_count()
-    )
-    .ok();
-    Text::with_baseline(page.as_str(), Point::new(394, 723), body, Baseline::Top)
-        .draw(&mut display)
+impl Drawable for ShelfGrid<'_> {
+    type Color = BinaryColor;
+    type Output = ();
+
+    fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
+    where
+        D: DrawTarget<Color = Self::Color>,
+    {
+        for (visible_index, book_index) in self.state.visible_range().enumerate() {
+            let tile = CoverTile::new(
+                self.origin
+                    + Point::new(
+                        COVER_LEFT[visible_index % 2] as i32,
+                        COVER_TOP[visible_index / 2] as i32,
+                    ),
+                self.books[book_index].cover,
+                Selection::from_selected(
+                    self.state
+                        .selected()
+                        .is_some_and(|selected| selected.index() == book_index),
+                ),
+            );
+            tile.draw(target)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CoverTile<'a> {
+    top_left: Point,
+    cover: Option<MonochromeBitmap<'a>>,
+    selection: Selection,
+}
+
+impl<'a> CoverTile<'a> {
+    const fn new(
+        top_left: Point,
+        cover: Option<MonochromeBitmap<'a>>,
+        selection: Selection,
+    ) -> Self {
+        Self {
+            top_left,
+            cover,
+            selection,
+        }
+    }
+}
+
+impl View for CoverTile<'_> {
+    fn translate_impl(&mut self, by: Point) {
+        self.top_left += by;
+    }
+
+    fn bounds(&self) -> Rectangle {
+        Rectangle::new(
+            self.top_left - Point::new(7, 7),
+            GraphicsSize::new((COVER_WIDTH + 14) as u32, (COVER_HEIGHT + 14) as u32),
+        )
+    }
+}
+
+impl Drawable for CoverTile<'_> {
+    type Color = BinaryColor;
+    type Output = ();
+
+    fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
+    where
+        D: DrawTarget<Color = Self::Color>,
+    {
+        match self.cover {
+            Some(cover) => {
+                let scale = if cover.size().width() == COVER_WIDTH {
+                    1
+                } else {
+                    2
+                };
+                target.draw_iter((0..COVER_HEIGHT).flat_map(|y| {
+                    (0..COVER_WIDTH).map(move |x| {
+                        Pixel(
+                            self.top_left + Point::new(x as i32, y as i32),
+                            if cover.pixel_is_black(x / scale, y / scale) {
+                                BinaryColor::On
+                            } else {
+                                BinaryColor::Off
+                            },
+                        )
+                    })
+                }))?;
+            }
+            None => {
+                Rectangle::new(
+                    self.top_left,
+                    GraphicsSize::new(COVER_WIDTH as u32, COVER_HEIGHT as u32),
+                )
+                .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+                .draw(target)?;
+                Label::new("NO COVER", TextRole::Metadata)
+                    .at(self.top_left + Point::new(62, 127))
+                    .draw(target)?;
+            }
+        }
+        self.bounds()
+            .into_styled(PrimitiveStyle::with_stroke(
+                BinaryColor::On,
+                self.selection.stroke(1, 4),
+            ))
+            .draw(target)
+            .map(|_| ())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ShelfFooter<'a> {
+    book: ShelfBook<'a>,
+    state: LibraryState,
+    page_start: usize,
+    top_left: Point,
+}
+
+impl<'a> ShelfFooter<'a> {
+    const fn new(book: ShelfBook<'a>, state: LibraryState, page_start: usize) -> Self {
+        Self {
+            book,
+            state,
+            page_start,
+            top_left: Point::new(18, 650),
+        }
+    }
+}
+
+impl View for ShelfFooter<'_> {
+    fn translate_impl(&mut self, by: Point) {
+        self.top_left += by;
+    }
+
+    fn bounds(&self) -> Rectangle {
+        Rectangle::new(self.top_left, GraphicsSize::new(444, 128))
+    }
+}
+
+impl Drawable for ShelfFooter<'_> {
+    type Color = BinaryColor;
+    type Output = ();
+
+    fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
+    where
+        D: DrawTarget<Color = Self::Color>,
+    {
+        Rectangle::new(self.top_left, GraphicsSize::new(444, 2))
+            .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+            .draw(target)?;
+        let (first_line, second_line) = split_title(self.book.title, 48);
+        Label::new(first_line, TextRole::Heading)
+            .at(self.top_left + Point::new(0, 20))
+            .clipped_to(GraphicsSize::new(444, 42))
+            .draw(target)?;
+        if let Some(second_line) = second_line {
+            Label::new(second_line, TextRole::Heading)
+                .at(self.top_left + Point::new(0, 41))
+                .clipped_to(GraphicsSize::new(444, 21))
+                .draw(target)?;
+        }
+        Label::new(self.book.creator, TextRole::Metadata)
+            .at(self.top_left + Point::new(0, 73))
+            .clipped_to(GraphicsSize::new(340, 12))
+            .draw(target)?;
+
+        let mut page = FixedText::<48>::new();
+        let page_end = (self.page_start + 4).min(self.state.book_count());
+        write!(
+            page,
+            "{}-{} / {}",
+            self.page_start + 1,
+            page_end,
+            self.state.book_count()
+        )
         .ok();
-    Text::with_baseline(
-        "ARROWS  MOVE     CONFIRM  OPEN     BACK  HOME",
-        Point::new(18, 768),
-        body,
-        Baseline::Top,
-    )
-    .draw(&mut display)
-    .ok();
+        Label::new(page.as_str(), TextRole::Metadata)
+            .at(self.top_left + Point::new(376, 73))
+            .draw(target)?;
+        Label::new(
+            "ARROWS  MOVE     CONFIRM  OPEN     BACK  HOME",
+            TextRole::CommandHint,
+        )
+        .at(self.top_left + Point::new(0, 118))
+        .draw(target)
+    }
+}
+
+fn cover_scale(cover: MonochromeBitmap<'_>) -> Result<usize, ShelfRenderError> {
+    let source = cover.size();
+    let full = Size::new(COVER_WIDTH, COVER_HEIGHT).unwrap();
+    if source == full {
+        return Ok(1);
+    }
+    if source.width().checked_mul(2) == Some(COVER_WIDTH)
+        && source.height().checked_mul(2) == Some(COVER_HEIGHT)
+    {
+        return Ok(2);
+    }
+    Err(ShelfRenderError::CoverSizeMismatch { actual: source })
 }
 
 fn split_title(title: &str, line_length: usize) -> (&str, Option<&str>) {
@@ -310,88 +369,6 @@ fn split_title(title: &str, line_length: usize) -> (&str, Option<&str>) {
         &title[..split],
         (!remainder.is_empty()).then_some(remainder),
     )
-}
-
-fn region_rectangle(region: Region) -> Rectangle {
-    Rectangle::new(
-        Point::new(region.x() as i32, region.y() as i32),
-        GraphicsSize::new(region.size().width() as u32, region.size().height() as u32),
-    )
-}
-
-struct FrameTarget<'target, 'bytes> {
-    image: &'target mut MonochromeImage<'bytes>,
-}
-
-impl<'target, 'bytes> FrameTarget<'target, 'bytes> {
-    fn new(image: &'target mut MonochromeImage<'bytes>) -> Self {
-        Self { image }
-    }
-}
-
-impl OriginDimensions for FrameTarget<'_, '_> {
-    fn size(&self) -> GraphicsSize {
-        GraphicsSize::new(
-            self.image.size().width() as u32,
-            self.image.size().height() as u32,
-        )
-    }
-}
-
-impl DrawTarget for FrameTarget<'_, '_> {
-    type Color = BinaryColor;
-    type Error = Infallible;
-
-    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
-    where
-        I: IntoIterator<Item = Pixel<Self::Color>>,
-    {
-        for Pixel(point, color) in pixels {
-            let Ok(x) = usize::try_from(point.x) else {
-                continue;
-            };
-            let Ok(y) = usize::try_from(point.y) else {
-                continue;
-            };
-            if x < self.image.size().width() && y < self.image.size().height() {
-                self.image.set_pixel(x, y, color == BinaryColor::On);
-            }
-        }
-        Ok(())
-    }
-}
-
-struct FixedText<const CAPACITY: usize> {
-    bytes: [u8; CAPACITY],
-    length: usize,
-}
-
-impl<const CAPACITY: usize> FixedText<CAPACITY> {
-    const fn new() -> Self {
-        Self {
-            bytes: [0; CAPACITY],
-            length: 0,
-        }
-    }
-
-    fn as_str(&self) -> &str {
-        core::str::from_utf8(&self.bytes[..self.length]).unwrap_or("")
-    }
-}
-
-impl<const CAPACITY: usize> Write for FixedText<CAPACITY> {
-    fn write_str(&mut self, value: &str) -> core::fmt::Result {
-        let end = self
-            .length
-            .checked_add(value.len())
-            .ok_or(core::fmt::Error)?;
-        if end > CAPACITY {
-            return Err(core::fmt::Error);
-        }
-        self.bytes[self.length..end].copy_from_slice(value.as_bytes());
-        self.length = end;
-        Ok(())
-    }
 }
 
 #[cfg(test)]

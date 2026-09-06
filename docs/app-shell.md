@@ -7,7 +7,7 @@ physical or web input
         |
         v
 App state machine
-  Home | Books | Files | Settings | Reader | Sleeping
+  Home | Books | Files | Settings | Loading | Reader | Image | Error | Sleeping
         |
         v
 platform effect runner
@@ -21,7 +21,11 @@ shared 480 x 800 monochrome renderer
 
 ## State ownership
 
-`App` owns navigation, selection, committed application preferences, settings drafts, reading checkpoints, sleep-source resolution, and the latest battery status. Platform adapters own files, EPUB bytes, custom-image bytes, display I/O, and battery sampling. Inputs mutate `App` and return typed effects. Renderers receive immutable views.
+`App` owns navigation, selection, committed application preferences, settings drafts, reading checkpoints, sleep-source resolution, and the latest battery status. Platform adapters own files, EPUB bytes, custom-image bytes, display I/O, and battery sampling. Inputs mutate `App` and return typed effects. A single `AppEffect::Render` requests the current `AppView`; platform adapters prepare its assets and pass a borrowed `AppFrame` to the shared renderer. Full-screen image decoding writes directly into the framebuffer before shared viewer controls are overlaid.
+
+`AppView::Loading` owns its pending chapter request. Cancel, sleep, success, and failure replace that state rather than synchronizing a separate optional request. Invalid chapter metadata leaves the request intact so the caller can report failure or supply corrected metadata. The X4 enters deep sleep only after the sleep frame has rendered and refreshed successfully.
+
+Settings navigation and rows use `SettingsItem::ALL`. Each item resolves its value from the current draft. The preview uses `CustomImagePreview::Missing`, `Invalid`, or `Ready { name, bitmap }`, so image readiness cannot contradict the available preview data.
 
 Books presents EPUB covers and metadata from `/books`. Files combines that EPUB catalog with the bounded image catalog under `/files`. Opening an EPUB enters the reader. Opening an image enters the full-screen viewer; Confirm selects it for sleep and Back returns to Files.
 

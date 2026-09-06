@@ -1,43 +1,22 @@
-use core::convert::Infallible;
-
 use embedded_graphics::{
     Drawable, Pixel,
-    draw_target::DrawTargetExt,
-    geometry::{OriginDimensions, Point, Size as GraphicsSize},
-    mono_font::{MonoTextStyle, ascii::FONT_6X10, ascii::FONT_9X18_BOLD},
+    geometry::{Point, Size as GraphicsSize},
     pixelcolor::BinaryColor,
     prelude::{DrawTarget, Primitive},
     primitives::{PrimitiveStyle, Rectangle},
-    text::{Baseline, Text},
 };
+use embedded_layout::View;
 
 use crate::{
     image::{MonochromeBitmap, MonochromeImage, Size},
     power::BatteryStatus,
-    ui::draw_app_bar,
+    ui::{AppBar, FrameTarget, Label, TextRole, ui},
 };
 
 const FRAME_WIDTH: usize = 480;
 const FRAME_HEIGHT: usize = 800;
 const COVER_WIDTH: usize = 176;
 const COVER_HEIGHT: usize = 264;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CustomSleepImageStatus {
-    Missing,
-    Ready,
-    Invalid,
-}
-
-impl CustomSleepImageStatus {
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Missing => "NO IMAGE",
-            Self::Ready => "IMAGE READY",
-            Self::Invalid => "INVALID IMAGE",
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SleepScreenContent<'a> {
@@ -126,111 +105,108 @@ pub fn render_sleep(
             }
         }
         SleepScreenContent::BookCover(cover) => {
-            let cover_size = Size::new(COVER_WIDTH, COVER_HEIGHT).unwrap();
-            if cover.size() != cover_size {
-                return Err(SleepRenderError::CoverSizeMismatch {
-                    actual: cover.size(),
-                });
-            }
-            render_composed(view, Some(cover), target);
+            validate_cover(cover)?;
+            render_composed(view, target);
         }
-        SleepScreenContent::BuiltIn => render_composed(view, None, target),
+        SleepScreenContent::BuiltIn => render_composed(view, target),
     }
     Ok(())
 }
 
-fn render_composed(
-    view: SleepView<'_>,
-    cover: Option<MonochromeBitmap<'_>>,
-    target: &mut MonochromeImage<'_>,
-) {
+fn render_composed(view: SleepView<'_>, target: &mut MonochromeImage<'_>) {
     target.clear_white();
-    draw_app_bar(target, "SLEEP", view.battery);
-    let small = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-    let heading = MonoTextStyle::new(&FONT_9X18_BOLD, BinaryColor::On);
+    ui!(AppBar::new("SLEEP", view.battery), SleepContent::new(view),)
+        .draw(&mut FrameTarget::new(target))
+        .ok();
+}
 
-    match cover {
-        Some(cover) => {
-            for y in 0..COVER_HEIGHT {
-                for x in 0..COVER_WIDTH {
-                    target.set_pixel(152 + x, 145 + y, cover.pixel_is_black(x, y));
-                }
-            }
-        }
-        None => {
-            let mut display = FrameTarget::new(target);
-            Rectangle::new(Point::new(92, 190), GraphicsSize::new(296, 160))
-                .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 3))
-                .draw(&mut display)
-                .ok();
-            Text::with_baseline("BREWTHINK", Point::new(178, 257), heading, Baseline::Top)
-                .draw(&mut display)
-                .ok();
-        }
+fn validate_cover(cover: MonochromeBitmap<'_>) -> Result<(), SleepRenderError> {
+    let source = cover.size();
+    if source == Size::new(COVER_WIDTH, COVER_HEIGHT).unwrap() {
+        return Ok(());
     }
-
-    let mut display = FrameTarget::new(target);
-    let title_clip = Rectangle::new(Point::new(32, 455), GraphicsSize::new(416, 42));
-    Text::with_baseline(view.title, Point::new(32, 455), heading, Baseline::Top)
-        .draw(&mut display.clipped(&title_clip))
-        .ok();
-    let creator_clip = Rectangle::new(Point::new(32, 510), GraphicsSize::new(416, 14));
-    Text::with_baseline(view.creator, Point::new(32, 510), small, Baseline::Top)
-        .draw(&mut display.clipped(&creator_clip))
-        .ok();
-    Text::with_baseline(view.status, Point::new(32, 660), small, Baseline::Top)
-        .draw(&mut display)
-        .ok();
-    Rectangle::new(Point::new(32, 700), GraphicsSize::new(416, 1))
-        .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
-        .draw(&mut display)
-        .ok();
-    Text::with_baseline(
-        "PRESS POWER TO WAKE",
-        Point::new(178, 724),
-        small,
-        Baseline::Top,
-    )
-    .draw(&mut display)
-    .ok();
+    Err(SleepRenderError::CoverSizeMismatch { actual: source })
 }
 
-struct FrameTarget<'target, 'bytes> {
-    image: &'target mut MonochromeImage<'bytes>,
+#[derive(Clone, Copy)]
+struct SleepContent<'a> {
+    view: SleepView<'a>,
+    origin: Point,
 }
 
-impl<'target, 'bytes> FrameTarget<'target, 'bytes> {
-    fn new(image: &'target mut MonochromeImage<'bytes>) -> Self {
-        Self { image }
+impl<'a> SleepContent<'a> {
+    const fn new(view: SleepView<'a>) -> Self {
+        Self {
+            view,
+            origin: Point::zero(),
+        }
     }
 }
 
-impl OriginDimensions for FrameTarget<'_, '_> {
-    fn size(&self) -> GraphicsSize {
-        GraphicsSize::new(
-            self.image.size().width() as u32,
-            self.image.size().height() as u32,
+impl View for SleepContent<'_> {
+    fn translate_impl(&mut self, by: Point) {
+        self.origin += by;
+    }
+
+    fn bounds(&self) -> Rectangle {
+        Rectangle::new(
+            self.origin + Point::new(32, 145),
+            GraphicsSize::new(416, 597),
         )
     }
 }
 
-impl DrawTarget for FrameTarget<'_, '_> {
+impl Drawable for SleepContent<'_> {
     type Color = BinaryColor;
-    type Error = Infallible;
+    type Output = ();
 
-    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
     where
-        I: IntoIterator<Item = Pixel<Self::Color>>,
+        D: DrawTarget<Color = Self::Color>,
     {
-        for Pixel(point, color) in pixels {
-            let (Ok(x), Ok(y)) = (usize::try_from(point.x), usize::try_from(point.y)) else {
-                continue;
-            };
-            if x < self.image.size().width() && y < self.image.size().height() {
-                self.image.set_pixel(x, y, color == BinaryColor::On);
-            }
+        let cover_top_left = self.origin + Point::new(152, 145);
+        if let SleepScreenContent::BookCover(cover) = self.view.content {
+            target.draw_iter((0..COVER_HEIGHT).flat_map(|y| {
+                (0..COVER_WIDTH).map(move |x| {
+                    Pixel(
+                        cover_top_left + Point::new(x as i32, y as i32),
+                        if cover.pixel_is_black(x, y) {
+                            BinaryColor::On
+                        } else {
+                            BinaryColor::Off
+                        },
+                    )
+                })
+            }))?;
+        } else {
+            Rectangle::new(
+                self.origin + Point::new(92, 190),
+                GraphicsSize::new(296, 160),
+            )
+            .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 3))
+            .draw(target)?;
+            Label::new("BREWTHINK", TextRole::Heading)
+                .at(self.origin + Point::new(178, 257))
+                .draw(target)?;
         }
-        Ok(())
+
+        Label::new(self.view.title, TextRole::Heading)
+            .at(self.origin + Point::new(32, 455))
+            .clipped_to(GraphicsSize::new(416, 42))
+            .draw(target)?;
+        Label::new(self.view.creator, TextRole::Body)
+            .at(self.origin + Point::new(32, 510))
+            .clipped_to(GraphicsSize::new(416, 14))
+            .draw(target)?;
+        Label::new(self.view.status, TextRole::Body)
+            .at(self.origin + Point::new(32, 660))
+            .draw(target)?;
+        Rectangle::new(self.origin + Point::new(32, 700), GraphicsSize::new(416, 1))
+            .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+            .draw(target)?;
+        Label::new("PRESS POWER TO WAKE", TextRole::CommandHint)
+            .at(self.origin + Point::new(178, 724))
+            .draw(target)
     }
 }
 

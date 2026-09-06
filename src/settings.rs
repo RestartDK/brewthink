@@ -1,10 +1,14 @@
 use embedded_graphics::{
-    Drawable,
+    Drawable, Pixel,
     geometry::{Point, Size as GraphicsSize},
     pixelcolor::BinaryColor,
-    prelude::Primitive,
+    prelude::{DrawTarget, Primitive},
     primitives::{PrimitiveStyle, Rectangle},
-    text::{Baseline, Text},
+};
+use embedded_layout::{
+    View,
+    layout::linear::{FixedMargin, LinearLayout},
+    view_group::Views,
 };
 
 use crate::{
@@ -12,14 +16,31 @@ use crate::{
     image::{MonochromeBitmap, MonochromeImage, Size},
     power::BatteryStatus,
     reader::{ReaderStyle, ReaderTheme},
-    sleep::CustomSleepImageStatus,
     ui::{
-        CONTENT_LEFT, CONTENT_WIDTH, FRAME_HEIGHT, FRAME_WIDTH, FrameTarget, brand_style,
-        chrome_style, draw_app_bar, draw_footer_rule,
+        AppBar, CONTENT_LEFT, CONTENT_WIDTH, CommandBar, FRAME_HEIGHT, FRAME_WIDTH, FrameTarget,
+        Label, Selection, SettingsRow, TextRole, ui,
     },
 };
 
-const ROW_TOPS: [i32; 5] = [92, 148, 204, 260, 326];
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CustomImagePreview<'a> {
+    Missing,
+    Invalid,
+    Ready {
+        name: &'a str,
+        bitmap: MonochromeBitmap<'a>,
+    },
+}
+
+impl CustomImagePreview<'_> {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Missing => "NO IMAGE",
+            Self::Invalid => "INVALID IMAGE",
+            Self::Ready { .. } => "IMAGE READY",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SettingsRenderError {
@@ -29,9 +50,7 @@ pub enum SettingsRenderError {
 pub fn render_settings(
     state: SettingsState,
     battery: BatteryStatus,
-    custom_image_status: CustomSleepImageStatus,
-    custom_image_name: Option<&str>,
-    custom_image_preview: Option<MonochromeBitmap<'_>>,
+    custom_image: CustomImagePreview<'_>,
     target: &mut MonochromeImage<'_>,
 ) -> Result<(), SettingsRenderError> {
     let expected =
@@ -43,180 +62,146 @@ pub fn render_settings(
     }
 
     target.clear_white();
-    draw_app_bar(target, "SETTINGS", battery);
-    let mut display = FrameTarget::new(target);
-    for (index, item) in SettingsItem::ALL.into_iter().enumerate() {
-        draw_row(&mut display, state, item, ROW_TOPS[index]);
+    let selected = state.selected();
+    let preferences = state.draft();
+    let mut row_views = SettingsItem::ALL.map(|item| {
+        SettingsRow::new(
+            item.label(),
+            item.value(preferences),
+            Selection::from_selected(item == selected),
+        )
+    });
+    let rows = LinearLayout::vertical(Views::new(&mut row_views))
+        .with_spacing(FixedMargin(10))
+        .arrange()
+        .translate(Point::new(CONTENT_LEFT, 92));
+    let screen = ui!(
+        AppBar::new("SETTINGS", battery),
+        rows,
+        SettingsPreview {
+            state,
+            custom_image,
+            top_left: Point::new(CONTENT_LEFT, 416),
+        },
+        CommandBar::new("UP/DOWN  ROW     LEFT/RIGHT  CHANGE     BACK  CANCEL").at(
+            CONTENT_LEFT,
+            CONTENT_WIDTH,
+            710,
+            730,
+        ),
+    );
+    screen.draw(&mut FrameTarget::new(target)).ok();
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct SettingsPreview<'a> {
+    state: SettingsState,
+    custom_image: CustomImagePreview<'a>,
+    top_left: Point,
+}
+
+impl View for SettingsPreview<'_> {
+    fn translate_impl(&mut self, by: Point) {
+        self.top_left += by;
     }
 
-    let sleep_preview = state.selected() == SettingsItem::SleepScreen;
-    let preview_heading = if sleep_preview {
-        match state.draft().sleep_screen() {
-            SleepScreenMode::Automatic => "SLEEP PREVIEW  COVER IN READER, CUSTOM ELSEWHERE",
-            SleepScreenMode::Custom => "SLEEP PREVIEW  CUSTOM IMAGE",
-            SleepScreenMode::BookCover => "SLEEP PREVIEW  CURRENT BOOK COVER",
-        }
-    } else {
-        "READER PREVIEW"
-    };
-    Text::with_baseline(
-        preview_heading,
-        Point::new(CONTENT_LEFT, 416),
-        chrome_style(),
-        Baseline::Top,
-    )
-    .draw(&mut display)
-    .ok();
-    Rectangle::new(
-        Point::new(CONTENT_LEFT, 440),
-        GraphicsSize::new(CONTENT_WIDTH, 238),
-    )
-    .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
-    .draw(&mut display)
-    .ok();
+    fn bounds(&self) -> Rectangle {
+        Rectangle::new(self.top_left, GraphicsSize::new(CONTENT_WIDTH, 262))
+    }
+}
 
-    if sleep_preview {
-        match state.draft().sleep_screen() {
-            SleepScreenMode::Custom | SleepScreenMode::Automatic => {
-                if let Some(preview) = custom_image_preview {
-                    draw_preview_bitmap(preview, target, 36, 456, 128, 192);
-                } else {
-                    Text::with_baseline(
-                        custom_image_status.label(),
-                        Point::new(48, 536),
-                        brand_style(),
-                        Baseline::Top,
-                    )
-                    .draw(&mut FrameTarget::new(target))
-                    .ok();
-                }
-                let message = match custom_image_status {
-                    CustomSleepImageStatus::Ready => custom_image_name.unwrap_or("IMAGE READY"),
-                    CustomSleepImageStatus::Missing => "Upload a JPG or PNG over USB",
-                    CustomSleepImageStatus::Invalid => "Replace the selected image",
-                };
-                Text::with_baseline(message, Point::new(190, 516), chrome_style(), Baseline::Top)
-                    .draw(&mut FrameTarget::new(target))
-                    .ok();
-                Text::with_baseline(
-                    custom_image_status.label(),
-                    Point::new(190, 548),
-                    brand_style(),
-                    Baseline::Top,
-                )
-                .draw(&mut FrameTarget::new(target))
-                .ok();
+impl Drawable for SettingsPreview<'_> {
+    type Color = BinaryColor;
+    type Output = ();
+
+    fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
+    where
+        D: DrawTarget<Color = Self::Color>,
+    {
+        let sleep_preview = self.state.selected() == SettingsItem::SleepScreen;
+        let mode = self.state.draft().sleep_screen();
+        let heading = if sleep_preview {
+            match mode {
+                SleepScreenMode::Automatic => "SLEEP PREVIEW  COVER IN READER, CUSTOM ELSEWHERE",
+                SleepScreenMode::Custom => "SLEEP PREVIEW  CUSTOM IMAGE",
+                SleepScreenMode::BookCover => "SLEEP PREVIEW  CURRENT BOOK COVER",
             }
-            SleepScreenMode::BookCover => draw_preview_text(
-                state,
-                [
-                    "The selected book cover is used",
-                    "while browsing or reading.",
-                    "Built-in is the safe fallback.",
-                ],
-                target,
-            ),
+        } else {
+            "READER PREVIEW"
+        };
+        Label::new(heading, TextRole::Body)
+            .at(self.top_left)
+            .draw(target)?;
+        Rectangle::new(
+            self.top_left + Point::new(0, 24),
+            GraphicsSize::new(CONTENT_WIDTH, 238),
+        )
+        .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+        .draw(target)?;
+
+        if sleep_preview && mode != SleepScreenMode::BookCover {
+            if let CustomImagePreview::Ready {
+                bitmap: preview, ..
+            } = self.custom_image
+            {
+                target.draw_iter((0..192).flat_map(|y| {
+                    (0..128).map(move |x| {
+                        Pixel(
+                            self.top_left + Point::new(18 + x as i32, 40 + y as i32),
+                            if preview.pixel_is_black(
+                                x * preview.size().width() / 128,
+                                y * preview.size().height() / 192,
+                            ) {
+                                BinaryColor::On
+                            } else {
+                                BinaryColor::Off
+                            },
+                        )
+                    })
+                }))?;
+            } else {
+                Label::new(self.custom_image.label(), TextRole::Heading)
+                    .at(self.top_left + Point::new(30, 120))
+                    .draw(target)?;
+            }
+            let message = match self.custom_image {
+                CustomImagePreview::Ready { name, .. } => name,
+                CustomImagePreview::Missing => "Upload a JPG or PNG over USB",
+                CustomImagePreview::Invalid => "Replace the selected image",
+            };
+            Label::new(message, TextRole::Body)
+                .at(self.top_left + Point::new(172, 100))
+                .draw(target)?;
+            return Label::new(self.custom_image.label(), TextRole::Heading)
+                .at(self.top_left + Point::new(172, 132))
+                .draw(target);
         }
-    } else {
-        draw_preview_text(
-            state,
+
+        let lines = if sleep_preview {
+            [
+                "The selected book cover is used",
+                "while browsing or reading.",
+                "Built-in is the safe fallback.",
+            ]
+        } else {
             [
                 "A reader should disappear",
                 "behind the words. Adjust",
                 "the text until it feels right.",
-            ],
-            target,
-        );
-    }
-
-    draw_footer_rule(target, 710);
-    Text::with_baseline(
-        "UP/DOWN  ROW     LEFT/RIGHT  CHANGE     BACK  CANCEL",
-        Point::new(CONTENT_LEFT, 730),
-        chrome_style(),
-        Baseline::Top,
-    )
-    .draw(&mut FrameTarget::new(target))
-    .ok();
-    Ok(())
-}
-
-fn draw_preview_text(state: SettingsState, lines: [&str; 3], target: &mut MonochromeImage<'_>) {
-    let theme = ReaderTheme::from_preferences(state.draft().reader());
-    for (index, line) in lines.into_iter().enumerate() {
-        theme
-            .draw_text(
+            ]
+        };
+        let theme = ReaderTheme::from_preferences(self.state.draft().reader());
+        let line_height = theme.line_height(ReaderStyle::Body) as i32;
+        for (index, line) in lines.into_iter().enumerate() {
+            theme.draw_text(
                 line,
                 ReaderStyle::Body,
-                Point::new(
-                    48,
-                    476 + index as i32 * theme.line_height(ReaderStyle::Body) as i32,
-                ),
-                &mut FrameTarget::new(target),
-            )
-            .ok();
-    }
-}
-
-fn draw_row(display: &mut FrameTarget<'_, '_>, state: SettingsState, item: SettingsItem, top: i32) {
-    let selected = state.selected() == item;
-    let height = if item == SettingsItem::Apply { 64 } else { 46 };
-    Rectangle::new(
-        Point::new(CONTENT_LEFT, top),
-        GraphicsSize::new(CONTENT_WIDTH, height),
-    )
-    .into_styled(PrimitiveStyle::with_stroke(
-        BinaryColor::On,
-        if selected { 3 } else { 1 },
-    ))
-    .draw(display)
-    .ok();
-
-    let label_style = if item == SettingsItem::Apply {
-        brand_style()
-    } else {
-        chrome_style()
-    };
-    Text::with_baseline(
-        item.label(),
-        Point::new(34, top + if item == SettingsItem::Apply { 20 } else { 14 }),
-        label_style,
-        Baseline::Top,
-    )
-    .draw(display)
-    .ok();
-
-    let value = match item {
-        SettingsItem::Font => state.draft().reader().font().label(),
-        SettingsItem::Size => state.draft().reader().size().label(),
-        SettingsItem::Spacing => state.draft().reader().spacing().label(),
-        SettingsItem::SleepScreen => state.draft().sleep_screen().label(),
-        SettingsItem::Apply => return,
-    };
-    Text::with_baseline(
-        value,
-        Point::new(330, top + 14),
-        chrome_style(),
-        Baseline::Top,
-    )
-    .draw(display)
-    .ok();
-}
-
-fn draw_preview_bitmap(
-    source: MonochromeBitmap<'_>,
-    target: &mut MonochromeImage<'_>,
-    left: usize,
-    top: usize,
-    width: usize,
-    height: usize,
-) {
-    for y in 0..height {
-        let source_y = y * source.size().height() / height;
-        for x in 0..width {
-            let source_x = x * source.size().width() / width;
-            target.set_pixel(left + x, top + y, source.pixel_is_black(source_x, source_y));
+                self.top_left + Point::new(30, 60 + index as i32 * line_height),
+                target,
+            )?;
         }
+        Ok(())
     }
 }
 
@@ -224,13 +209,12 @@ fn draw_preview_bitmap(
 mod tests {
     extern crate std;
 
-    use super::render_settings;
+    use super::{CustomImagePreview, render_settings};
     use crate::{
         app::{AppPreferences, SettingsItem, SettingsState},
         image::{MonochromeImage, Size},
         input::UsbState,
         power::BatteryStatus,
-        sleep::CustomSleepImageStatus,
     };
 
     #[test]
@@ -240,9 +224,7 @@ mod tests {
         render_settings(
             SettingsState::with_state(SettingsItem::SleepScreen, AppPreferences::default()),
             BatteryStatus::from_percent(82, UsbState::Disconnected),
-            CustomSleepImageStatus::Missing,
-            None,
-            None,
+            CustomImagePreview::Missing,
             &mut image,
         )
         .unwrap();

@@ -1,19 +1,16 @@
-use core::{convert::Infallible, fmt::Write};
+use core::fmt::Write;
 
 use embedded_graphics::{
-    Drawable, Pixel,
+    Drawable,
     draw_target::DrawTargetExt,
-    geometry::{OriginDimensions, Point, Size as GraphicsSize},
+    geometry::{Point, Size as GraphicsSize},
     mono_font::{
         MonoFont, MonoTextStyle,
-        ascii::{
-            FONT_4X6, FONT_6X9, FONT_6X10, FONT_6X12, FONT_7X13, FONT_7X14, FONT_9X18_BOLD,
-            FONT_10X20,
-        },
+        ascii::{FONT_4X6, FONT_6X9, FONT_6X12, FONT_7X13, FONT_7X14, FONT_9X18_BOLD, FONT_10X20},
     },
     pixelcolor::BinaryColor,
-    prelude::{DrawTarget, Primitive},
-    primitives::{PrimitiveStyle, Rectangle},
+    prelude::DrawTarget,
+    primitives::Rectangle,
     text::{Baseline, Text},
 };
 
@@ -28,8 +25,9 @@ use crate::{
     },
     image::{MonochromeImage, Size},
     power::BatteryStatus,
-    ui::draw_app_bar,
+    ui::{AppBar, CommandBar, FixedText, FrameTarget, Label, TextRole, ui},
 };
+use embedded_layout::View;
 
 pub const FRAME_WIDTH: usize = 480;
 pub const FRAME_HEIGHT: usize = 800;
@@ -274,59 +272,15 @@ pub fn render_reader(
         });
     }
 
-    target.clear_white();
-    draw_app_bar(target, view.book_title, view.battery);
-    let mut display = FrameTarget::new(target);
-    let chrome = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
     let theme = ReaderTheme::from_preferences(view.preferences);
-
-    let mut chapter = FixedText::<48>::new();
-    write!(
-        chapter,
-        "CHAPTER {}/{}",
-        view.location.spine_index() + 1,
-        view.location.spine_count()
-    )
-    .ok();
-    Text::with_baseline(chapter.as_str(), Point::new(378, 70), chrome, Baseline::Top)
-        .draw(&mut display)
-        .ok();
-
-    let chapter_clip = Rectangle::new(Point::new(18, 70), GraphicsSize::new(340, 15));
-    Text::with_baseline(
-        view.chapter_title,
-        Point::new(18, 70),
-        chrome,
-        Baseline::Top,
-    )
-    .draw(&mut display.clipped(&chapter_clip))
-    .ok();
-
-    let body_clip = Rectangle::new(
-        Point::new(18, BODY_TOP as i32),
-        GraphicsSize::new(BODY_WIDTH_PIXELS as u32, (BODY_BOTTOM - BODY_TOP) as u32),
-    );
-    let mut y = BODY_TOP;
+    let mut height = BODY_TOP;
     for line in view.lines {
-        let height = theme.line_height(line.style);
-        if y + height > BODY_BOTTOM {
+        height += theme.line_height(line.style);
+        if height > BODY_BOTTOM {
             return Err(ReaderRenderError::ContentExceedsPage);
         }
-        theme
-            .draw_text(
-                line.text,
-                line.style,
-                Point::new(line.style.left() as i32, y as i32),
-                &mut display.clipped(&body_clip),
-            )
-            .ok();
-        y += height;
     }
 
-    Rectangle::new(Point::new(18, 748), GraphicsSize::new(444, 1))
-        .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
-        .draw(&mut display)
-        .ok();
     let mut progress = FixedText::<64>::new();
     write!(
         progress,
@@ -335,13 +289,13 @@ pub fn render_reader(
         view.location.page_count()
     )
     .ok();
-    Text::with_baseline(
-        progress.as_str(),
-        Point::new(18, 768),
-        chrome,
-        Baseline::Top,
+    target.clear_white();
+    ui!(
+        AppBar::new(view.book_title, view.battery),
+        ReaderContent::new(view, theme),
+        CommandBar::new(progress.as_str()),
     )
-    .draw(&mut display)
+    .draw(&mut FrameTarget::new(target))
     .ok();
     Ok(())
 }
@@ -360,100 +314,90 @@ pub fn render_reader_error(
         });
     }
     target.clear_white();
-    draw_app_bar(target, book_title, battery);
-    let mut display = FrameTarget::new(target);
-    let body = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-    let heading = MonoTextStyle::new(&FONT_9X18_BOLD, BinaryColor::On);
-    Text::with_baseline("BOOK ERROR", Point::new(176, 280), heading, Baseline::Top)
-        .draw(&mut display)
-        .ok();
-    let title_clip = Rectangle::new(Point::new(48, 330), GraphicsSize::new(384, 22));
-    Text::with_baseline(book_title, Point::new(48, 330), body, Baseline::Top)
-        .draw(&mut display.clipped(&title_clip))
-        .ok();
-    let message_clip = Rectangle::new(Point::new(48, 380), GraphicsSize::new(384, 48));
-    Text::with_baseline(message, Point::new(48, 380), body, Baseline::Top)
-        .draw(&mut display.clipped(&message_clip))
-        .ok();
-    Text::with_baseline(
-        "PRESS BACK TO RETURN TO LIBRARY",
-        Point::new(144, 500),
-        body,
-        Baseline::Top,
+    ui!(
+        AppBar::new(book_title, battery),
+        Label::new("BOOK ERROR", TextRole::Error).at(Point::new(176, 280)),
+        Label::new(book_title, TextRole::Body)
+            .at(Point::new(48, 330))
+            .clipped_to(GraphicsSize::new(384, 22)),
+        Label::new(message, TextRole::Body)
+            .at(Point::new(48, 380))
+            .clipped_to(GraphicsSize::new(384, 48)),
+        Label::new("PRESS BACK TO RETURN TO LIBRARY", TextRole::Body).at(Point::new(144, 500)),
     )
-    .draw(&mut display)
+    .draw(&mut FrameTarget::new(target))
     .ok();
     Ok(())
 }
 
-struct FrameTarget<'target, 'bytes> {
-    image: &'target mut MonochromeImage<'bytes>,
+#[derive(Clone, Copy)]
+struct ReaderContent<'a> {
+    view: ReaderView<'a>,
+    theme: ReaderTheme,
+    origin: Point,
 }
 
-impl<'target, 'bytes> FrameTarget<'target, 'bytes> {
-    fn new(image: &'target mut MonochromeImage<'bytes>) -> Self {
-        Self { image }
+impl<'a> ReaderContent<'a> {
+    const fn new(view: ReaderView<'a>, theme: ReaderTheme) -> Self {
+        Self {
+            view,
+            theme,
+            origin: Point::zero(),
+        }
     }
 }
 
-impl OriginDimensions for FrameTarget<'_, '_> {
-    fn size(&self) -> GraphicsSize {
-        GraphicsSize::new(
-            self.image.size().width() as u32,
-            self.image.size().height() as u32,
+impl View for ReaderContent<'_> {
+    fn translate_impl(&mut self, by: Point) {
+        self.origin += by;
+    }
+
+    fn bounds(&self) -> Rectangle {
+        Rectangle::new(
+            self.origin + Point::new(18, 70),
+            GraphicsSize::new(BODY_WIDTH_PIXELS as u32, (BODY_BOTTOM - 70) as u32),
         )
     }
 }
 
-impl DrawTarget for FrameTarget<'_, '_> {
+impl Drawable for ReaderContent<'_> {
     type Color = BinaryColor;
-    type Error = Infallible;
+    type Output = ();
 
-    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
     where
-        I: IntoIterator<Item = Pixel<Self::Color>>,
+        D: DrawTarget<Color = Self::Color>,
     {
-        for Pixel(point, color) in pixels {
-            let (Ok(x), Ok(y)) = (usize::try_from(point.x), usize::try_from(point.y)) else {
-                continue;
-            };
-            if x < self.image.size().width() && y < self.image.size().height() {
-                self.image.set_pixel(x, y, color == BinaryColor::On);
-            }
+        let mut chapter = FixedText::<48>::new();
+        write!(
+            chapter,
+            "CHAPTER {}/{}",
+            self.view.location.spine_index() + 1,
+            self.view.location.spine_count()
+        )
+        .ok();
+        Label::new(chapter.as_str(), TextRole::Metadata)
+            .at(self.origin + Point::new(378, 70))
+            .draw(target)?;
+        Label::new(self.view.chapter_title, TextRole::Metadata)
+            .at(self.origin + Point::new(18, 70))
+            .clipped_to(GraphicsSize::new(340, 15))
+            .draw(target)?;
+
+        let body_clip = Rectangle::new(
+            self.origin + Point::new(18, BODY_TOP as i32),
+            GraphicsSize::new(BODY_WIDTH_PIXELS as u32, (BODY_BOTTOM - BODY_TOP) as u32),
+        );
+        let mut y = BODY_TOP;
+        for line in self.view.lines {
+            self.theme.draw_text(
+                line.text,
+                line.style,
+                self.origin + Point::new(line.style.left() as i32, y as i32),
+                &mut target.clipped(&body_clip),
+            )?;
+            y += self.theme.line_height(line.style);
         }
-        Ok(())
-    }
-}
-
-struct FixedText<const CAPACITY: usize> {
-    bytes: [u8; CAPACITY],
-    length: usize,
-}
-
-impl<const CAPACITY: usize> FixedText<CAPACITY> {
-    const fn new() -> Self {
-        Self {
-            bytes: [0; CAPACITY],
-            length: 0,
-        }
-    }
-
-    fn as_str(&self) -> &str {
-        core::str::from_utf8(&self.bytes[..self.length]).unwrap_or("")
-    }
-}
-
-impl<const CAPACITY: usize> Write for FixedText<CAPACITY> {
-    fn write_str(&mut self, value: &str) -> core::fmt::Result {
-        let end = self
-            .length
-            .checked_add(value.len())
-            .ok_or(core::fmt::Error)?;
-        if end > CAPACITY {
-            return Err(core::fmt::Error);
-        }
-        self.bytes[self.length..end].copy_from_slice(value.as_bytes());
-        self.length = end;
         Ok(())
     }
 }
@@ -469,7 +413,7 @@ mod tests {
         render_reader,
     };
     use crate::{
-        app::{App, AppEffect, AppInput, ReaderPreferences},
+        app::{App, AppEffect, AppInput, AppView, ReaderPreferences},
         image::{MonochromeImage, Size},
     };
 
@@ -488,9 +432,11 @@ mod tests {
         let mut app = App::new(1);
         app.input(AppInput::Confirm);
         app.input(AppInput::Confirm);
-        let AppEffect::RenderReader(location) = app.chapter_loaded(1, 2).unwrap() else {
-            panic!("reader effect expected");
+        assert_eq!(app.chapter_loaded(1, 2).unwrap(), AppEffect::Render);
+        let AppView::Reader(session) = app.view() else {
+            panic!("reader view expected");
         };
+        let location = session.location();
         let lines = [
             ReaderLine::new("Chapter one", ReaderStyle::Heading),
             ReaderLine::new("Readable words survive reflow.", ReaderStyle::Body),
@@ -521,9 +467,11 @@ mod tests {
         let mut app = App::new(1);
         app.input(AppInput::Confirm);
         app.input(AppInput::Confirm);
-        let AppEffect::RenderReader(location) = app.chapter_loaded(1, 1).unwrap() else {
-            panic!("reader effect expected");
+        assert_eq!(app.chapter_loaded(1, 1).unwrap(), AppEffect::Render);
+        let AppView::Reader(session) = app.view() else {
+            panic!("reader view expected");
         };
+        let location = session.location();
         let line = ReaderLine::new("line", ReaderStyle::Body);
         let theme = super::ReaderTheme::from_preferences(app.reader_preferences());
         let lines = vec![line; (BODY_BOTTOM - BODY_TOP) / theme.line_height(line.style()) + 1];
