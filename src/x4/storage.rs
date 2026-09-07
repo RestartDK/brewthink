@@ -182,12 +182,19 @@ impl<'d> X4StorageHardware<'d> {
     }
 
     pub fn display_bus(&mut self) -> Result<X4SharedDisplayBus<'_, 'd>, X4StorageError> {
+        self.display_bus_at(DISPLAY_FREQUENCY)
+    }
+
+    pub(super) fn display_bus_at(
+        &mut self,
+        frequency: Rate,
+    ) -> Result<X4SharedDisplayBus<'_, 'd>, X4StorageError> {
         self.shared
             .spi_mut()
             .map_err(X4StorageError::Spi)?
             .apply_config(
                 &Config::default()
-                    .with_frequency(DISPLAY_FREQUENCY)
+                    .with_frequency(frequency)
                     .with_mode(Mode::_0),
             )
             .map_err(X4StorageError::Configuration)?;

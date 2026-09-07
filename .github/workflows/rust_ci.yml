@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -31,7 +31,7 @@ jobs:
           - name: host tests
             command: test --locked --lib --target x86_64-unknown-linux-gnu
           - name: reader and EPUB tests
-            command: test --locked --lib --features device-reader,sd-write-diagnostic,epub --target x86_64-unknown-linux-gnu
+            command: test --locked --lib --features device-reader,sd-write-diagnostic,epub,grayscale-bench --target x86_64-unknown-linux-gnu
           - name: device control tests
             command: test --locked --features device-control --bin device-control --target x86_64-unknown-linux-gnu
           - name: host tools Clippy
@@ -44,6 +44,8 @@ jobs:
             command: clippy --locked --lib --bin brewthink --features sd-diagnostic -- -D warnings
           - name: reader Clippy
             command: clippy --locked --lib --bin brewthink --features device-reader -- -D warnings
+          - name: grayscale bench Clippy
+            command: clippy --locked --lib --bin brewthink --features grayscale-bench -- -D warnings
           - name: WASM library
             command: check --locked --lib --target wasm32-unknown-unknown
     steps:
@@ -52,6 +54,21 @@ jobs:
         run: rustup show active-toolchain
       - uses: Swatinem/rust-cache@v2
       - run: cargo ${{ matrix.command }}
+
+  host-protocol:
+    name: Host protocol and image tools
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install the pinned Rust toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --target x86_64-unknown-linux-gnu --features device-control,host-image-tools --bin device-control --bin prepare-image
+      - run: python3 -m unittest discover -s tools -p 'test_*.py' -v
+        env:
+          DEVICE_CONTROL_BIN: target/x86_64-unknown-linux-gnu/debug/device-control
+          PREPARE_IMAGE_BIN: target/x86_64-unknown-linux-gnu/debug/prepare-image
 
   firmware:
     name: Firmware images and reader stack

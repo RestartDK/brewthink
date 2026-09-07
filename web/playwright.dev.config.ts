@@ -1,7 +1,10 @@
 import { defineConfig } from "@playwright/test";
 import production from "./playwright.config";
 
-const port = Number(process.env.BREWTHINK_TEST_PORT ?? 4174);
+const port = Number(process.env.BREWTHINK_WEB_PORT ?? "4174");
+if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  throw new Error("BREWTHINK_WEB_PORT must be a TCP port");
+}
 const baseURL = `http://127.0.0.1:${port}`;
 
 export default defineConfig({

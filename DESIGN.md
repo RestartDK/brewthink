@@ -2,7 +2,7 @@
 
 ## Device scene
 
-A reader uses Brewthink one-handed on a slow 480 × 800 monochrome e-paper display. Controls must remain obvious without animation, color, touch, or frequent refreshes.
+A reader uses Brewthink one-handed on a slow 480 × 800 e-paper display. Text and controls remain black and white. Images use four logical shades. Controls must remain obvious without animation, color, touch, or frequent refreshes.
 
 ## Frame
 
@@ -56,4 +56,4 @@ Home, Books, Files, Settings, Reader, Image, Error, and Sleep renders are pinned
 
 ## Simulator
 
-The browser shell remains a restrained developer tool around the exact packed X4 frame. Its warm neutral palette and system typography do not replace or reinterpret the device UI. The canvas always displays the same 48,000-byte frame consumed by the SSD1677 backend.
+The browser shell remains a restrained developer tool around the exact packed X4 frame. Its warm neutral palette and system typography do not replace or reinterpret the device UI. The canvas decodes the same 96,000-byte, two-plane logical frame used by the X4 reader. Intermediate shades interpolate the existing ink and paper colors. This represents intended tones, not calibrated panel reflectance.

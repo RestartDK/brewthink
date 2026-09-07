@@ -7,7 +7,7 @@ use std::{
     env,
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
-    os::unix::fs::OpenOptionsExt,
+    os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
     path::{Path, PathBuf},
     process::ExitCode,
     thread,
@@ -15,7 +15,7 @@ use std::{
 };
 
 use brewthink::{
-    image::{MonochromeImage, RenderOptions, ScaleMode, Size},
+    image::{PackedBitmap, PackedImage, PixelDepth, RenderOptions, ScaleMode, Size},
     image_decoder::{
         ImageFormat, JpegDecodeWorkspace, PngDecodeWorkspace, decode_jpeg, decode_png,
     },
@@ -62,6 +62,7 @@ struct Arguments {
 
 #[derive(Debug, Eq, PartialEq)]
 struct ScreenHeader {
+    depth: PixelDepth,
     width: u32,
     height: u32,
     length: usize,
@@ -114,6 +115,18 @@ impl ControlStream {
 struct Connection {
     file: File,
     stream: ControlStream,
+    original_termios: Option<libc::termios>,
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        if let Some(original) = &self.original_termios {
+            // SAFETY: the connection still owns its open descriptor and the saved attributes.
+            unsafe {
+                libc::tcsetattr(self.file.as_raw_fd(), libc::TCSANOW, original);
+            }
+        }
+    }
 }
 
 impl Connection {
@@ -123,9 +136,28 @@ impl Connection {
             .read(true)
             .write(writable)
             .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY);
+        let file = options.open(path)?;
+        let mut original = std::mem::MaybeUninit::<libc::termios>::uninit();
+        // SAFETY: tcgetattr initializes the output on success; the descriptor is owned here.
+        if unsafe { libc::tcgetattr(file.as_raw_fd(), original.as_mut_ptr()) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: tcgetattr succeeded above.
+        let original = unsafe { original.assume_init() };
+        let mut raw = original;
+        // SAFETY: cfmakeraw and tcsetattr receive valid termios storage and the live descriptor.
+        unsafe {
+            libc::cfmakeraw(&mut raw);
+            raw.c_cc[libc::VMIN] = 1;
+            raw.c_cc[libc::VTIME] = 0;
+            if libc::tcsetattr(file.as_raw_fd(), libc::TCSANOW, &raw) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
         Ok(Self {
-            file: options.open(path)?,
+            file,
             stream: ControlStream::default(),
+            original_termios: Some(original),
         })
     }
 
@@ -424,7 +456,9 @@ fn capture_screen(connection: &mut Connection, output: &Path, timeout: Duration)
         }
     };
 
-    if (header.width, header.height, header.length) != (FRAME_WIDTH, FRAME_HEIGHT, FRAME_BYTES) {
+    if (header.width, header.height, header.length)
+        != (FRAME_WIDTH, FRAME_HEIGHT, FRAME_BYTES * header.depth.bits())
+    {
         return Err(invalid_data(format!(
             "unexpected frame shape {}x{}, {} bytes",
             header.width, header.height, header.length
@@ -458,7 +492,7 @@ fn capture_screen(connection: &mut Connection, output: &Path, timeout: Duration)
     }
     fs::write(
         output,
-        encode_frame_png(&frame, header.width, header.height)?,
+        encode_frame_png(&frame, header.width, header.height, header.depth)?,
     )?;
     println!(
         "host: wrote {} frame_crc32={actual_crc:08x}",
@@ -622,7 +656,7 @@ fn device_image_name(input: &Path, format: ImageFormat) -> io::Result<ImageName>
 
 fn validate_device_image(format: ImageFormat, encoded: &[u8]) -> io::Result<()> {
     let mut frame = vec![0xFF; FRAME_BYTES];
-    let mut target = MonochromeImage::new(
+    let mut target = PackedImage::monochrome(
         Size::new(FRAME_WIDTH as usize, FRAME_HEIGHT as usize).unwrap(),
         &mut frame,
     )
@@ -684,6 +718,8 @@ fn parse_screen_header(line: &[u8]) -> io::Result<ScreenHeader> {
     let mut height = None;
     let mut length = None;
     let mut crc32 = None;
+    let mut depth = PixelDepth::Monochrome;
+    let mut encoding = None;
 
     for field in fields.split_whitespace() {
         let Some((name, value)) = field.split_once('=') else {
@@ -693,6 +729,11 @@ fn parse_screen_header(line: &[u8]) -> io::Result<ScreenHeader> {
             "width" => width = Some(parse_decimal(value, "width")?),
             "height" => height = Some(parse_decimal(value, "height")?),
             "bytes" => length = Some(parse_decimal(value, "bytes")?),
+            "bpp" => {
+                depth = PixelDepth::from_bits(parse_decimal(value, "bpp")?)
+                    .ok_or_else(|| invalid_data("unsupported screen pixel depth"))?
+            }
+            "encoding" => encoding = Some(value),
             "crc32" => {
                 crc32 = Some(
                     u32::from_str_radix(value, 16)
@@ -703,7 +744,13 @@ fn parse_screen_header(line: &[u8]) -> io::Result<ScreenHeader> {
         }
     }
 
+    if encoding.is_some_and(|value| value != "planar")
+        || (depth != PixelDepth::Monochrome && encoding != Some("planar"))
+    {
+        return Err(invalid_data("unsupported or missing screen encoding"));
+    }
     Ok(ScreenHeader {
+        depth,
         width: width.ok_or_else(|| invalid_data("screen width is missing"))?,
         height: height.ok_or_else(|| invalid_data("screen height is missing"))?,
         length: length.ok_or_else(|| invalid_data("screen byte length is missing"))?,
@@ -720,16 +767,20 @@ where
         .map_err(|_| invalid_data(format!("invalid screen {name}")))
 }
 
-fn encode_frame_png(frame: &[u8], width: u32, height: u32) -> io::Result<Vec<u8>> {
-    let row_bytes = width as usize / 8;
-    if !width.is_multiple_of(8) || frame.len() != row_bytes * height as usize {
-        return Err(invalid_data("frame dimensions do not match packed bytes"));
-    }
-
+fn encode_frame_png(
+    frame: &[u8],
+    width: u32,
+    height: u32,
+    depth: PixelDepth,
+) -> io::Result<Vec<u8>> {
+    let size = Size::new(width as usize, height as usize)
+        .map_err(|_| invalid_data("invalid frame dimensions"))?;
+    let bitmap = PackedBitmap::new(size, depth, frame)
+        .map_err(|_| invalid_data("frame dimensions do not match packed bytes"))?;
     let mut pixels = Vec::with_capacity(width as usize * height as usize);
-    for byte in frame {
-        for bit in (0..8).rev() {
-            pixels.push(if byte & (1 << bit) == 0 { 0 } else { 255 });
+    for y in 0..size.height() {
+        for x in 0..size.width() {
+            pixels.push(bitmap.luma(x, y));
         }
     }
     let mut png = Vec::new();
@@ -816,7 +867,7 @@ mod tests {
         ScreenHeader, device_image_name, encode_frame_png, parse_arguments, parse_screen_header,
         transcode_image, validate_device_image,
     };
-    use brewthink::{image_decoder::ImageFormat, input::Button};
+    use brewthink::{image::PixelDepth, image_decoder::ImageFormat, input::Button};
 
     #[test]
     fn parses_cli_commands() {
@@ -885,12 +936,54 @@ mod tests {
             )
             .unwrap(),
             ScreenHeader {
+                depth: PixelDepth::Monochrome,
                 width: FRAME_WIDTH,
                 height: FRAME_HEIGHT,
                 length: FRAME_BYTES,
                 crc32: 0xe4e7_3d7c,
             }
         );
+    }
+
+    #[test]
+    fn screenshots_decode_all_gray_planes_and_reject_unknown_formats() {
+        use brewthink::image::{PackedImage, Size};
+        let depth = PixelDepth::Four;
+
+        let bpp = depth.bits();
+        let header = format!(
+            "BREWCTL/1 SCREEN width=480 height=800 bytes={} crc32=12345678 bpp={bpp} encoding=planar",
+            FRAME_BYTES * bpp
+        );
+        assert_eq!(parse_screen_header(header.as_bytes()).unwrap().depth, depth);
+        let size = Size::new(8, 1).unwrap();
+        let mut bytes = vec![0; bpp];
+        let mut image = PackedImage::new(size, depth, &mut bytes).unwrap();
+        let expected: Vec<_> = (0..8)
+            .map(|x| {
+                ((x % usize::from(depth.levels())) * 255 / usize::from(depth.levels() - 1)) as u8
+            })
+            .collect();
+        for (x, &luma) in expected.iter().enumerate() {
+            image.set_luma(x, 0, luma);
+        }
+        let png = encode_frame_png(&bytes, 8, 1, depth).unwrap();
+        assert_eq!(
+            image::load_from_memory(&png).unwrap().to_luma8().as_raw(),
+            &expected
+        );
+
+        for suffix in [
+            "bpp=3 encoding=planar",
+            "bpp=4 encoding=planar",
+            "bpp=2",
+            "bpp=3 encoding=interleaved",
+        ] {
+            let header = format!(
+                "BREWCTL/1 SCREEN width=480 height=800 bytes=96000 crc32=12345678 {suffix}"
+            );
+            assert!(parse_screen_header(header.as_bytes()).is_err());
+        }
     }
 
     #[test]
@@ -949,7 +1042,8 @@ mod tests {
     #[test]
     fn encodes_packed_pixels_as_png() {
         let frame = vec![0xaa; FRAME_BYTES];
-        let encoded = encode_frame_png(&frame, FRAME_WIDTH, FRAME_HEIGHT).unwrap();
+        let encoded =
+            encode_frame_png(&frame, FRAME_WIDTH, FRAME_HEIGHT, PixelDepth::Monochrome).unwrap();
         let decoded = image::ImageReader::new(Cursor::new(encoded))
             .with_guessed_format()
             .unwrap()
