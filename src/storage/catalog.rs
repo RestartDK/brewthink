@@ -818,10 +818,20 @@ where
         if scratch.is_empty() {
             return Err(AppDataError::IncompleteWrite);
         }
-        let transaction = self.read_records(
-            &[AppDataFile::ImageUploadTransaction],
-            ImageUploadRecord::decode,
-        )?;
+        let mut bytes = [0; IMAGE_UPLOAD_RECORD_BYTES];
+        let transaction = match self.read_file(AppDataFile::ImageUploadTransaction, &mut bytes) {
+            Ok(0)
+            | Err(AppDataError::DirectoryMissing | AppDataError::Filesystem(Error::NotFound)) => {
+                None
+            }
+            Ok(IMAGE_UPLOAD_RECORD_BYTES) => {
+                Some(ImageUploadRecord::decode(bytes).ok_or(AppDataError::InvalidMetadata)?)
+            }
+            Ok(_) | Err(AppDataError::Filesystem(Error::NotEnoughSpace)) => {
+                return Err(AppDataError::InvalidMetadata);
+            }
+            Err(error) => return Err(error),
+        };
         if let Some(transaction) = transaction {
             match self.verify_named_file(
                 transaction.name,
@@ -839,8 +849,8 @@ where
                 }
                 Err(error) => return Err(error),
             }
-            self.delete_if_present(AppDataFile::ImageUploadTransaction)?;
         }
+        self.delete_if_present(AppDataFile::ImageUploadTransaction)?;
         self.delete_if_present(AppDataFile::ImageUploadTemp)
     }
 

@@ -1078,7 +1078,12 @@ fn load_library(
 ) -> Result<(), ()> {
     info!("reader startup: book directory scan start");
     let catalog = workspaces.content.prepare_catalog();
-    store.scan_into(catalog).map_err(|_| ())?;
+    store.scan_into(catalog).map_err(|error| {
+        info!(
+            "reader book catalog unavailable: {}",
+            defmt::Display2Format(&error)
+        );
+    })?;
     info!(
         "reader startup: book directory scan done entries={}",
         catalog.len()
@@ -1143,8 +1148,15 @@ fn load_library(
 
 fn load_images(store: &DeviceStore, images: &mut DeviceImages) {
     *images = DeviceImages::empty();
-    let Ok(catalog) = store.app_data().scan_images::<MAX_DEVICE_IMAGES>() else {
-        return;
+    let catalog = match store.app_data().scan_images::<MAX_DEVICE_IMAGES>() {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            info!(
+                "reader image catalog unavailable: {}",
+                defmt::Display2Format(&error)
+            );
+            return;
+        }
     };
     for image in catalog.images() {
         images.files[images.length] = Some(image);
