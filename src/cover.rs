@@ -1,5 +1,5 @@
 use crate::{
-    image::{MonochromeBitmap, MonochromeImage, RenderOptions, ScaleMode, Size},
+    image::{Dither, PackedBitmap, PackedImage, READER_DEPTH, RenderOptions, ScaleMode, Size},
     image_decoder::{ImageDecodeError, decode_jpeg, decode_png},
 };
 
@@ -7,10 +7,11 @@ pub use crate::image_decoder::{JpegDecodeWorkspace, PngDecodeWorkspace};
 
 pub const COVER_WIDTH: usize = 176;
 pub const COVER_HEIGHT: usize = 264;
-pub const COVER_BYTES: usize = COVER_WIDTH * COVER_HEIGHT / 8;
+pub const COVER_BYTES: usize = COVER_WIDTH * COVER_HEIGHT / 8 * READER_DEPTH.bits();
 pub const SHELF_COVER_WIDTH: usize = COVER_WIDTH / 2;
 pub const SHELF_COVER_HEIGHT: usize = COVER_HEIGHT / 2;
-pub const SHELF_COVER_BYTES: usize = SHELF_COVER_WIDTH * SHELF_COVER_HEIGHT / 8;
+pub const SHELF_COVER_BYTES: usize =
+    SHELF_COVER_WIDTH * SHELF_COVER_HEIGHT / 8 * READER_DEPTH.bits();
 pub const MAX_ENCODED_COVER_BYTES: u32 = 128 * 1024;
 
 pub type CoverDecodeWorkspace = PngDecodeWorkspace;
@@ -25,14 +26,14 @@ pub fn decode_png_cover(
     output: &mut [u8; COVER_BYTES],
     workspace: &mut CoverDecodeWorkspace,
 ) -> Result<(), CoverDecodeError> {
-    let mut target = MonochromeImage::new(cover_size(), output)
+    let mut target = PackedImage::new(cover_size(), READER_DEPTH, output)
         .expect("the packed cover buffer has the exact required length");
     decode_png(
         encoded,
         &mut target,
         RenderOptions {
             scale: ScaleMode::Cover,
-            ..RenderOptions::default()
+            dither: Dither::None,
         },
         workspace,
     )?;
@@ -44,48 +45,48 @@ pub fn decode_jpeg_cover(
     output: &mut [u8; COVER_BYTES],
     workspace: &mut JpegDecodeWorkspace,
 ) -> Result<(), CoverDecodeError> {
-    let mut target = MonochromeImage::new(cover_size(), output)
+    let mut target = PackedImage::new(cover_size(), READER_DEPTH, output)
         .expect("the packed cover buffer has the exact required length");
     decode_jpeg(
         encoded,
         &mut target,
         RenderOptions {
             scale: ScaleMode::Cover,
-            ..RenderOptions::default()
+            dither: Dither::None,
         },
         workspace,
     )?;
     Ok(())
 }
 
-pub fn bitmap(bytes: &[u8; COVER_BYTES]) -> MonochromeBitmap<'_> {
-    MonochromeBitmap::new(cover_size(), bytes)
+pub fn bitmap(bytes: &[u8; COVER_BYTES]) -> PackedBitmap<'_> {
+    PackedBitmap::new(cover_size(), READER_DEPTH, bytes)
         .expect("the packed cover buffer has the exact required length")
 }
 
-pub fn downsample_cover(source: &[u8; COVER_BYTES], output: &mut [u8; SHELF_COVER_BYTES]) {
+pub fn downsample_cover(source: &[u8; COVER_BYTES], output: &mut [u8]) {
     let source = bitmap(source);
-    output.fill(0xFF);
+    let size = Size::new(SHELF_COVER_WIDTH, SHELF_COVER_HEIGHT).expect("nonzero shelf cover size");
+    let mut target =
+        PackedImage::new(size, READER_DEPTH, output).expect("exact shelf cover storage");
     for y in 0..SHELF_COVER_HEIGHT {
         for x in 0..SHELF_COVER_WIDTH {
             let source_x = x * 2;
             let source_y = y * 2;
-            let black = usize::from(source.pixel_is_black(source_x, source_y))
-                + usize::from(source.pixel_is_black(source_x + 1, source_y))
-                + usize::from(source.pixel_is_black(source_x, source_y + 1))
-                + usize::from(source.pixel_is_black(source_x + 1, source_y + 1));
-            if black >= 2 {
-                let pixel = y * SHELF_COVER_WIDTH + x;
-                output[pixel / 8] &= !(0x80 >> (pixel % 8));
-            }
+            let sum = u16::from(source.luma(source_x, source_y))
+                + u16::from(source.luma(source_x + 1, source_y))
+                + u16::from(source.luma(source_x, source_y + 1))
+                + u16::from(source.luma(source_x + 1, source_y + 1));
+            target.set_luma(x, y, ((sum + 2) / 4) as u8);
         }
     }
 }
 
-pub fn shelf_bitmap(bytes: &[u8; SHELF_COVER_BYTES]) -> MonochromeBitmap<'_> {
-    MonochromeBitmap::new(
+pub fn shelf_bitmap(bytes: &[u8]) -> PackedBitmap<'_> {
+    PackedBitmap::new(
         Size::new(SHELF_COVER_WIDTH, SHELF_COVER_HEIGHT)
             .expect("the shelf cover dimensions are non-zero"),
+        READER_DEPTH,
         bytes,
     )
     .expect("the shelf cover buffer matches its dimensions")
@@ -128,33 +129,41 @@ mod tests {
     }
 
     #[test]
-    fn shelf_downsampling_counts_all_four_pixels_including_ties() {
-        for mask in 0u8..16 {
+    fn shelf_downsampling_averages_all_four_pixels_including_ties() {
+        let levels = super::READER_DEPTH.levels();
+        for pattern in 0..usize::from(levels).pow(4) {
             let mut source = [0xff; COVER_BYTES];
-            for (bit, (byte, flag)) in [(0, 0x80), (0, 0x40), (22, 0x80), (22, 0x40)]
-                .into_iter()
-                .enumerate()
-            {
-                if mask & (1 << bit) != 0 {
-                    source[byte] &= !flag;
-                }
+            let mut image =
+                super::PackedImage::new(super::cover_size(), super::READER_DEPTH, &mut source)
+                    .unwrap();
+            let mut sum = 0;
+            for (index, (x, y)) in [(0, 0), (1, 0), (0, 1), (1, 1)].into_iter().enumerate() {
+                let level = ((pattern >> (index * super::READER_DEPTH.bits()))
+                    & usize::from(levels - 1)) as u8;
+                sum += level;
+                image.set_luma(x, y, level * (255 / (levels - 1)));
             }
             let mut output = [0; super::SHELF_COVER_BYTES];
             super::downsample_cover(&source, &mut output);
-            assert_eq!(
-                output[0],
-                if mask.count_ones() >= 2 { 0x7f } else { 0xff },
-                "mask {mask:04b}"
-            );
-            assert!(output[1..].iter().all(|byte| *byte == 0xff));
+            let result = super::shelf_bitmap(&output);
+            assert_eq!(result.level(0, 0), (sum + 2) / 4, "pattern {pattern}");
+            for y in 0..super::SHELF_COVER_HEIGHT {
+                for x in 0..super::SHELF_COVER_WIDTH {
+                    if (x, y) != (0, 0) {
+                        assert_eq!(result.level(x, y), levels - 1);
+                    }
+                }
+            }
         }
     }
 
     #[test]
     fn bounds_encoded_cover_work() {
-        assert!(encoded_cover_fits(128 * 1024, 128 * 1024));
-        assert!(!encoded_cover_fits(128 * 1024 + 1, 1));
-        assert!(!encoded_cover_fits(1, 128 * 1024 + 1));
+        let limit = super::MAX_ENCODED_COVER_BYTES;
+        assert_eq!(limit, 128 * 1024);
+        assert!(encoded_cover_fits(limit, limit));
+        assert!(!encoded_cover_fits(limit + 1, 1));
+        assert!(!encoded_cover_fits(1, limit + 1));
     }
 
     #[test]
@@ -205,12 +214,14 @@ mod tests {
         let mut package_scratch = Box::new(DevicePackageScratch::new());
         let mut inflater = Box::new(InflateWorkspace::new());
         let mut resource = Box::new([0; MAX_DEVICE_RESOURCE_BYTES]);
+        let mut publication = Box::new(crate::device_epub::DevicePublication::new());
         let book = DeviceEpub::open(
             SliceFile(encoded),
             &mut zip_scratch,
             &mut package_scratch,
             &mut inflater,
             &mut resource,
+            &mut publication,
         )
         .unwrap();
         let length = book

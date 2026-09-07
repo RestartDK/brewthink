@@ -1,7 +1,7 @@
 use embedded_graphics::{
     Drawable, Pixel,
     geometry::{Point, Size as GraphicsSize},
-    pixelcolor::BinaryColor,
+    pixelcolor::Gray8,
     prelude::{DrawTarget, Primitive},
     primitives::{PrimitiveStyle, Rectangle},
 };
@@ -13,7 +13,7 @@ use embedded_layout::{
 
 use crate::{
     app::{SettingsItem, SettingsState, SleepScreenMode},
-    image::{MonochromeBitmap, MonochromeImage, Size},
+    image::{PackedBitmap, PackedImage, Size},
     power::BatteryStatus,
     reader::{ReaderStyle, ReaderTheme},
     ui::{
@@ -28,7 +28,7 @@ pub enum CustomImagePreview<'a> {
     Invalid,
     Ready {
         name: &'a str,
-        bitmap: MonochromeBitmap<'a>,
+        bitmap: PackedBitmap<'a>,
     },
 }
 
@@ -51,7 +51,7 @@ pub fn render_settings(
     state: SettingsState,
     battery: BatteryStatus,
     custom_image: CustomImagePreview<'_>,
-    target: &mut MonochromeImage<'_>,
+    target: &mut PackedImage<'_>,
 ) -> Result<(), SettingsRenderError> {
     let expected =
         Size::new(FRAME_WIDTH, FRAME_HEIGHT).expect("settings frame dimensions are non-zero");
@@ -112,7 +112,7 @@ impl View for SettingsPreview<'_> {
 }
 
 impl Drawable for SettingsPreview<'_> {
-    type Color = BinaryColor;
+    type Color = Gray8;
     type Output = ();
 
     fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
@@ -137,7 +137,7 @@ impl Drawable for SettingsPreview<'_> {
             self.top_left + Point::new(0, 24),
             GraphicsSize::new(CONTENT_WIDTH, 238),
         )
-        .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+        .into_styled(PrimitiveStyle::with_stroke(Gray8::new(0), 1))
         .draw(target)?;
 
         if sleep_preview && mode != SleepScreenMode::BookCover {
@@ -149,14 +149,10 @@ impl Drawable for SettingsPreview<'_> {
                     (0..128).map(move |x| {
                         Pixel(
                             self.top_left + Point::new(18 + x as i32, 40 + y as i32),
-                            if preview.pixel_is_black(
+                            Gray8::new(preview.luma(
                                 x * preview.size().width() / 128,
                                 y * preview.size().height() / 192,
-                            ) {
-                                BinaryColor::On
-                            } else {
-                                BinaryColor::Off
-                            },
+                            )),
                         )
                     })
                 }))?;
@@ -212,7 +208,7 @@ mod tests {
     use super::{CustomImagePreview, render_settings};
     use crate::{
         app::{AppPreferences, SettingsItem, SettingsState},
-        image::{MonochromeImage, Size},
+        image::{PackedImage, Size},
         input::UsbState,
         power::BatteryStatus,
     };
@@ -220,7 +216,7 @@ mod tests {
     #[test]
     fn renders_every_settings_row_and_missing_image_state() {
         let mut bytes = std::vec![0xFF; 480 * 800 / 8];
-        let mut image = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        let mut image = PackedImage::monochrome(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
         render_settings(
             SettingsState::with_state(SettingsItem::SleepScreen, AppPreferences::default()),
             BatteryStatus::from_percent(82, UsbState::Disconnected),

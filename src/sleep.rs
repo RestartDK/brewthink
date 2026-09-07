@@ -1,14 +1,14 @@
 use embedded_graphics::{
     Drawable, Pixel,
     geometry::{Point, Size as GraphicsSize},
-    pixelcolor::BinaryColor,
+    pixelcolor::Gray8,
     prelude::{DrawTarget, Primitive},
     primitives::{PrimitiveStyle, Rectangle},
 };
 use embedded_layout::View;
 
 use crate::{
-    image::{MonochromeBitmap, MonochromeImage, Size},
+    image::{PackedBitmap, PackedImage, Size},
     power::BatteryStatus,
     ui::{AppBar, FrameTarget, Label, TextRole, ui},
 };
@@ -20,8 +20,8 @@ const COVER_HEIGHT: usize = 264;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SleepScreenContent<'a> {
-    CustomImage(MonochromeBitmap<'a>),
-    BookCover(MonochromeBitmap<'a>),
+    CustomImage(PackedBitmap<'a>),
+    BookCover(PackedBitmap<'a>),
     BuiltIn,
 }
 
@@ -35,7 +35,7 @@ pub struct SleepView<'a> {
 }
 
 impl<'a> SleepView<'a> {
-    pub const fn custom(image: MonochromeBitmap<'a>, battery: BatteryStatus) -> Self {
+    pub const fn custom(image: PackedBitmap<'a>, battery: BatteryStatus) -> Self {
         Self {
             title: "",
             creator: "",
@@ -49,7 +49,7 @@ impl<'a> SleepView<'a> {
         title: &'a str,
         creator: &'a str,
         status: &'a str,
-        cover: MonochromeBitmap<'a>,
+        cover: PackedBitmap<'a>,
         battery: BatteryStatus,
     ) -> Self {
         Self {
@@ -81,7 +81,7 @@ pub enum SleepRenderError {
 
 pub fn render_sleep(
     view: SleepView<'_>,
-    target: &mut MonochromeImage<'_>,
+    target: &mut PackedImage<'_>,
 ) -> Result<(), SleepRenderError> {
     let frame_size =
         Size::new(FRAME_WIDTH, FRAME_HEIGHT).expect("sleep frame dimensions are non-zero");
@@ -100,7 +100,7 @@ pub fn render_sleep(
             }
             for y in 0..FRAME_HEIGHT {
                 for x in 0..FRAME_WIDTH {
-                    target.set_pixel(x, y, image.pixel_is_black(x, y));
+                    target.set_luma(x, y, image.luma(x, y));
                 }
             }
         }
@@ -113,14 +113,14 @@ pub fn render_sleep(
     Ok(())
 }
 
-fn render_composed(view: SleepView<'_>, target: &mut MonochromeImage<'_>) {
+fn render_composed(view: SleepView<'_>, target: &mut PackedImage<'_>) {
     target.clear_white();
     ui!(AppBar::new("SLEEP", view.battery), SleepContent::new(view),)
         .draw(&mut FrameTarget::new(target))
         .ok();
 }
 
-fn validate_cover(cover: MonochromeBitmap<'_>) -> Result<(), SleepRenderError> {
+fn validate_cover(cover: PackedBitmap<'_>) -> Result<(), SleepRenderError> {
     let source = cover.size();
     if source == Size::new(COVER_WIDTH, COVER_HEIGHT).unwrap() {
         return Ok(());
@@ -157,7 +157,7 @@ impl View for SleepContent<'_> {
 }
 
 impl Drawable for SleepContent<'_> {
-    type Color = BinaryColor;
+    type Color = Gray8;
     type Output = ();
 
     fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
@@ -170,11 +170,7 @@ impl Drawable for SleepContent<'_> {
                 (0..COVER_WIDTH).map(move |x| {
                     Pixel(
                         cover_top_left + Point::new(x as i32, y as i32),
-                        if cover.pixel_is_black(x, y) {
-                            BinaryColor::On
-                        } else {
-                            BinaryColor::Off
-                        },
+                        Gray8::new(cover.luma(x, y)),
                     )
                 })
             }))?;
@@ -183,7 +179,7 @@ impl Drawable for SleepContent<'_> {
                 self.origin + Point::new(92, 190),
                 GraphicsSize::new(296, 160),
             )
-            .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 3))
+            .into_styled(PrimitiveStyle::with_stroke(Gray8::new(0), 3))
             .draw(target)?;
             Label::new("BREWTHINK", TextRole::Heading)
                 .at(self.origin + Point::new(178, 257))
@@ -202,7 +198,7 @@ impl Drawable for SleepContent<'_> {
             .at(self.origin + Point::new(32, 660))
             .draw(target)?;
         Rectangle::new(self.origin + Point::new(32, 700), GraphicsSize::new(416, 1))
-            .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+            .into_styled(PrimitiveStyle::with_fill(Gray8::new(0)))
             .draw(target)?;
         Label::new("PRESS POWER TO WAKE", TextRole::CommandHint)
             .at(self.origin + Point::new(178, 724))
@@ -218,16 +214,16 @@ mod tests {
 
     use super::{SleepRenderError, SleepView, render_sleep};
     use crate::{
-        image::{MonochromeBitmap, MonochromeImage, Size},
+        image::{PackedBitmap, PackedImage, Size},
         power::BatteryStatus,
     };
 
     #[test]
     fn renders_book_cover_and_builtin_frames() {
         let cover_bytes = vec![0xAA; 176 * 264 / 8];
-        let cover = MonochromeBitmap::new(Size::new(176, 264).unwrap(), &cover_bytes).unwrap();
+        let cover = PackedBitmap::monochrome(Size::new(176, 264).unwrap(), &cover_bytes).unwrap();
         let mut bytes = vec![0xFF; 48_000];
-        let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        let mut frame = PackedImage::monochrome(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
 
         render_sleep(
             SleepView::book_cover(
@@ -242,7 +238,7 @@ mod tests {
         .unwrap();
         assert!(bytes.iter().any(|byte| *byte != 0xFF));
 
-        let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        let mut frame = PackedImage::monochrome(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
         render_sleep(
             SleepView::built_in("HOME POSITION SAVED", BatteryStatus::default()),
             &mut frame,
@@ -254,9 +250,9 @@ mod tests {
     #[test]
     fn custom_image_requires_an_exact_frame() {
         let image_bytes = vec![0xAA; 176 * 264 / 8];
-        let image = MonochromeBitmap::new(Size::new(176, 264).unwrap(), &image_bytes).unwrap();
+        let image = PackedBitmap::monochrome(Size::new(176, 264).unwrap(), &image_bytes).unwrap();
         let mut bytes = vec![0xFF; 48_000];
-        let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        let mut frame = PackedImage::monochrome(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
 
         assert_eq!(
             render_sleep(

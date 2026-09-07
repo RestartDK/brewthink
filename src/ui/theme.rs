@@ -1,6 +1,6 @@
 use embedded_graphics::{
     mono_font::{MonoTextStyle, ascii::FONT_6X10, ascii::FONT_9X18_BOLD},
-    pixelcolor::BinaryColor,
+    pixelcolor::Gray8,
 };
 
 pub const FRAME_WIDTH: usize = 480;
@@ -24,13 +24,13 @@ pub enum TextRole {
     Error,
 }
 
-pub const fn text_style(role: TextRole) -> MonoTextStyle<'static, BinaryColor> {
+pub const fn text_style(role: TextRole) -> MonoTextStyle<'static, Gray8> {
     match role {
         TextRole::Brand | TextRole::Heading | TextRole::ControlLabel | TextRole::Error => {
-            MonoTextStyle::new(&FONT_9X18_BOLD, BinaryColor::On)
+            MonoTextStyle::new(&FONT_9X18_BOLD, Gray8::new(0))
         }
         TextRole::Section | TextRole::Body | TextRole::Metadata | TextRole::CommandHint => {
-            MonoTextStyle::new(&FONT_6X10, BinaryColor::On)
+            MonoTextStyle::new(&FONT_6X10, Gray8::new(0))
         }
     }
 }

@@ -8,7 +8,8 @@ import "./style.css";
 
 const WIDTH = 480;
 const HEIGHT = 800;
-const FRAME_BYTES = 48_000;
+const PLANE_BYTES = 48_000;
+type BitsPerPixel = 1 | 2;
 const MAX_EPUB_BYTES = 32 * 1024 * 1024;
 const APP_PREFERENCES_KEY = "brewthink.reader-preferences.v1";
 const SLEEP_IMAGE_KEY = "brewthink.sleep-image.v1";
@@ -43,6 +44,8 @@ type ViewState =
       pageCount: number;
       chapter: number;
       chapterCount: number;
+      payloadBytes: number;
+      bitsPerPixel: BitsPerPixel;
     }>
   | Readonly<{ kind: "error"; sourceName: string; message: string }>;
 
@@ -145,7 +148,7 @@ app.innerHTML = `
           </div>
           <div>
             <dt>Frame payload</dt>
-            <dd>${integerFormat.format(FRAME_BYTES)} bytes</dd>
+            <dd id="frame-payload">Waiting for frame</dd>
           </div>
         </dl>
       </section>
@@ -199,6 +202,7 @@ const selectedCreator = requireElement("#selected-creator");
 const selectionPosition = requireElement("#selection-position");
 const pageLabel = requireElement("#page-label");
 const viewPosition = requireElement("#view-position");
+const framePayload = requireElement("#frame-payload");
 const resetButton = requireButton("#reset-library");
 const confirmButton = requireButton("#confirm-selection");
 const confirmLabel = requireElement("#confirm-label");
@@ -355,7 +359,9 @@ function renderApplication(): void {
   let frame: RenderedFrame | null = null;
   try {
     frame = library.render();
-    drawFrame(context, frame.pixels());
+    const bitsPerPixel = parsePixelDepth(frame.bits_per_pixel);
+    const pixels = frame.pixels();
+    drawFrame(context, pixels, bitsPerPixel);
     viewState = {
       kind: "ready",
       sourceName,
@@ -368,6 +374,8 @@ function renderApplication(): void {
       pageCount: frame.page_count,
       chapter: frame.chapter,
       chapterCount: frame.chapter_count,
+      payloadBytes: pixels.length,
+      bitsPerPixel,
     };
   } catch (error: unknown) {
     viewState = { kind: "error", sourceName, message: errorMessage(error) };
@@ -409,7 +417,7 @@ function renderState(): void {
       placeholderTitle.textContent = "Building frame";
       placeholderDetail.textContent = viewState.sourceName;
       fileSummary.textContent = viewState.sourceName;
-      message.textContent = "Parsing bounded content and packing a 1-bit frame…";
+      message.textContent = "Parsing bounded content and packing the frame…";
       break;
     case "error":
       placeholder.hidden = false;
@@ -433,6 +441,7 @@ function renderState(): void {
 }
 
 function renderReadyState(state: Extract<ViewState, { kind: "ready" }>): void {
+  framePayload.textContent = `${integerFormat.format(state.payloadBytes)} bytes · ${2 ** state.bitsPerPixel} tones`;
   switch (state.screen) {
     case "home":
       previewHeading.textContent = "Home menu · 480 × 800";
@@ -595,23 +604,32 @@ function drawPaper(target: CanvasRenderingContext2D): void {
   target.fillRect(0, 0, WIDTH, HEIGHT);
 }
 
-function drawFrame(target: CanvasRenderingContext2D, pixels: Uint8Array): void {
-  if (pixels.length !== FRAME_BYTES) {
-    throw new Error(`Expected ${FRAME_BYTES} frame bytes, received ${pixels.length}`);
-  }
+function parsePixelDepth(value: number): BitsPerPixel {
+  if (value === 1 || value === 2) return value;
+  throw new Error(`Unsupported pixel depth: ${value}`);
+}
 
+function drawFrame(target: CanvasRenderingContext2D, pixels: Uint8Array, bitsPerPixel: BitsPerPixel): void {
+  const expectedBytes = PLANE_BYTES * bitsPerPixel;
+  if (pixels.length !== expectedBytes) {
+    throw new Error(`Expected ${expectedBytes} frame bytes, received ${pixels.length}`);
+  }
+  const planes = new DataView(pixels.buffer, pixels.byteOffset, pixels.byteLength);
   const imageData = target.createImageData(WIDTH, HEIGHT);
-  let destination = 0;
-  for (const byte of pixels) {
-    for (let bit = 7; bit >= 0; bit -= 1) {
-      const isWhite = (byte & (1 << bit)) !== 0;
-      const shade = isWhite ? PAPER_SHADE : INK_SHADE;
-      imageData.data[destination] = shade.red;
-      imageData.data[destination + 1] = shade.green;
-      imageData.data[destination + 2] = shade.blue;
-      imageData.data[destination + 3] = 255;
-      destination += 4;
+  const maximum = (1 << bitsPerPixel) - 1;
+  for (let pixel = 0; pixel < WIDTH * HEIGHT; pixel += 1) {
+    let level = 0;
+    for (let plane = 0; plane < bitsPerPixel; plane += 1) {
+      if ((planes.getUint8(plane * PLANE_BYTES + Math.floor(pixel / 8)) & (0x80 >> (pixel % 8))) !== 0) {
+        level |= 1 << plane;
+      }
     }
+    const lightness = level / maximum;
+    const destination = pixel * 4;
+    imageData.data[destination] = Math.round(INK_SHADE.red + (PAPER_SHADE.red - INK_SHADE.red) * lightness);
+    imageData.data[destination + 1] = Math.round(INK_SHADE.green + (PAPER_SHADE.green - INK_SHADE.green) * lightness);
+    imageData.data[destination + 2] = Math.round(INK_SHADE.blue + (PAPER_SHADE.blue - INK_SHADE.blue) * lightness);
+    imageData.data[destination + 3] = 255;
   }
   target.putImageData(imageData, 0, 0);
 }

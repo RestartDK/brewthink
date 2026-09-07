@@ -3,7 +3,7 @@ use core::fmt::Write;
 use embedded_graphics::{
     Drawable, Pixel,
     geometry::{Point, Size as GraphicsSize},
-    pixelcolor::BinaryColor,
+    pixelcolor::Gray8,
     prelude::{DrawTarget, Primitive},
     primitives::{PrimitiveStyle, Rectangle},
 };
@@ -11,7 +11,7 @@ use embedded_layout::View;
 
 use crate::{
     app::LibraryState,
-    image::{MonochromeBitmap, MonochromeImage, Size},
+    image::{PackedBitmap, PackedImage, Size},
     power::BatteryStatus,
     ui::{AppBar, FixedText, FrameTarget, Label, Selection, TextRole, ui},
 };
@@ -27,15 +27,11 @@ const COVER_TOP: [usize; 2] = [75, 362];
 pub struct ShelfBook<'a> {
     title: &'a str,
     creator: &'a str,
-    cover: Option<MonochromeBitmap<'a>>,
+    cover: Option<PackedBitmap<'a>>,
 }
 
 impl<'a> ShelfBook<'a> {
-    pub const fn new(
-        title: &'a str,
-        creator: &'a str,
-        cover: Option<MonochromeBitmap<'a>>,
-    ) -> Self {
+    pub const fn new(title: &'a str, creator: &'a str, cover: Option<PackedBitmap<'a>>) -> Self {
         Self {
             title,
             creator,
@@ -63,7 +59,7 @@ pub fn render_shelf(
     state: LibraryState,
     books: &[ShelfBook<'_>],
     battery: BatteryStatus,
-    target: &mut MonochromeImage<'_>,
+    target: &mut PackedImage<'_>,
 ) -> Result<(), ShelfRenderError> {
     let expected =
         Size::new(FRAME_WIDTH, FRAME_HEIGHT).expect("the X4 frame has non-zero dimensions");
@@ -151,7 +147,7 @@ impl View for ShelfGrid<'_> {
 }
 
 impl Drawable for ShelfGrid<'_> {
-    type Color = BinaryColor;
+    type Color = Gray8;
     type Output = ();
 
     fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
@@ -181,16 +177,12 @@ impl Drawable for ShelfGrid<'_> {
 #[derive(Clone, Copy)]
 struct CoverTile<'a> {
     top_left: Point,
-    cover: Option<MonochromeBitmap<'a>>,
+    cover: Option<PackedBitmap<'a>>,
     selection: Selection,
 }
 
 impl<'a> CoverTile<'a> {
-    const fn new(
-        top_left: Point,
-        cover: Option<MonochromeBitmap<'a>>,
-        selection: Selection,
-    ) -> Self {
+    const fn new(top_left: Point, cover: Option<PackedBitmap<'a>>, selection: Selection) -> Self {
         Self {
             top_left,
             cover,
@@ -213,7 +205,7 @@ impl View for CoverTile<'_> {
 }
 
 impl Drawable for CoverTile<'_> {
-    type Color = BinaryColor;
+    type Color = Gray8;
     type Output = ();
 
     fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
@@ -231,11 +223,7 @@ impl Drawable for CoverTile<'_> {
                     (0..COVER_WIDTH).map(move |x| {
                         Pixel(
                             self.top_left + Point::new(x as i32, y as i32),
-                            if cover.pixel_is_black(x / scale, y / scale) {
-                                BinaryColor::On
-                            } else {
-                                BinaryColor::Off
-                            },
+                            Gray8::new(cover.luma(x / scale, y / scale)),
                         )
                     })
                 }))?;
@@ -245,7 +233,7 @@ impl Drawable for CoverTile<'_> {
                     self.top_left,
                     GraphicsSize::new(COVER_WIDTH as u32, COVER_HEIGHT as u32),
                 )
-                .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+                .into_styled(PrimitiveStyle::with_stroke(Gray8::new(0), 1))
                 .draw(target)?;
                 Label::new("NO COVER", TextRole::Metadata)
                     .at(self.top_left + Point::new(62, 127))
@@ -254,7 +242,7 @@ impl Drawable for CoverTile<'_> {
         }
         self.bounds()
             .into_styled(PrimitiveStyle::with_stroke(
-                BinaryColor::On,
+                Gray8::new(0),
                 self.selection.stroke(1, 4),
             ))
             .draw(target)
@@ -292,7 +280,7 @@ impl View for ShelfFooter<'_> {
 }
 
 impl Drawable for ShelfFooter<'_> {
-    type Color = BinaryColor;
+    type Color = Gray8;
     type Output = ();
 
     fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
@@ -300,7 +288,7 @@ impl Drawable for ShelfFooter<'_> {
         D: DrawTarget<Color = Self::Color>,
     {
         Rectangle::new(self.top_left, GraphicsSize::new(444, 2))
-            .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+            .into_styled(PrimitiveStyle::with_fill(Gray8::new(0)))
             .draw(target)?;
         let (first_line, second_line) = split_title(self.book.title, 48);
         Label::new(first_line, TextRole::Heading)
@@ -340,7 +328,7 @@ impl Drawable for ShelfFooter<'_> {
     }
 }
 
-fn cover_scale(cover: MonochromeBitmap<'_>) -> Result<usize, ShelfRenderError> {
+fn cover_scale(cover: PackedBitmap<'_>) -> Result<usize, ShelfRenderError> {
     let source = cover.size();
     let full = Size::new(COVER_WIDTH, COVER_HEIGHT).unwrap();
     if source == full {
@@ -379,7 +367,7 @@ mod tests {
 
     use crate::{
         app::{Direction, LibraryState},
-        image::{MonochromeBitmap, MonochromeImage, Size},
+        image::{PackedBitmap, PackedImage, Size},
     };
 
     use super::{ShelfBook, ShelfRenderError, render_shelf, split_title};
@@ -392,8 +380,8 @@ mod tests {
         let black = vec![0; COVER_SIZE];
         let white = vec![0xFF; COVER_SIZE];
         let cover_size = Size::new(176, 264).unwrap();
-        let black_cover = MonochromeBitmap::new(cover_size, &black).unwrap();
-        let white_cover = MonochromeBitmap::new(cover_size, &white).unwrap();
+        let black_cover = PackedBitmap::monochrome(cover_size, &black).unwrap();
+        let white_cover = PackedBitmap::monochrome(cover_size, &white).unwrap();
         let books = [
             ShelfBook::new("Selected title", "First author", Some(black_cover)),
             ShelfBook::new("Second", "Second author", Some(white_cover)),
@@ -401,7 +389,7 @@ mod tests {
             ShelfBook::new("Fourth", "Fourth author", Some(black_cover)),
         ];
         let mut bytes = vec![0; FRAME_SIZE];
-        let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        let mut frame = PackedImage::monochrome(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
 
         render_shelf(
             LibraryState::new(books.len()),
@@ -425,10 +413,10 @@ mod tests {
     #[test]
     fn shelf_upscales_half_size_device_covers() {
         let black = vec![0; 88 * 132 / 8];
-        let cover = MonochromeBitmap::new(Size::new(88, 132).unwrap(), &black).unwrap();
+        let cover = PackedBitmap::monochrome(Size::new(88, 132).unwrap(), &black).unwrap();
         let books = [ShelfBook::new("Book", "Author", Some(cover))];
         let mut bytes = vec![0; FRAME_SIZE];
-        let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        let mut frame = PackedImage::monochrome(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
 
         render_shelf(
             LibraryState::new(books.len()),
@@ -445,13 +433,13 @@ mod tests {
     #[test]
     fn shelf_uses_the_page_containing_the_selection() {
         let black = vec![0; COVER_SIZE];
-        let black_cover = MonochromeBitmap::new(Size::new(176, 264).unwrap(), &black).unwrap();
+        let black_cover = PackedBitmap::monochrome(Size::new(176, 264).unwrap(), &black).unwrap();
         let books = [ShelfBook::new("Book", "Author", Some(black_cover)); 5];
         let mut state = LibraryState::new(books.len());
         state.move_selection(Direction::Down);
         state.move_selection(Direction::Down);
         let mut bytes = vec![0; FRAME_SIZE];
-        let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        let mut frame = PackedImage::monochrome(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
 
         render_shelf(
             state,
@@ -482,7 +470,7 @@ mod tests {
     #[test]
     fn renderer_rejects_state_from_a_different_catalog() {
         let mut bytes = vec![0; FRAME_SIZE];
-        let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        let mut frame = PackedImage::monochrome(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
 
         assert_eq!(
             render_shelf(

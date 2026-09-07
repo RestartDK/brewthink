@@ -10,13 +10,17 @@ async function packedFrame(page: Page): Promise<Buffer> {
     const context = element.getContext("2d");
     if (context === null) throw new Error("display needs a 2D context");
     const rgba = context.getImageData(0, 0, 480, 800).data;
-    const packed = new Uint8Array(48_000);
+    const planeBytes = 48_000;
+    const packed = new Uint8Array(planeBytes * 2);
+    const palette = [[27, 27, 24], [95, 94, 86], [162, 160, 149], [230, 227, 211]];
     for (let pixel = 0; pixel < 480 * 800; pixel += 1) {
       const offset = pixel * 4;
-      const white = rgba[offset] === 230 && rgba[offset + 1] === 227 && rgba[offset + 2] === 211;
-      const black = rgba[offset] === 27 && rgba[offset + 1] === 27 && rgba[offset + 2] === 24;
-      if ((!white && !black) || rgba[offset + 3] !== 255) throw new Error("unexpected display palette");
-      if (white) packed[Math.floor(pixel / 8)] |= 0x80 >> (pixel % 8);
+      const level = palette.findIndex(([red, green, blue]) =>
+        rgba[offset] === red && rgba[offset + 1] === green && rgba[offset + 2] === blue);
+      if (level === -1 || rgba[offset + 3] !== 255) throw new Error(`unexpected display palette at pixel ${pixel}`);
+      for (let bit = 0; bit < 2; bit += 1) {
+        if ((level & (1 << bit)) !== 0) packed[bit * planeBytes + Math.floor(pixel / 8)] |= 0x80 >> (pixel % 8);
+      }
     }
     return Array.from(packed);
   });

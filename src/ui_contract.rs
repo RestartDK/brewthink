@@ -8,7 +8,7 @@ use crate::{
         ReaderPreferences, SettingsItem, SettingsState, SleepScreenMode,
     },
     files::{FileItem, FileKind},
-    image::{MonochromeBitmap, MonochromeImage, Size},
+    image::{PackedBitmap, PackedImage, Size},
     input::UsbState,
     library::ShelfBook,
     power::BatteryStatus,
@@ -147,7 +147,7 @@ fn storage_and_sleep_frames_match_the_pinned_contract() {
             |target| {
                 for y in 0..HEIGHT {
                     for x in 0..WIDTH {
-                        target.set_pixel(x, y, (x + y) % 2 == 0);
+                        target.set_luma(x, y, if (x + y) % 2 == 0 { 0 } else { 255 });
                     }
                 }
                 crate::image_viewer::render_image_viewer("cover.jpg", selected, battery, target)
@@ -183,7 +183,7 @@ fn storage_and_sleep_frames_match_the_pinned_contract() {
         .unwrap();
     });
     let cover_bytes = [0xAA; 176 * 264 / 8];
-    let cover = MonochromeBitmap::new(Size::new(176, 264).unwrap(), &cover_bytes).unwrap();
+    let cover = PackedBitmap::monochrome(Size::new(176, 264).unwrap(), &cover_bytes).unwrap();
     for (name, mode, custom_image) in [
         (
             "settings-sleep-auto",
@@ -239,7 +239,7 @@ fn storage_and_sleep_frames_match_the_pinned_contract() {
     });
     assert_frame("sleep-custom", |target| {
         let bytes = std::vec![0xAA; FRAME_BYTES];
-        let bitmap = MonochromeBitmap::new(Size::new(WIDTH, HEIGHT).unwrap(), &bytes).unwrap();
+        let bitmap = PackedBitmap::monochrome(Size::new(WIDTH, HEIGHT).unwrap(), &bytes).unwrap();
         render_app(AppFrame::Sleep(SleepView::custom(bitmap, battery)), target).unwrap();
     });
 }
@@ -249,8 +249,8 @@ fn populated_shelf_and_settings_rows_match_the_pinned_contract() {
     let battery = BatteryStatus::from_percent(82, UsbState::Disconnected);
     let half_bytes = [0xAA; 88 * 132 / 8];
     let full_bytes = [0x33; 176 * 264 / 8];
-    let half = MonochromeBitmap::new(Size::new(88, 132).unwrap(), &half_bytes).unwrap();
-    let full = MonochromeBitmap::new(Size::new(176, 264).unwrap(), &full_bytes).unwrap();
+    let half = PackedBitmap::monochrome(Size::new(88, 132).unwrap(), &half_bytes).unwrap();
+    let full = PackedBitmap::monochrome(Size::new(176, 264).unwrap(), &full_bytes).unwrap();
     let covers = [Some(half), None, Some(half), Some(full), Some(full)];
     let books = covers.map(|cover| ShelfBook::new("A Book", "An Author", cover));
     for selected in [3, 4] {
@@ -296,9 +296,9 @@ fn reader_location() -> crate::app::ReadingLocation {
     session.location()
 }
 
-fn assert_frame(name: &str, render: impl FnOnce(&mut MonochromeImage<'_>)) {
+fn assert_frame(name: &str, render: impl FnOnce(&mut PackedImage<'_>)) {
     let mut bytes = std::vec![0xFF; FRAME_BYTES];
-    let mut image = MonochromeImage::new(Size::new(WIDTH, HEIGHT).unwrap(), &mut bytes).unwrap();
+    let mut image = PackedImage::monochrome(Size::new(WIDTH, HEIGHT).unwrap(), &mut bytes).unwrap();
     render(&mut image);
 
     let mut encoded = std::vec::Vec::with_capacity(PBM_HEADER.len() + FRAME_BYTES);

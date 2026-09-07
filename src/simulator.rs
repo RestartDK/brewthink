@@ -4,8 +4,11 @@ use crate::{
     app::ReaderPreferences,
     bounded_layout::{BoundedPage, LayoutError, layout_xhtml_page},
     cover::{self, COVER_BYTES, CoverDecodeWorkspace, JpegDecodeWorkspace, encoded_cover_fits},
-    device_epub::{DeviceEpub, DeviceEpubError, DevicePackageScratch, MAX_DEVICE_RESOURCE_BYTES},
-    image::MonochromeBitmap,
+    device_epub::{
+        DeviceEpub, DeviceEpubError, DevicePackageScratch, DevicePublication,
+        MAX_DEVICE_RESOURCE_BYTES,
+    },
+    image::PackedBitmap,
     image_decoder::{ImageDecodeError, ImageFormat},
     zip_stream::{InflateWorkspace, ReadAt, StreamingZip, ZipError, ZipValidationScratch},
 };
@@ -91,8 +94,16 @@ impl Book {
         let mut package = Box::new(DevicePackageScratch::new());
         let mut inflater = Box::new(InflateWorkspace::new());
         let mut resource = Box::new([0; MAX_DEVICE_RESOURCE_BYTES]);
-        let epub = DeviceEpub::open(reader, &mut zip, &mut package, &mut inflater, &mut resource)
-            .map_err(SimulatorError::Epub)?;
+        let mut publication = Box::new(DevicePublication::new());
+        let epub = DeviceEpub::open(
+            reader,
+            &mut zip,
+            &mut package,
+            &mut inflater,
+            &mut resource,
+            &mut publication,
+        )
+        .map_err(SimulatorError::Epub)?;
         let publication = epub.publication();
         let mut chapters = Vec::with_capacity(publication.spine_len());
         for index in 0..publication.spine_len() {
@@ -153,7 +164,7 @@ pub enum Cover {
 }
 
 impl Cover {
-    pub fn bitmap(&self) -> Option<MonochromeBitmap<'_>> {
+    pub fn bitmap(&self) -> Option<PackedBitmap<'_>> {
         match self {
             Self::Decoded(bytes) => Some(cover::bitmap(bytes)),
             Self::Missing | Self::TooLarge | Self::Unsupported | Self::Failed(_) => None,
@@ -247,7 +258,9 @@ pub fn sample_books() -> Result<Vec<Book>, SimulatorError> {
 }
 
 fn sample_cover(index: usize) -> Cover {
-    use crate::image::{Dither, MonochromeImage, RenderOptions, RgbImage, ScaleMode, Size};
+    use crate::image::{
+        Dither, PackedImage, READER_DEPTH, RenderOptions, RgbImage, ScaleMode, Size,
+    };
     const WIDTH: usize = 48;
     const HEIGHT: usize = 72;
     let mut rgb = vec![255; WIDTH * HEIGHT * 3];
@@ -266,8 +279,9 @@ fn sample_cover(index: usize) -> Cover {
     }
     let source = RgbImage::new(Size::new(WIDTH, HEIGHT).unwrap(), &rgb).unwrap();
     let mut pixels = Box::new([0xff; COVER_BYTES]);
-    let mut target = MonochromeImage::new(
+    let mut target = PackedImage::new(
         Size::new(cover::COVER_WIDTH, cover::COVER_HEIGHT).unwrap(),
+        READER_DEPTH,
         &mut pixels[..],
     )
     .unwrap();
@@ -276,7 +290,7 @@ fn sample_cover(index: usize) -> Cover {
         &mut target,
         RenderOptions {
             scale: ScaleMode::Cover,
-            dither: Dither::Ordered4x4,
+            dither: Dither::None,
         },
     );
     Cover::Decoded(pixels)

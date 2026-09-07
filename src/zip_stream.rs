@@ -147,7 +147,7 @@ impl InflateWorkspace {
         }
     }
 
-    #[cfg(any(test, target_arch = "riscv32"))]
+    #[cfg(any(target_arch = "riscv32", test))]
     pub(crate) unsafe fn initialize_in_place(storage: *mut Self) {
         // SAFETY: miniz_oxide 0.9.1's InflateState is valid when zeroed: its
         // decompressor documents an all-zero initial state, and zero is a valid

@@ -46,7 +46,7 @@ Capture the framebuffer:
 scripts/device-control.sh screen artifacts/device-screen.png
 ```
 
-Read the resulting PNG before reporting success. The PNG contains the exact 48,000-byte monochrome frame returned by firmware. It proves what firmware generated, not what physically appeared on the e-paper panel.
+Read the resulting PNG before reporting success. The PNG decodes the logical frame returned by firmware. Four-shade reader frames contain 96,000 bytes with `bpp=2 encoding=planar`; legacy monochrome responses contain 48,000 bytes without depth metadata. It proves what firmware generated, not what physically appeared on the e-paper panel.
 
 Monitor structured application events:
 

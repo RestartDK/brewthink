@@ -13,12 +13,14 @@ fn metadata_chapters_and_pages_match_the_device_pipeline() {
     let mut package = Box::new(DevicePackageScratch::new());
     let mut inflater = Box::new(InflateWorkspace::new());
     let mut resource = Box::new([0; MAX_DEVICE_RESOURCE_BYTES]);
+    let mut publication = Box::new(DevicePublication::new());
     let device = DeviceEpub::open(
         MemoryFile::try_from(EPUB).unwrap(),
         &mut zip,
         &mut package,
         &mut inflater,
         &mut resource,
+        &mut publication,
     )
     .unwrap();
     assert_eq!(imported.title, device.publication().title());

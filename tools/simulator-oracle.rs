@@ -7,8 +7,8 @@ use brewthink::{
     },
     bounded_layout::layout_xhtml_page,
     cover::{self, COVER_BYTES, CoverDecodeWorkspace, JpegDecodeWorkspace},
-    device_epub::{DeviceEpub, DevicePackageScratch, MAX_DEVICE_RESOURCE_BYTES},
-    image::{MonochromeImage, Size},
+    device_epub::{DeviceEpub, DevicePackageScratch, DevicePublication, MAX_DEVICE_RESOURCE_BYTES},
+    image::{PackedImage, READER_DEPTH, Size},
     image_decoder::ImageFormat,
     input::UsbState,
     power::BatteryStatus,
@@ -17,6 +17,8 @@ use brewthink::{
     ui::{AppFrame, render_app},
     zip_stream::{InflateWorkspace, ReadAt, ZipValidationScratch},
 };
+
+const FRAME_BYTES: usize = 480 * 800 / 8 * READER_DEPTH.bits();
 
 struct File {
     bytes: Vec<u8>,
@@ -58,12 +60,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut package = Box::new(DevicePackageScratch::new());
     let mut inflater = Box::new(InflateWorkspace::new());
     let mut resource = Box::new([0; MAX_DEVICE_RESOURCE_BYTES]);
+    let mut publication = Box::new(DevicePublication::new());
     let book = DeviceEpub::open(
         File::try_from(fs::read(input)?)?,
         &mut zip,
         &mut package,
         &mut inflater,
         &mut resource,
+        &mut publication,
     )
     .map_err(|error| format!("{error:?}"))?;
     let mut cases = String::new();
@@ -102,9 +106,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .lines()
                     .map(|line| ReaderLine::new(line.text(), line.style()))
                     .collect::<Vec<_>>();
-                let mut bytes = [0xff; 48_000];
+                let mut bytes = [0xff; FRAME_BYTES];
                 let mut frame =
-                    MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+                    PackedImage::new(Size::new(480, 800).unwrap(), READER_DEPTH, &mut bytes)
+                        .unwrap();
                 render_app(
                     AppFrame::Reader(ReaderView::new(
                         book.publication().title(),
@@ -139,8 +144,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             None => return Err("oracle cover must be PNG or JPEG".into()),
         }
         .map_err(|error| format!("{error:?}"))?;
-        let mut bytes = [0xff; 48_000];
-        let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        let mut bytes = [0xff; FRAME_BYTES];
+        let mut frame =
+            PackedImage::new(Size::new(480, 800).unwrap(), READER_DEPTH, &mut bytes).unwrap();
         render_app(
             AppFrame::Sleep(SleepView::book_cover(
                 book.publication().title(),
