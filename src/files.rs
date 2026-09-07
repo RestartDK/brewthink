@@ -53,8 +53,8 @@ impl FileKind {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Epub => "EPUB",
-            Self::Jpeg => "JPEG IMAGE",
-            Self::Png => "PNG IMAGE",
+            Self::Jpeg => "JPEG image",
+            Self::Png => "PNG image",
         }
     }
 }
@@ -89,11 +89,11 @@ pub fn render_files(
     let mut display = FrameTarget::new(target);
     if files.is_empty() {
         ui!(
-            AppBar::new("FILES", battery),
-            Label::new("NO EPUB OR IMAGE FILES", TextRole::Heading).at(Point::new(166, 326)),
+            AppBar::new("Files", battery),
+            Label::new("No books or images", TextRole::Heading).at(Point::new(90, 326)),
             Label::new("Add EPUBs to /books or images to /files", TextRole::Body)
-                .at(Point::new(135, 368)),
-            CommandBar::new("BACK  HOME"),
+                .at(Point::new(90, 368)),
+            CommandBar::new(["Home", "", "", ""]),
         )
         .draw(&mut display)
         .ok();
@@ -101,12 +101,12 @@ pub fn render_files(
     }
 
     let range = state.visible_range();
-    let mut row_views = [FileRow::new("", 0, "", Selection::Idle); 8];
+    let mut row_views = [FileRow::new("", 0, FileKind::Epub, Selection::Idle); 8];
     for (row, index) in range.clone().enumerate() {
         row_views[row] = FileRow::new(
             files[index].name(),
             files[index].size(),
-            files[index].kind().label(),
+            files[index].kind(),
             Selection::from_selected(
                 state
                     .selected()
@@ -122,16 +122,17 @@ pub fn render_files(
     let mut footer = FixedText::<64>::new();
     write!(
         footer,
-        "{}-{} / {}     CONFIRM  OPEN     BACK  HOME",
+        "{}-{} / {}",
         range.start + 1,
         range.end,
         files.len()
     )
     .ok();
     ui!(
-        AppBar::new("FILES", battery),
+        AppBar::new("Files", battery),
         rows,
-        CommandBar::new(footer.as_str()),
+        Label::new(footer.as_str(), TextRole::Metadata).at(Point::new(CONTENT_LEFT, 714)),
+        CommandBar::new(["Home", "Open", "Previous", "Next"]),
     )
     .draw(&mut display)
     .ok();
@@ -142,29 +143,55 @@ pub fn render_files(
 mod tests {
     extern crate std;
 
+    use embedded_graphics::pixelcolor::GrayColor;
+
     use super::{FileItem, FileKind, render_files};
     use crate::{
         app::FilesState,
-        image::{PackedImage, Size},
+        image::{PackedImage, READER_DEPTH, Size},
         input::UsbState,
         power::BatteryStatus,
+        ui::SELECTION_BACKGROUND,
     };
 
     #[test]
-    fn renders_selected_files_with_sizes() {
-        let mut bytes = std::vec![0xFF; 480 * 800 / 8];
-        let mut image = PackedImage::monochrome(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
-        render_files(
-            FilesState::new(2),
-            &[
-                FileItem::new("alice.epub", 12_000, FileKind::Epub),
-                FileItem::new("cover.jpg", 24_000, FileKind::Jpeg),
-            ],
-            BatteryStatus::from_percent(42, UsbState::Disconnected),
-            &mut image,
-        )
-        .unwrap();
-        assert!(image.pixel_is_black(18, 86));
-        assert!(image.pixel_is_black(18, 148));
+    fn every_file_row_uses_gray_selection_with_black_foreground_and_outline() {
+        let files = [
+            FileItem::new("alice.epub", 12_000, FileKind::Epub),
+            FileItem::new("cover.jpg", 24_000, FileKind::Jpeg),
+            FileItem::new("diagram.png", 36_000, FileKind::Png),
+        ];
+        let tops = [86, 162, 238];
+        let foreground = [(46, 110), (36, 184), (36, 260)];
+        let size = Size::new(480, 800).unwrap();
+        let battery = BatteryStatus::from_percent(42, UsbState::Disconnected);
+
+        for index in 0..files.len() {
+            let mut bytes = std::vec![0xFF; READER_DEPTH.byte_len(size).unwrap()];
+            let mut image = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
+            render_files(
+                FilesState::with_selected(files.len(), index).unwrap(),
+                &files,
+                battery,
+                &mut image,
+            )
+            .unwrap();
+
+            assert_eq!(
+                image.luma(450, tops[index] + 31),
+                SELECTION_BACKGROUND.luma(),
+                "file row {index} lost its selection fill"
+            );
+            assert_eq!(
+                image.luma(240, tops[index]),
+                0,
+                "file row {index} lost its outline"
+            );
+            assert_eq!(
+                image.luma(foreground[index].0, foreground[index].1),
+                0,
+                "file row {index} lost its black icon"
+            );
+        }
     }
 }

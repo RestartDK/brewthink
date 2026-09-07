@@ -3,16 +3,24 @@ use std::{boxed::Box, format, string::String, vec, vec::Vec};
 use crate::{
     app::ReaderPreferences,
     bounded_layout::{BoundedPage, LayoutError, layout_xhtml_page},
+    bounded_xml::FixedString,
     cover::{self, COVER_BYTES, CoverDecodeWorkspace, JpegDecodeWorkspace, encoded_cover_fits},
     device_epub::{
         DeviceEpub, DeviceEpubError, DevicePackageScratch, DevicePublication,
-        MAX_DEVICE_RESOURCE_BYTES,
+        MAX_DEVICE_RESOURCE_BYTES, MAX_DEVICE_SPINE_ITEMS,
     },
-    image::PackedBitmap,
-    image_decoder::{ImageDecodeError, ImageFormat},
+    image::{
+        Dither, PackedBitmap, PackedImage, READER_DEPTH, RenderOptions, RgbImage, ScaleMode, Size,
+    },
+    image_decoder::{ImageDecodeError, ImageFormat, decode_jpeg, decode_png},
+    navigation::CHAPTER_TITLE_BYTES,
+    reader::{FRAME_HEIGHT, FRAME_WIDTH},
+    storage::MAX_DEVICE_IMAGE_BYTES,
     zip_stream::{InflateWorkspace, ReadAt, StreamingZip, ZipError, ZipValidationScratch},
 };
 use core::convert::Infallible;
+
+pub const FRAME_BYTES: usize = FRAME_WIDTH * FRAME_HEIGHT / 8 * READER_DEPTH.bits();
 
 #[derive(Debug)]
 pub enum SimulatorError {
@@ -85,6 +93,7 @@ pub struct Book {
     pub creator: String,
     pub cover: Cover,
     pub chapters: Vec<Chapter>,
+    pub navigation_error: Option<DeviceEpubError<Infallible>>,
 }
 
 impl Book {
@@ -105,12 +114,21 @@ impl Book {
         )
         .map_err(SimulatorError::Epub)?;
         let publication = epub.publication();
+        let mut titles =
+            Box::new([FixedString::<CHAPTER_TITLE_BYTES>::new(); MAX_DEVICE_SPINE_ITEMS]);
+        let navigation_error = epub
+            .read_chapter_titles(&mut titles, &mut resource[..], &mut inflater)
+            .err();
         let mut chapters = Vec::with_capacity(publication.spine_len());
         for index in 0..publication.spine_len() {
             let length = epub
                 .read_spine(index, &mut resource[..], &mut inflater)
                 .map_err(SimulatorError::Epub)?;
-            chapters.push(Chapter::from_xhtml(&resource[..length])?);
+            let title = match titles[index].as_str() {
+                "" => format!("Chapter {}", index + 1),
+                title => title.into(),
+            };
+            chapters.push(Chapter::from_xhtml(&resource[..length], title)?);
         }
         let cover = Cover::read(
             reader,
@@ -126,24 +144,31 @@ impl Book {
             creator: publication.creator().into(),
             cover,
             chapters,
+            navigation_error,
         })
     }
 }
 
 pub struct Chapter {
+    title: String,
     xhtml: Box<[u8]>,
 }
 
 impl Chapter {
-    pub fn from_xhtml(xhtml: &[u8]) -> Result<Self, SimulatorError> {
+    fn from_xhtml(xhtml: &[u8], title: String) -> Result<Self, SimulatorError> {
         if xhtml.len() > MAX_DEVICE_RESOURCE_BYTES {
             return Err(SimulatorError::Epub(DeviceEpubError::ResourceTooLarge));
         }
         layout_xhtml_page(xhtml, 0, ReaderPreferences::default())
             .map_err(SimulatorError::Layout)?;
         Ok(Self {
+            title,
             xhtml: xhtml.into(),
         })
+    }
+
+    pub fn title(&self) -> &str {
+        &self.title
     }
 
     pub fn page(
@@ -160,14 +185,40 @@ pub enum Cover {
     TooLarge,
     Unsupported,
     Failed(SimulatorError),
-    Decoded(Box<[u8; COVER_BYTES]>),
+    Decoded {
+        shelf: Box<[u8; COVER_BYTES]>,
+        original: OriginalFrame,
+    },
+}
+
+pub enum OriginalFrame {
+    TooLarge,
+    Failed(ImageDecodeError),
+    Decoded(Box<[u8; FRAME_BYTES]>),
 }
 
 impl Cover {
     pub fn bitmap(&self) -> Option<PackedBitmap<'_>> {
         match self {
-            Self::Decoded(bytes) => Some(cover::bitmap(bytes)),
+            Self::Decoded { shelf, .. } => Some(cover::bitmap(shelf)),
             Self::Missing | Self::TooLarge | Self::Unsupported | Self::Failed(_) => None,
+        }
+    }
+
+    pub fn frame_bitmap(&self) -> Option<PackedBitmap<'_>> {
+        match self {
+            Self::Decoded {
+                original: OriginalFrame::Decoded(frame),
+                ..
+            } => Some(frame_bitmap(frame)),
+            Self::Decoded {
+                original: OriginalFrame::TooLarge | OriginalFrame::Failed(_),
+                ..
+            }
+            | Self::Missing
+            | Self::TooLarge
+            | Self::Unsupported
+            | Self::Failed(_) => None,
         }
     }
 
@@ -203,19 +254,65 @@ impl Cover {
             .read_entry(entry, resource, inflater)
             .map_err(SimulatorError::Zip)?;
         let encoded = &resource[..length];
-        let mut pixels = Box::new([0xff; COVER_BYTES]);
-        match ImageFormat::detect(encoded) {
-            Some(ImageFormat::Png) => {
-                cover::decode_png_cover(encoded, &mut pixels, &mut CoverDecodeWorkspace::new())
+        let Some(format) = ImageFormat::detect(encoded) else {
+            return Ok(Self::Unsupported);
+        };
+        let mut shelf = Box::new([0xff; COVER_BYTES]);
+        match format {
+            ImageFormat::Png => {
+                cover::decode_png_cover(encoded, &mut shelf, &mut CoverDecodeWorkspace::new())
             }
-            Some(ImageFormat::Jpeg) => {
-                cover::decode_jpeg_cover(encoded, &mut pixels, &mut JpegDecodeWorkspace::new())
+            ImageFormat::Jpeg => {
+                cover::decode_jpeg_cover(encoded, &mut shelf, &mut JpegDecodeWorkspace::new())
             }
-            None => return Ok(Self::Unsupported),
         }
         .map_err(SimulatorError::Image)?;
-        Ok(Self::Decoded(pixels))
+        let original = if entry.uncompressed_size() as usize > MAX_DEVICE_IMAGE_BYTES {
+            OriginalFrame::TooLarge
+        } else {
+            OriginalFrame::decode(encoded, format)
+        };
+        Ok(Self::Decoded { shelf, original })
     }
+}
+
+impl OriginalFrame {
+    fn decode(encoded: &[u8], format: ImageFormat) -> Self {
+        let mut pixels = Box::new([0xff; FRAME_BYTES]);
+        let mut target = PackedImage::new(frame_size(), READER_DEPTH, &mut pixels[..])
+            .expect("the packed frame buffer has the exact required length");
+        let options = RenderOptions {
+            scale: ScaleMode::Contain,
+            dither: Dither::None,
+        };
+        let decoded = match format {
+            ImageFormat::Png => decode_png(
+                encoded,
+                &mut target,
+                options,
+                &mut CoverDecodeWorkspace::new(),
+            ),
+            ImageFormat::Jpeg => decode_jpeg(
+                encoded,
+                &mut target,
+                options,
+                &mut JpegDecodeWorkspace::new(),
+            ),
+        };
+        match decoded {
+            Ok(_) => Self::Decoded(pixels),
+            Err(error) => Self::Failed(error),
+        }
+    }
+}
+
+fn frame_size() -> Size {
+    Size::new(FRAME_WIDTH, FRAME_HEIGHT).expect("frame dimensions are non-zero")
+}
+
+fn frame_bitmap(bytes: &[u8; FRAME_BYTES]) -> PackedBitmap<'_> {
+    PackedBitmap::new(frame_size(), READER_DEPTH, bytes)
+        .expect("the packed frame buffer has the exact required length")
 }
 
 pub fn sample_books() -> Result<Vec<Book>, SimulatorError> {
@@ -243,7 +340,10 @@ pub fn sample_books() -> Result<Vec<Book>, SimulatorError> {
                 xhtml.push_str(&format!("<{tag}>{title} · section {} · passage {}. This public-domain sample proves page turning, chapter boundaries, sleep, wake, and reading-position resume in the shared application state.</{tag}>", chapter + 1, paragraph + 1));
             }
             xhtml.push_str("</body></html>");
-            chapters.push(Chapter::from_xhtml(xhtml.as_bytes())?);
+            chapters.push(Chapter::from_xhtml(
+                xhtml.as_bytes(),
+                format!("Section {}", chapter + 1),
+            )?);
         }
         books.push(Book {
             file_name: file_name.into(),
@@ -252,15 +352,13 @@ pub fn sample_books() -> Result<Vec<Book>, SimulatorError> {
             creator: creator.into(),
             cover: sample_cover(index),
             chapters,
+            navigation_error: None,
         });
     }
     Ok(books)
 }
 
 fn sample_cover(index: usize) -> Cover {
-    use crate::image::{
-        Dither, PackedImage, READER_DEPTH, RenderOptions, RgbImage, ScaleMode, Size,
-    };
     const WIDTH: usize = 48;
     const HEIGHT: usize = 72;
     let mut rgb = vec![255; WIDTH * HEIGHT * 3];
@@ -278,22 +376,31 @@ fn sample_cover(index: usize) -> Cover {
         }
     }
     let source = RgbImage::new(Size::new(WIDTH, HEIGHT).unwrap(), &rgb).unwrap();
-    let mut pixels = Box::new([0xff; COVER_BYTES]);
-    let mut target = PackedImage::new(
-        Size::new(cover::COVER_WIDTH, cover::COVER_HEIGHT).unwrap(),
-        READER_DEPTH,
-        &mut pixels[..],
-    )
-    .unwrap();
-    crate::image::render(
+    let mut shelf = Box::new([0xff; COVER_BYTES]);
+    render_sample(
         &source,
+        Size::new(cover::COVER_WIDTH, cover::COVER_HEIGHT).unwrap(),
+        &mut shelf[..],
+        ScaleMode::Cover,
+    );
+    let mut frame = Box::new([0xff; FRAME_BYTES]);
+    render_sample(&source, frame_size(), &mut frame[..], ScaleMode::Contain);
+    Cover::Decoded {
+        shelf,
+        original: OriginalFrame::Decoded(frame),
+    }
+}
+
+fn render_sample(source: &RgbImage<'_>, size: Size, output: &mut [u8], scale: ScaleMode) {
+    let mut target = PackedImage::new(size, READER_DEPTH, output).unwrap();
+    crate::image::render(
+        source,
         &mut target,
         RenderOptions {
-            scale: ScaleMode::Cover,
+            scale,
             dither: Dither::None,
         },
     );
-    Cover::Decoded(pixels)
 }
 
 #[cfg(test)]

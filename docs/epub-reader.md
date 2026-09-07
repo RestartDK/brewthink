@@ -61,7 +61,7 @@ The current host, WASM, and X4 paths provide:
 - A normal X4 application loop connecting all seven controls, shelf, chapter/page navigation, SSD1677 refresh, retained sleep frame, GPIO3 deep sleep/wake, and checksummed book/chapter/page resume.
 - Synthetic EPUB, PNG-alpha, and JPEG fixtures plus private acceptance against every spine item and the cover in the Hamming EPUB.
 
-The simulator's `std` ZIP and image decoders remain separate from the device pipeline. The X4 implementation uses read-at FAT access, fixed-capacity publication state, incremental DEFLATE, no-heap PNG/JPEG decoding, and statically allocated phase-overlaid workspaces. Checksummed RTC-fast-memory state now retains the active screen and reader preferences across deep sleep.
+The simulator's imported books use the same bounded ZIP/XML/layout and PNG/JPEG APIs as the device, with host-owned chapter sources and decoded cover buffers. The X4 implementation uses read-at FAT access, fixed-capacity publication state, incremental DEFLATE, no-heap PNG/JPEG decoding, and statically allocated phase-overlaid workspaces. Checksummed RTC-fast-memory state retains the active screen and reader preferences across deep sleep. The browser checks all chapters at import rather than reading them on demand; see [simulator parity and limits](simulator-parity.md).
 
 ## Device memory contract
 

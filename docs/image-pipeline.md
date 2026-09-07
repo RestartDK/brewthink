@@ -8,7 +8,9 @@ Shared raster types and RGB rendering live in `src/image/`. Bounded embedded dec
 
 `PackedBitmap` and `PackedImage` carry dimensions, `PixelDepth`, and an exact-length buffer. Width must be divisible by eight. A four-shade 480 × 800 frame contains 96,000 bytes. Each 48,000-byte plane is row-major, with the leftmost pixel in the most significant bit. The least-significant tone plane comes first. Level 0 is black; level 3 is white. PNG previews use logical lumas 0, 85, 170, and 255, not calibrated optical reflectance.
 
-`Gray8` draw targets retain intermediate image tones. Text, borders, and selection geometry use only black and white. Normal image paths use `Dither::None`; explicit monochrome rendering retains the ordered and threshold options.
+`Gray8` draw targets retain intermediate image tones. Text, icons, and outlines use black. Selected menu rows use the shared light-gray value 170. Normal image paths use `Dither::None`; explicit monochrome rendering retains the ordered and threshold options.
+
+The selected-row gray uses the same fixed full grayscale refresh as other intermediate tones. It replaces binary speckles with a solid muted fill, but it gives up the binary differential path for those frames. No hardware latency claim follows from this source integration.
 
 `BufferedDisplay::refresh_image` maps four logical levels to SSD1677 states `3 - level` and runs one fixed stock absolute waveform at 20 MHz SPI. It then sleeps the controller. A binary-only frame uses the existing monochrome path at 40 MHz. After grayscale, the next binary refresh resets and fully cleans before differential updates resume. Callers cannot supply waveform bytes or arbitrary drive settings.
 
@@ -101,7 +103,7 @@ A 720 × 720 RGB8 decode needs 1,555,200 bytes before decoder overhead. The X4 h
 
 PNG emits pixels from bounded deflate and scanline workspaces. JPEG emits grayscale blocks from a bounded decoder workspace. Both write directly into the packed destination. The reader retains one 96,000-byte logical frame and an 11,616-byte full cover. Publication parsing and image codecs reuse the frame allocation before composition. Catalogs, page layout, and the selected cover share mutually exclusive scratch. Three half-resolution shelf covers occupy the resource tail beyond the encoded-cover limit.
 
-Full image decoding reads at most 96 KiB of encoded data into the resource buffer and uses its tail for decoder scratch. Encoded covers remain bounded to 128 KiB; chapter resources remain bounded to 140 KiB. No file limits were reduced for this change.
+Full-frame decoding reads at most 96 KiB of encoded data into the resource buffer and uses its tail for decoder scratch. This budget applies to image viewing and the original-resolution opening/sleep cover paths. Shelf covers can use up to 128 KiB because their smaller output leaves the frame allocation available for codec scratch. A cover between those limits may appear on the shelf, but opening proceeds to text and sleep follows its fallback plan rather than enlarging the thumbnail. Chapter resources remain bounded to 140 KiB. The simulator applies the same encoded limits and native PNG/JPEG decoding rules to imported covers. Its native-pixel comparisons verify that adapter, not device SRAM, SD behavior, or physical display output. Host inspection and image-conversion tools remain separate; see [simulator parity](simulator-parity.md).
 
 `Scratch` tracks byte and typed use. A return from typed use initializes every byte before exposing a byte slice, including any former padding. `DeviceEpub` borrows caller-owned publication storage, and `FatStorage::scan_into` fills the supplied catalog without large value returns.
 

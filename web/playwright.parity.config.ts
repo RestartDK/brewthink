@@ -1,10 +1,13 @@
 import { defineConfig } from "@playwright/test";
+import { testPort } from "./test-port";
 
-const port = Number(process.env.BREWTHINK_PARITY_PORT ?? "4185");
+const port = testPort("BREWTHINK_PARITY_PORT", 4185);
 
 export default defineConfig({
   testDir: "./parity-tests",
   fullyParallel: false,
+  workers: 1,
+  timeout: 60_000,
   forbidOnly: true,
   retries: 0,
   reporter: "line",

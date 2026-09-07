@@ -6,8 +6,8 @@ use crate::{
     image::{PackedImage, Size},
     power::BatteryStatus,
     ui::{
-        AppBar, CONTENT_LEFT, CommandBar, FRAME_HEIGHT, FRAME_WIDTH, FrameTarget, Label, MenuRow,
-        Selection, TextRole, ui, ui_column,
+        AppBar, CONTENT_LEFT, CommandBar, FRAME_HEIGHT, FRAME_WIDTH, FrameTarget, Icon, MenuRow,
+        Selection, ui, ui_column,
     },
 };
 
@@ -32,31 +32,30 @@ pub fn render_home(
     target.clear_white();
     let selected = state.selected();
     let rows = ui_column!(
-        40;
+        4;
         menu_row(HomeItem::Books, selected),
         menu_row(HomeItem::Files, selected),
         menu_row(HomeItem::Settings, selected),
     )
-    .translate(Point::new(CONTENT_LEFT, 150));
+    .translate(Point::new(CONTENT_LEFT, 106));
     let screen = ui!(
-        AppBar::new("HOME", battery),
-        Label::new("CHOOSE WHERE TO GO", TextRole::Body).at(Point::new(CONTENT_LEFT, 92)),
+        AppBar::new("Home", battery),
         rows,
-        CommandBar::new("UP/DOWN  MOVE     CONFIRM  OPEN"),
+        CommandBar::new(["", "Open", "Previous", "Next"]),
     );
     screen.draw(&mut FrameTarget::new(target)).ok();
     Ok(())
 }
 
 fn menu_row(item: HomeItem, selected: HomeItem) -> MenuRow<'static> {
-    let detail = match item {
-        HomeItem::Books => "COVERS AND READING PROGRESS",
-        HomeItem::Files => "EPUB FILES ON MICROSD",
-        HomeItem::Settings => "FONT, SIZE, AND SPACING",
+    let icon = match item {
+        HomeItem::Books => Icon::Book,
+        HomeItem::Files => Icon::Folder,
+        HomeItem::Settings => Icon::Settings,
     };
     MenuRow::new(
         item.label(),
-        detail,
+        icon,
         Selection::from_selected(item == selected),
     )
 }
@@ -65,25 +64,44 @@ fn menu_row(item: HomeItem, selected: HomeItem) -> MenuRow<'static> {
 mod tests {
     extern crate std;
 
+    use embedded_graphics::pixelcolor::GrayColor;
+
     use super::render_home;
     use crate::{
-        app::HomeState,
-        image::{PackedImage, Size},
+        app::{HomeItem, HomeState},
+        image::{PackedImage, READER_DEPTH, Size},
         input::UsbState,
         power::BatteryStatus,
+        ui::SELECTION_BACKGROUND,
     };
 
     #[test]
-    fn renders_home_into_the_exact_x4_frame() {
-        let mut bytes = std::vec![0xFF; 480 * 800 / 8];
-        let mut image = PackedImage::monochrome(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
-        render_home(
-            HomeState::new(),
-            BatteryStatus::from_percent(82, UsbState::Disconnected),
-            &mut image,
-        )
-        .unwrap();
-        assert!(image.pixel_is_black(18, 58));
-        assert!(image.pixel_is_black(18, 150));
+    fn every_home_row_uses_gray_selection_with_black_foreground_and_outline() {
+        let size = Size::new(480, 800).unwrap();
+        let battery = BatteryStatus::from_percent(82, UsbState::Disconnected);
+        let tops = [106, 186, 266];
+        let foreground = [(50, 137), (40, 231), (40, 298)];
+
+        for (index, item) in HomeItem::ALL.into_iter().enumerate() {
+            let mut bytes = std::vec![0xFF; READER_DEPTH.byte_len(size).unwrap()];
+            let mut image = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
+            render_home(HomeState::with_selected(item), battery, &mut image).unwrap();
+
+            assert_eq!(
+                image.luma(450, tops[index] + 38),
+                SELECTION_BACKGROUND.luma(),
+                "home row {index} lost its selection fill"
+            );
+            assert_eq!(
+                image.luma(240, tops[index]),
+                0,
+                "home row {index} lost its outline"
+            );
+            assert_eq!(
+                image.luma(foreground[index].0, foreground[index].1),
+                0,
+                "home row {index} lost its black icon"
+            );
+        }
     }
 }

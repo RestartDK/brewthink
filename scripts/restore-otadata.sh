@@ -1,119 +1,49 @@
 #!/usr/bin/env bash
-# Restore a previously backed-up otadata partition to 0xE000.
-# This changes boot selection metadata only. It does not write app0/app1 image bytes.
 
 set -euo pipefail
-
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/common.sh
 source "$ROOT_DIR/scripts/common.sh"
 
-BACKUP="$ROOT_DIR/backup/otadata/otadata-latest.bin"
+BACKUP=""
+BACKUP_SHA=""
+SLOT=""
 YES=0
-
-usage() {
-  cat <<EOF
-Usage: $0 [--backup PATH] [--yes]
-
-Restores otadata only:
-  address: $OTADATA_OFFSET_HEX
-  size:    $OTADATA_SIZE_HEX ($OTADATA_SIZE bytes)
-
-Default backup:
-  $BACKUP
-EOF
-}
-
 while (($#)); do
   case "$1" in
-    --backup)
-      BACKUP="${2:?missing value for --backup}"
-      shift 2
-      ;;
-    --yes|-y)
-      YES=1
-      shift
-      ;;
+    --backup) BACKUP="${2:?missing backup}"; shift 2 ;;
+    --backup-sha256) BACKUP_SHA="${2:?missing digest}"; shift 2 ;;
+    --expect-slot) SLOT="${2:?missing slot}"; shift 2 ;;
+    --yes|-y) YES=1; shift ;;
     --help|-h)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "error: unknown argument: $1" >&2
-      usage >&2
-      exit 1
-      ;;
+      echo "Usage: $0 --backup PATH --backup-sha256 SHA256 --expect-slot app0|app1 [--yes]"
+      echo 'Validates the selected slot image, then restores and verifies only otadata.'
+      exit 0 ;;
+    *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
 done
-
-require_cmd espflash
-require_cmd cmp
-check_partition_table_constants
-
-PORT_ARGS=()
-if [[ -n "${ESPFLASH_PORT:-}" ]]; then
-  PORT_ARGS+=(--port "$ESPFLASH_PORT")
-elif [[ -n "${ESPTOOL_PORT:-}" ]]; then
-  PORT_ARGS+=(--port "$ESPTOOL_PORT")
-else
-  echo "error: refusing to write otadata without an explicit port" >&2
-  echo "set ESPFLASH_PORT=/dev/cu.usbmodemXXXX and retry" >&2
-  exit 1
-fi
-
-if [[ ! -f "$BACKUP" ]]; then
-  echo "error: backup file not found: $BACKUP" >&2
-  exit 1
-fi
-
-SIZE="$(file_size "$BACKUP")"
-if (( SIZE != OTADATA_SIZE )); then
-  echo "error: otadata backup has unexpected size: $SIZE bytes, expected $OTADATA_SIZE" >&2
-  exit 1
-fi
-
-READBACK="$(mktemp)"
-trap 'rm -f "$READBACK"' EXIT
-
+case "$SLOT" in
+  app0) SLOT_OFFSET="$APP0_OFFSET_HEX"; SLOT_SIZE="$APP0_SIZE_HEX" ;;
+  app1) SLOT_OFFSET="$APP1_OFFSET_HEX"; SLOT_SIZE="$APP1_SIZE_HEX" ;;
+  *) echo 'error: --expect-slot app0 or app1 is required' >&2; exit 1 ;;
+esac
+private_workspace
+snapshot_file "$BACKUP" "$WORK_DIR/otadata.bin"
+verify_backup "$WORK_DIR/otadata.bin" "$BACKUP_SHA" "$OTADATA_SIZE"
+python3 "$ROOT_DIR/scripts/inspect-otadata.py" "$WORK_DIR/otadata.bin" --expect-slot "$SLOT"
+probe_x4
+espflash read-flash --chip "$CHIP" "${PORT_ARGS[@]}" --after no-reset "$SLOT_OFFSET" "$SLOT_SIZE" "$WORK_DIR/selected-app.bin"
+verify_app_image "$WORK_DIR/selected-app.bin"
 cat <<EOF
-
-OTADATA RESTORE REVIEW
-======================
-Will write:     $BACKUP
-SHA-256:        $(sha256_file "$BACKUP")
-Write address:  $OTADATA_OFFSET_HEX
-Write size:     $OTADATA_SIZE_HEX ($OTADATA_SIZE bytes)
-Write range:    $(fmt_hex "$OTADATA_OFFSET")..$(fmt_hex $((OTADATA_OFFSET + OTADATA_SIZE - 1)))
-
-This script writes only otadata boot-selection metadata.
-It does NOT write app0, app1, bootloader, partition table, NVS, or filesystem.
+OTADATA WRITE REVIEW
+Source: $BACKUP
+Read-only snapshot: $WORK_DIR/otadata.bin
+SHA-256: $BACKUP_SHA
+Byte and sector range: $OTADATA_OFFSET_HEX..$(fmt_hex $((OTADATA_OFFSET + OTADATA_SIZE - 1))) ($OTADATA_SIZE bytes)
+Selected slot: $SLOT. Its current image passed local checksum and hash inspection.
+No application image or other partition will be written.
 EOF
-
-if (( YES == 0 )); then
-  echo
-  read -r -p "Type exactly 'restore otadata' to continue: " CONFIRM
-  if [[ "$CONFIRM" != "restore otadata" ]]; then
-    echo "aborted: confirmation did not match"
-    exit 1
-  fi
-fi
-
-printf '\n== Restoring otadata ==\n'
-espflash write-bin --chip "$CHIP" "${PORT_ARGS[@]}" "$OTADATA_OFFSET_HEX" "$BACKUP"
-
-printf '\n== Reading back otadata ==\n'
-espflash read-flash --chip "$CHIP" "${PORT_ARGS[@]}" "$OTADATA_OFFSET_HEX" "$OTADATA_SIZE_HEX" "$READBACK"
-
-if ! cmp -s "$BACKUP" "$READBACK"; then
-  echo "error: otadata readback differs from backup" >&2
-  echo "backup sha256:   $(sha256_file "$BACKUP")" >&2
-  echo "readback sha256: $(sha256_file "$READBACK")" >&2
-  exit 1
-fi
-
-cat <<EOF
-
-OK: otadata restore/readback verified
-restored: $BACKUP
-sha256:  $(sha256_file "$BACKUP")
-EOF
+confirm_write 'restore otadata'
+write_and_verify "$OTADATA_OFFSET_HEX" "$OTADATA_SIZE_HEX" "$WORK_DIR/otadata.bin"
+echo 'OK: otadata write/readback verified'
+espflash reset --chip "$CHIP" "${PORT_ARGS[@]}"

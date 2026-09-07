@@ -99,3 +99,138 @@ check_partition_table_constants() {
     exit 1
   fi
 }
+
+private_workspace() {
+  umask 077
+  WORK_DIR="$(mktemp -d)"
+  trap 'rm -rf "$WORK_DIR"' EXIT
+}
+
+snapshot_file() {
+  local source="$1" destination="$2"
+  cp "$source" "$destination"
+  chmod 400 "$destination"
+}
+
+verify_backup() {
+  local path="$1" expected_sha="$2" expected_size="$3" digest_option="${4:---backup-sha256}"
+  if [[ ! "$expected_sha" =~ ^[[:xdigit:]]{64}$ ]]; then
+    echo "error: provide the reviewed SHA-256 with $digest_option" >&2
+    exit 1
+  fi
+  if [[ "$(sha256_file "$path")" != "$(printf '%s' "$expected_sha" | tr '[:upper:]' '[:lower:]')" ]] ||
+     (( $(file_size "$path") != expected_size )); then
+    echo 'error: payload does not match the reviewed SHA-256 and size' >&2
+    exit 1
+  fi
+}
+
+explicit_port() {
+  local port="${ESPFLASH_PORT:-${ESPTOOL_PORT:-}}"
+  if [[ -z "$port" ]]; then
+    echo 'error: an explicit ESPFLASH_PORT or ESPTOOL_PORT is required' >&2
+    exit 1
+  fi
+  PORT_ARGS=(--port "$port")
+}
+
+probe_x4() {
+  require_cmd espflash
+  require_cmd esptool
+  require_cmd cmp
+  check_partition_table_constants
+  explicit_port
+  espflash board-info --chip "$CHIP" "${PORT_ARGS[@]}" > "$WORK_DIR/board-info.txt"
+  esptool --chip "$CHIP" "${PORT_ARGS[@]}" flash-id > "$WORK_DIR/flash-id.txt"
+  local pattern
+  for pattern in \
+    'Chip type:[[:space:]]+esp32c3' \
+    'Flash size:[[:space:]]+16MB' \
+    'Crystal frequency:[[:space:]]+40 MHz' \
+    'Secure Boot:[[:space:]]+Disabled' \
+    'Flash Encryption:[[:space:]]+Disabled'; do
+    if ! grep -Eiq "$pattern" "$WORK_DIR/board-info.txt"; then
+      echo "error: hardware probe did not confirm $pattern" >&2
+      exit 1
+    fi
+  done
+  if ! grep -Eiq '^Manufacturer:[[:space:]]*(0x)?85[[:space:]]*$' "$WORK_DIR/flash-id.txt" ||
+     ! grep -Eiq '^Device:[[:space:]]*(0x)?2018[[:space:]]*$' "$WORK_DIR/flash-id.txt"; then
+    echo 'error: hardware probe did not confirm the expected flash ID' >&2
+    exit 1
+  fi
+}
+
+verify_app_image() {
+  esptool --chip "$CHIP" image-info "$1" > "$WORK_DIR/app-image-info.txt"
+  if ! grep -Eq '^ESP32-C3 Image Header$' "$WORK_DIR/app-image-info.txt"; then
+    echo 'error: recovery image is not an ESP32-C3 application' >&2
+    exit 1
+  fi
+  if ! grep -Eq '^Checksum: .*\(valid\)$' "$WORK_DIR/app-image-info.txt"; then
+    echo 'error: recovery image checksum is invalid' >&2
+    exit 1
+  fi
+  if ! grep -Eq '^Validation hash: .*\(valid\)$' "$WORK_DIR/app-image-info.txt"; then
+    echo 'error: recovery image validation hash is invalid' >&2
+    exit 1
+  fi
+}
+
+write_and_verify() {
+  local offset="$1" size="$2" image="$3"
+  local limit
+  case "$offset" in
+    "$APP1_OFFSET_HEX") limit="$APP1_SIZE" ;;
+    "$APP0_OFFSET_HEX") limit="$APP0_SIZE" ;;
+    "$OTADATA_OFFSET_HEX") limit="$OTADATA_SIZE" ;;
+    0xF000) limit="$FLASH_SECTOR_SIZE" ;;
+    *) echo 'error: refusing a write to a protected offset' >&2; exit 1 ;;
+  esac
+  if (( size <= 0 || size > limit || $(file_size "$image") != size )) ||
+     { [[ "$offset" != "$APP1_OFFSET_HEX" ]] && (( size != limit )); }; then
+    echo 'error: payload size does not match the reviewed partition range' >&2
+    exit 1
+  fi
+  local readback="$WORK_DIR/readback.bin"
+  espflash write-bin --chip "$CHIP" "${PORT_ARGS[@]}" --after no-reset "$offset" "$image"
+  espflash read-flash --chip "$CHIP" "${PORT_ARGS[@]}" --after no-reset "$offset" "$size" "$readback"
+  if ! cmp -s "$image" "$readback"; then
+    echo 'error: readback differs; leaving the chip in download mode' >&2
+    printf 'Offset: %s, bytes: %s\nExpected SHA-256: %s\nReadback SHA-256: %s\n' \
+      "$offset" "$size" "$(sha256_file "$image")" "$(sha256_file "$readback")" >&2
+    cmp "$image" "$readback" >&2 || true
+    exit 1
+  fi
+}
+
+prepare_stock_backup() {
+  require_cmd python3
+  require_cmd esptool
+  snapshot_file "$1" "$WORK_DIR/stock.bin"
+  verify_backup "$WORK_DIR/stock.bin" "$2" "$FULL_FLASH_SIZE"
+  python3 - "$WORK_DIR" "$APP0_OFFSET" "$APP0_SIZE" "$OTADATA_OFFSET" "$OTADATA_SIZE" <<'PY'
+from pathlib import Path
+import sys
+workspace = Path(sys.argv[1])
+data = (workspace / "stock.bin").read_bytes()
+for name, offset, size in (("app0.bin", int(sys.argv[2]), int(sys.argv[3])),
+                           ("otadata.bin", int(sys.argv[4]), int(sys.argv[5]))):
+    path = workspace / name
+    path.write_bytes(data[offset:offset + size])
+    path.chmod(0o400)
+PY
+  python3 "$ROOT_DIR/scripts/inspect-otadata.py" "$WORK_DIR/otadata.bin" --expect-slot app0 --expect-sequence 1
+  verify_app_image "$WORK_DIR/app0.bin"
+}
+
+confirm_write() {
+  local phrase="$1"
+  if (( YES == 0 )); then
+    read -r -p "Type exactly '$phrase' to continue: " CONFIRM
+    if [[ "$CONFIRM" != "$phrase" ]]; then
+      echo 'aborted: confirmation did not match' >&2
+      exit 1
+    fi
+  fi
+}

@@ -1,14 +1,15 @@
 import { defineConfig } from "@playwright/test";
+import { testPort } from "./test-port";
 
-const port = Number(process.env.BREWTHINK_WEB_PORT ?? "4173");
-if (!Number.isInteger(port) || port < 1 || port > 65535) {
-  throw new Error("BREWTHINK_WEB_PORT must be a TCP port");
-}
+const port = testPort("BREWTHINK_WEB_PORT", 4173);
 const origin = `http://127.0.0.1:${port}`;
 
 export default defineConfig({
   testDir: "./tests",
+  testIgnore: "**/dev-server.spec.ts",
+  timeout: 60_000,
   fullyParallel: false,
+  workers: 1,
   forbidOnly: true,
   retries: 0,
   reporter: "line",
@@ -17,9 +18,9 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: `bun run wasm && vite --host 127.0.0.1 --port ${port} --strictPort`,
+    command: `vite preview --host 127.0.0.1 --port ${port} --strictPort`,
     url: origin,
-    reuseExistingServer: process.env.BREWTHINK_REUSE_WEB_SERVER === "1",
+    reuseExistingServer: false,
     timeout: 180_000,
   },
 });

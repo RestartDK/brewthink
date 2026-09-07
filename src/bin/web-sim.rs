@@ -12,11 +12,17 @@ use brewthink::{
     power::BatteryStatus,
     reader::{ReaderLine, ReaderView},
     settings::CustomImagePreview,
-    simulator::{Book as OwnedBook, Cover, sample_books},
+    simulator::{Book, Cover, sample_books},
     sleep::SleepView,
     ui::{AppFrame, render_app},
 };
 use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console)]
+    fn warn(message: &str);
+}
 
 const WIDTH: usize = 480;
 const HEIGHT: usize = 800;
@@ -130,7 +136,7 @@ impl RenderedFrame {
 
 #[wasm_bindgen]
 pub struct WebLibrary {
-    books: Vec<OwnedBook>,
+    books: Vec<Book>,
     images: Vec<OwnedImage>,
     app: App,
 }
@@ -164,7 +170,12 @@ impl WebLibrary {
         selected_image: u32,
     ) -> Result<WebLibrary, JsValue> {
         let preferences = AppPreferences::from_packed(packed_preferences).unwrap_or_default();
-        let imported = OwnedBook::from_epub(encoded, &file_name).map_err(js_error)?;
+        let imported = Book::from_epub(encoded, &file_name).map_err(js_error)?;
+        if let Some(error) = &imported.navigation_error {
+            warn(&format!(
+                "{file_name}: chapter navigation unreadable, using numbered chapters: {error:?}"
+            ));
+        }
         let mut books = sample_books().map_err(js_error)?;
         books[0] = imported;
         let images = sample_images();
@@ -271,7 +282,19 @@ impl WebLibrary {
                     SettingsItem::ALL.len(),
                 )
             }
+            AppView::BookCover { book, .. } => {
+                let book = &self.books[book.index()];
+                let cover = book
+                    .cover
+                    .frame_bitmap()
+                    .ok_or_else(|| JsValue::from_str("cover frame is unavailable"))?;
+                render_app(AppFrame::Cover(cover), &mut frame).map_err(js_error)?;
+                FrameMetadata::book("cover", book)
+            }
             AppView::Reader(session) => self.render_reader(session.location(), &mut frame)?,
+            AppView::ReaderDrawer(drawer) => {
+                self.render_reader(drawer.session().location(), &mut frame)?
+            }
             AppView::Image(image) => self.render_image(image, &mut frame)?,
             AppView::Sleeping { resume } => self.render_sleep(resume, &mut frame)?,
             AppView::Error { book, .. } => {
@@ -344,6 +367,15 @@ impl WebLibrary {
                         Err(_) => return false,
                     }
                 }
+                AppEffect::Render
+                    if matches!(
+                        self.app.view(),
+                        AppView::BookCover { book, .. }
+                            if self.books[book.index()].cover.frame_bitmap().is_none()
+                    ) =>
+                {
+                    self.app.input(AppInput::Confirm)
+                }
                 AppEffect::None | AppEffect::Render | AppEffect::EnterDeepSleep { .. } => {
                     return changed;
                 }
@@ -361,10 +393,10 @@ impl WebLibrary {
             .enumerate()
             .map(|(index, (book, thumbnail))| {
                 let cover = match &book.cover {
-                    Cover::Decoded(bytes)
+                    Cover::Decoded { shelf, .. }
                         if state.selected().is_some_and(|id| id.index() != index) =>
                     {
-                        downsample_cover(bytes, thumbnail);
+                        downsample_cover(shelf, thumbnail);
                         Some(shelf_bitmap(thumbnail))
                     }
                     cover => cover.bitmap(),
@@ -453,11 +485,7 @@ impl WebLibrary {
         target: &mut PackedImage<'_>,
     ) -> Result<FrameMetadata, JsValue> {
         let image = &self.images[image.index()];
-        render_app(
-            AppFrame::Sleep(SleepView::custom(image.bitmap(), self.app.battery())),
-            target,
-        )
-        .map_err(js_error)?;
+        render_app(AppFrame::Sleep(SleepView::custom(image.bitmap())), target).map_err(js_error)?;
         render_image_viewer(
             &image.name,
             self.app.selected_sleep_image() == Some(ImageId::new(image.index)),
@@ -492,19 +520,18 @@ impl WebLibrary {
             .lines()
             .map(|line| ReaderLine::new(line.text(), line.style()))
             .collect::<Vec<_>>();
-        render_app(
-            AppFrame::Reader(ReaderView::new(
-                &book.title,
-                page.chapter_title(),
-                &lines,
-                location,
-                self.app.reader_preferences(),
-                self.app.battery(),
-            )),
-            target,
-        )
-        .map_err(js_error)?;
-        Ok(FrameMetadata {
+        let chapter_title = match self.app.view() {
+            AppView::ReaderDrawer(drawer) => book.chapters[drawer.chapter()].title(),
+            _ => chapter.title(),
+        };
+        let mut view = ReaderView::new(
+            &book.title,
+            chapter_title,
+            &lines,
+            self.app.reader_preferences(),
+            self.app.battery(),
+        );
+        let mut metadata = FrameMetadata {
             screen: "reader",
             title: book.title.clone(),
             creator: book.creator.clone(),
@@ -514,7 +541,21 @@ impl WebLibrary {
             page_count: location.page_count(),
             chapter: location.spine_index(),
             chapter_count: location.spine_count(),
-        })
+        };
+        if let AppView::ReaderDrawer(drawer) = self.app.view() {
+            view = view.with_drawer(drawer);
+            metadata.screen = "reader-drawer";
+            metadata.creator = match drawer.selected() {
+                brewthink::app::ReaderControl::Chapter => format!("Chapter: {chapter_title}"),
+                brewthink::app::ReaderControl::Position => {
+                    format!("Book position: {}%", drawer.position().percent())
+                }
+                other => other.label().into(),
+            };
+            metadata.chapter = drawer.chapter();
+        }
+        render_app(AppFrame::Reader(view), target).map_err(js_error)?;
+        Ok(metadata)
     }
 
     fn render_sleep(
@@ -528,26 +569,23 @@ impl WebLibrary {
                 page_index,
                 ..
             } => format!(
-                "CHAPTER {} · PAGE {} · POSITION SAVED",
+                "Chapter {} · page {} · position saved",
                 spine_index + 1,
                 page_index + 1
             ),
-            ResumePoint::Home { .. } => "HOME POSITION SAVED".into(),
-            ResumePoint::Books { .. } => "BOOKS POSITION SAVED".into(),
-            ResumePoint::Files { .. } => "FILES POSITION SAVED".into(),
-            ResumePoint::Settings { .. } => "SETTINGS POSITION SAVED".into(),
-            ResumePoint::Image { .. } => "IMAGE POSITION SAVED".into(),
+            ResumePoint::Home { .. } => "Home position saved".into(),
+            ResumePoint::Books { .. } => "Books position saved".into(),
+            ResumePoint::Files { .. } => "Files position saved".into(),
+            ResumePoint::Settings { .. } => "Settings position saved".into(),
+            ResumePoint::Image { .. } => "Image position saved".into(),
         };
 
         for source in self.app.sleep_screen_plan(resume).sources() {
             match source {
                 SleepScreenSource::CustomImage(image_id) => {
                     let image = &self.images[image_id.index()];
-                    render_app(
-                        AppFrame::Sleep(SleepView::custom(image.bitmap(), self.app.battery())),
-                        target,
-                    )
-                    .map_err(js_error)?;
+                    render_app(AppFrame::Sleep(SleepView::custom(image.bitmap())), target)
+                        .map_err(js_error)?;
                     return Ok(FrameMetadata::selection(
                         "sleep",
                         &image.name,
@@ -558,20 +596,11 @@ impl WebLibrary {
                 }
                 SleepScreenSource::BookCover(book_id) => {
                     let book = &self.books[book_id.index()];
-                    let Some(cover) = book.cover.bitmap() else {
+                    let Some(cover) = book.cover.frame_bitmap() else {
                         continue;
                     };
-                    render_app(
-                        AppFrame::Sleep(SleepView::book_cover(
-                            &book.title,
-                            &book.creator,
-                            &status,
-                            cover,
-                            self.app.battery(),
-                        )),
-                        target,
-                    )
-                    .map_err(js_error)?;
+                    render_app(AppFrame::Sleep(SleepView::book_cover(cover)), target)
+                        .map_err(js_error)?;
                     let mut metadata = FrameMetadata::book("sleep", book);
                     metadata.selected = book_id.index();
                     return Ok(metadata);
@@ -629,7 +658,7 @@ impl FrameMetadata {
         }
     }
 
-    fn book(screen: &'static str, book: &OwnedBook) -> Self {
+    fn book(screen: &'static str, book: &Book) -> Self {
         Self {
             screen,
             title: book.title.clone(),
@@ -700,6 +729,11 @@ fn sample_images() -> Vec<OwnedImage> {
     .enumerate()
     .map(|(index, (name, kind))| OwnedImage::sample(index, name, kind))
     .collect()
+}
+
+#[wasm_bindgen]
+pub fn front_button_centers() -> Vec<i32> {
+    brewthink::ui::FRONT_BUTTON_CENTERS.to_vec()
 }
 
 #[wasm_bindgen]

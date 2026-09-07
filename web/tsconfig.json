@@ -15,5 +15,5 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true
   },
-  "include": ["src", "tests", "playwright.config.ts", "vite.config.ts"]
+  "include": ["src", "tests", "parity-tests", "playwright.config.ts", "playwright.dev.config.ts", "playwright.parity.config.ts", "vite.config.ts"]
 }

@@ -1,33 +1,49 @@
 # Simulator reading parity
 
-Imported EPUBs now use `DeviceEpub`, `StreamingZip`, bounded XML/layout, and the device PNG/JPEG cover decoders. The browser no longer uses the host inspection parser or its separate paginator. Those host inspection tools remain available.
+Imported EPUBs use `DeviceEpub`, `StreamingZip`, bounded XML/layout, and the native PNG/JPEG decoders. The browser no longer has its own imported-book parser, paginator, or image decoder. Host inspection and image-conversion tools remain available separately.
 
-`simulator::Book` owns the imported chapter XHTML. Each resource obeys the device's 140 KiB limit and the publication's 64-item spine limit. `Chapter::page` produces only the requested bounded page. Typography changes recompute page counts through the same layout function used by the device.
+`simulator::Book` owns chapter XHTML bounded to 140 KiB per resource and 64 spine items. `Chapter::page` produces the requested bounded page and its page count. Typography changes use the device layout function. EPUB 3 navigation and EPUB 2 NCX supply chapter names; missing names fall back to `Chapter n`. Malformed navigation clears partial names, records its typed error, and emits a browser console warning without rejecting readable text. Canned books retain their explicit `Section n` labels.
 
-The simulator checks both compressed and uncompressed cover sizes against the 128 KiB cover budget. Missing, oversized, unsupported, and failed covers remain distinct in `Cover`; the UI uses a placeholder or the existing sleep fallback. PNG and JPEG rendering use the device's scale, luma, dithering, and alpha behavior. Unselected shelf covers use the device's shared two-by-two luma average. Rendering keeps the four-shade format introduced in #16.
+## Covers and UI
 
-The canned demo still uses synthetic chapter text and procedural images. Its text enters bounded XHTML layout, but it does not claim to exercise archive parsing. Imported files exercise the complete reading path.
+Both compressed and uncompressed cover entries must fit 128 KiB. Shelf decoding produces a 176 × 264 image. Other shelf slots use the device's shared two-by-two luma average to reduce that image to 88 × 132.
 
-## What the tests prove
+Original-resolution opening and sleep frames have a separate **96 KiB encoded-input limit**. This is 98,304 input bytes, distinct from the **96,000-byte** packed output. Those frames decode the original PNG/JPEG directly at 480 × 800 with Contain scaling, not an enlarged shelf thumbnail. A cover between the limits can appear on the shelf while opening skips to text and sleep uses its fallback.
 
-Run from the development shell after installing the web dependencies and Chromium:
+`Cover` distinguishes missing, oversized, unsupported, failed, and decoded sources. A decoded shelf carries a separate `OriginalFrame` outcome: decoded, too large, or failed. Eligible shelf and full-frame pixels are decoded once at import, keeping rendering immutable. PNG/JPEG source-error tests cover both targets; current decoder failures depend on the source, not the destination geometry.
+
+The shared Noto chrome, light-grey selections with black text/outlines, drawer drafts, row-specific Confirm behavior, Back cancellation, and original cover views remain intact. Logical pixels are exactly 0, 85, 170, and 255. Warm browser chrome does not tint native frames.
+
+## Verification
+
+From the development shell, after installing web dependencies and Chromium:
 
 ```sh
 bash scripts/check-simulator-parity.sh
 ```
 
-The script generates synthetic EPUBs and runs `simulator-oracle` without the `web-sim` feature. That native tool reads them through the device APIs and renders reference frames with the shared `App` and renderer. Playwright imports the same files into the production WASM build and compares all 96,000 packed framebuffer bytes across both bitplanes.
+The script regenerates 17 deterministic synthetic EPUBs and compares them byte-for-byte with the committed fixtures. `simulator-oracle` runs without `web-sim`: it reads through the device APIs, applies each cover budget independently, and renders references with `App` and the native renderer. It never calls `simulator::Book` or `Cover`. Playwright imports the same inputs into the production WASM build and compares all 96,000 framebuffer bytes across both bitplanes.
 
-The cases cover ten reader frames across two typography configurations and two chapters, sleep/wake restoration, PNG and JPEG cover sleep frames, malformed XML, oversized resources, too many spine items, and cover fallbacks. Host tests also compare all 27 font/size/spacing combinations. A separate unit test checks all 256 possible four-shade, two-by-two shelf-cover pixel patterns.
+Coverage includes:
 
-The original browser fails the pixel comparisons and the device-budget checks. The captured example below shows its collapsed preformatted block. The corrected browser preserves the newlines and indentation. Literal `&amp;` spelling in this fixture is intentional CDATA content.
+- Ten reader pages across two typography configurations and two chapters; host tests cover all 27 font/size/spacing combinations.
+- Native drawer frames for staged chapter changes, cancellation, applied jumps, 0%/100% endpoints, staged/applied typography, and sleep/wake restoration.
+- Named EPUB 3/NCX navigation and missing/malformed navigation fallback.
+- PNG/JPEG opening and sleep frames, plus the existing full-resolution cover fixture that detects thumbnail enlargement.
+- Exact 96 KiB, 96 KiB + 1, 128 KiB, and 128 KiB + 1 inputs; a valid DEFLATE entry whose compressed size alone exceeds the shelf limit.
+- Native CLI and browser rejection of malformed XML, oversized chapters, and too many spine items; readable books with missing, oversized, unsupported, or corrupt covers.
+- Every one of the 256 four-shade, two-by-two shelf pixel patterns, including rounding ties.
 
-| Original browser | Bounded browser |
+These native browser captures match the oracle byte-for-byte. Literal `&amp;` in the fixture is intentional CDATA content.
+
+| Bounded reader | Staged named chapter |
 | --- | --- |
-| ![Collapsed preformatted text](images/simulator-reader-before.png) | ![Preserved preformatted text](images/simulator-reader-after.png) |
+| ![Preserved preformatted text and whole-word layout](images/simulator-reader.png) | ![Named chapter with a grey selection background](images/simulator-drawer.png) |
+
+The separate parity workflow owns a strict-port production preview, never a reused development server. `BREWTHINK_PARITY_PORT` overrides port 4185. Production, development-reload, and parity configurations share port validation and strict TypeScript checks. Main CI runs are not cancelled by later pushes.
 
 ## Limits
 
-This is reading-path parity, not ESP32 emulation. The browser keeps all bounded chapter sources in host memory and checks them during import. The device reads chapters from SD on demand. Browser tests do not reproduce SD faults, SRAM pressure, USB timing, display waveforms, or physical power loss.
+This is reading-path parity, not ESP32 emulation. The browser retains all bounded chapter sources and checks them at import; the device reads chapters from SD on demand. A malformed later chapter can therefore fail earlier in the browser. The canned demo exercises bounded layout and procedural images, not archive parsing.
 
-The simulator parity workflow is separate from the general browser workflow. It owns a strict-port production preview and does not reuse a development server. Set `BREWTHINK_PARITY_PORT` when its default port 4185 is occupied.
+These checks do not reproduce SD faults, device SRAM pressure, USB timing, display waveforms, optical shades, refresh latency, or physical power loss. No hardware operations are part of this workflow. The known source-pixel shrinking defect is shared by both callers and is not fixed by parity.
