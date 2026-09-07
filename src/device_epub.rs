@@ -632,8 +632,9 @@ mod tests {
     fn package_metadata_preserves_cdata_and_ignores_empty_title_elements() {
         let mut scratch = DevicePackageScratch::new();
         let xml = br#"<!DOCTYPE package [<!ENTITY custom "unused">]><package><metadata><title/>ignored<title><![CDATA[A &amp; B]]></title><creator><![CDATA[C & D]]></creator><description>&custom;</description></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="chapter"/></spine></package>"#;
-        let publication =
-            super::parse_package::<Infallible>("OPS/book.opf", xml, &mut scratch).unwrap();
+        let mut publication = super::DevicePublication::new();
+        super::parse_package::<Infallible>("OPS/book.opf", xml, &mut scratch, &mut publication)
+            .unwrap();
         assert_eq!(publication.title(), "A &amp; B");
         assert_eq!(publication.creator(), "C & D");
         assert_eq!(

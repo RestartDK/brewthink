@@ -8,7 +8,13 @@ Safe app1 workflow for the physical Xteink X4.
 scripts/check-board-abstraction.sh
 ```
 
-This runs formatting, host pin-map/display tests, a WASM library check, embedded checks, Clippy, and app1 image inspection. It does not write device flash.
+This runs formatting, host library and device-control tests, host tool Clippy, a WASM library check, and embedded Clippy. It also builds the host executables, runs the pseudo-terminal and Python script tests, and calls `scripts/check-firmware.sh`.
+
+`check-firmware.sh` links and inspects app1 images for the heartbeat, raw USB SD diagnostic, SD write diagnostic, four-shade reader, and grayscale bench. It checks the controller-RAM reader ELF against the stack budget. The heartbeat also builds with host-RAM previous-frame storage.
+
+The reader requires controller-RAM previous-frame storage. The pre-grayscale host-RAM reader left only 14,400 stack bytes against a 51,120-byte entry-frame requirement. The four-shade reader retains a larger logical frame, so that unsupported configuration remains rejected. `build.rs` now rejects that configuration, and the script checks the rejection. This restriction does not apply to the diagnostic builds. Reports remain under `artifacts/ci`.
+
+Both scripts require the pinned development toolchain, `espflash`, `esptool`, Python, and LLVM. They only create local build artifacts. They do not access hardware or write device flash.
 
 ## UI frame contract
 
