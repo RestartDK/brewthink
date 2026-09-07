@@ -8,11 +8,7 @@ pub use crate::image_decoder::{JpegDecodeWorkspace, PngDecodeWorkspace};
 pub const COVER_WIDTH: usize = 176;
 pub const COVER_HEIGHT: usize = 264;
 pub const COVER_BYTES: usize = COVER_WIDTH * COVER_HEIGHT / 8 * READER_DEPTH.bits();
-pub const MAX_ENCODED_COVER_BYTES: u32 = if cfg!(feature = "experimental-gray8") {
-    80 * 1024
-} else {
-    128 * 1024
-};
+pub const MAX_ENCODED_COVER_BYTES: u32 = 128 * 1024;
 
 pub type CoverDecodeWorkspace = PngDecodeWorkspace;
 pub type CoverDecodeError = ImageDecodeError;
@@ -103,14 +99,7 @@ mod tests {
     #[test]
     fn bounds_encoded_cover_work() {
         let limit = super::MAX_ENCODED_COVER_BYTES;
-        assert_eq!(
-            limit,
-            if cfg!(feature = "experimental-gray8") {
-                80 * 1024
-            } else {
-                128 * 1024
-            }
-        );
+        assert_eq!(limit, 128 * 1024);
         assert!(encoded_cover_fits(limit, limit));
         assert!(!encoded_cover_fits(limit + 1, 1));
         assert!(!encoded_cover_fits(1, limit + 1));

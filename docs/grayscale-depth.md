@@ -46,20 +46,27 @@ This is a limit of the documented single RAM-state selection, not a proof that f
 
 Commands `0x25` and `0x4D` operate the controller's dithering engine. The datasheet calls this a black-and-white monochrome feature. Accepting tone data for dithering does not establish independently driven gray pixels.
 
-## Brewthink baseline
+## Reader scope
+
+Normal reader images use four shades, or 2 bits per pixel. There is no eight-tone reader build profile. Covers, previews, image viewing, and sleep preserve these four logical levels without ordered dithering. See [image pipeline](image-pipeline.md) for packing, memory, and screenshot details.
+
+The reader uses one fixed stock absolute waveform. The adjustment waveform and eight-tone recipes remain behind `grayscale-bench` for the recorded experiments only. This source integration has not been flashed or tested optically. The held version 3 diagnostic pattern remains untouched.
+
+## Historical Brewthink baseline
 
 At source revision `b7690dc`, the image decoder writes a `MonochromeImage`. The default conversion uses a 4 × 4 Bayer pattern. The display accepts one 48,000-byte monochrome frame and supports full-clean, quick-clean, and differential refreshes.
 
-For differential refreshes, the second controller RAM bank holds the previous monochrome frame. It is not currently a second grayscale bitplane.
+At that baseline, differential refreshes use the second controller RAM bank for the previous monochrome frame, not a second grayscale bitplane.
 
 Relevant implementation paths are:
 
-- [`src/image_decoder.rs`](../src/image_decoder.rs), decoding and monochrome conversion.
-- [`src/image/mod.rs`](../src/image/mod.rs), `MonochromeImage` and `RenderOptions`.
+- [`src/image_decoder.rs`](../src/image_decoder.rs), bounded decoding and tone conversion.
+- [`src/image/packed.rs`](../src/image/packed.rs), `PackedImage` and `PixelDepth`, which replace `MonochromeImage`.
+- [`src/image/mod.rs`](../src/image/mod.rs), `RenderOptions`.
 - [`src/display/ssd1677.rs`](../src/display/ssd1677.rs), RAM writes and refresh sequences.
 - [`tools/device-control.rs`](../tools/device-control.rs), available USB commands.
 
-The normal reader USB protocol has no grayscale experiment or waveform-selection command. Its `screen` command returns the intended monochrome framebuffer, not an optical measurement of the panel. The separate bench below uses its own protocol and does not run the reader app.
+The normal reader USB protocol has no grayscale experiment or waveform-selection command. Its `screen` command returns the intended logical framebuffer, not an optical measurement of the panel. The separate bench below uses its own protocol and does not run the reader app.
 
 ## Experiment record
 

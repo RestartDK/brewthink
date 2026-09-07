@@ -7,7 +7,9 @@ use brewthink::{
     },
     epub::{ChapterContent, ContentStyle, EpubBook},
     files::{FileItem, FileKind},
-    image::{Dither, PackedBitmap, PackedImage, RenderOptions, RgbImage, ScaleMode, Size},
+    image::{
+        Dither, PackedBitmap, PackedImage, READER_DEPTH, RenderOptions, RgbImage, ScaleMode, Size,
+    },
     image_viewer::render_image_viewer,
     input::UsbState,
     library::ShelfBook,
@@ -125,6 +127,11 @@ impl RenderedFrame {
         self.pixels.len()
     }
 
+    #[wasm_bindgen(getter)]
+    pub fn bits_per_pixel(&self) -> usize {
+        READER_DEPTH.bits()
+    }
+
     pub fn pixels(&self) -> Vec<u8> {
         self.pixels.clone()
     }
@@ -226,9 +233,9 @@ impl WebLibrary {
     }
 
     pub fn render(&self) -> Result<RenderedFrame, JsValue> {
-        let mut pixels = vec![0xFF; WIDTH * HEIGHT / 8];
-        let mut frame = PackedImage::monochrome(Size::new(WIDTH, HEIGHT).unwrap(), &mut pixels)
-            .map_err(js_error)?;
+        let size = Size::new(WIDTH, HEIGHT).unwrap();
+        let mut pixels = vec![0xFF; READER_DEPTH.byte_len(size).unwrap()];
+        let mut frame = PackedImage::new(size, READER_DEPTH, &mut pixels).map_err(js_error)?;
         let metadata = match self.app.view() {
             AppView::Home(state) => {
                 render_app(
@@ -771,7 +778,7 @@ struct OwnedCover {
 
 impl OwnedCover {
     fn bitmap(&self) -> PackedBitmap<'_> {
-        PackedBitmap::monochrome(self.size, &self.pixels)
+        PackedBitmap::new(self.size, READER_DEPTH, &self.pixels)
             .expect("owned cover shape was checked when it was packed")
     }
 }
@@ -786,16 +793,20 @@ struct OwnedImage {
 
 impl OwnedImage {
     fn sample(index: usize, name: &str, kind: FileKind) -> Self {
-        let mut pixels = vec![0xFF; WIDTH * HEIGHT / 8];
+        let size = Size::new(WIDTH, HEIGHT).unwrap();
+        let mut pixels = vec![0xFF; READER_DEPTH.byte_len(size).unwrap()];
+        let mut image = PackedImage::new(size, READER_DEPTH, &mut pixels).unwrap();
         let step = 22 + index * 7;
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
                 let border = !(20..WIDTH - 20).contains(&x) || !(20..HEIGHT - 20).contains(&y);
                 let diagonal = (x / step + y / step + index).is_multiple_of(5);
-                if border || diagonal {
-                    let pixel = y * WIDTH + x;
-                    pixels[pixel / 8] &= !(0x80 >> (pixel % 8));
-                }
+                let shade = if border || diagonal {
+                    0
+                } else {
+                    (x * 255 / (WIDTH - 1)) as u8
+                };
+                image.set_luma(x, y, shade);
             }
         }
         Self {
@@ -808,8 +819,12 @@ impl OwnedImage {
     }
 
     fn bitmap(&self) -> PackedBitmap<'_> {
-        PackedBitmap::monochrome(Size::new(WIDTH, HEIGHT).unwrap(), &self.pixels)
-            .expect("sample image has the exact frame shape")
+        PackedBitmap::new(
+            Size::new(WIDTH, HEIGHT).unwrap(),
+            READER_DEPTH,
+            &self.pixels,
+        )
+        .expect("sample image has the exact frame shape")
     }
 }
 
@@ -1040,14 +1055,14 @@ fn pattern_cover(index: usize) -> OwnedCover {
 
 fn pack_cover(source: &RgbImage<'_>) -> OwnedCover {
     let size = Size::new(COVER_WIDTH, COVER_HEIGHT).unwrap();
-    let mut pixels = vec![0xFF; COVER_WIDTH * COVER_HEIGHT / 8];
-    let mut target = PackedImage::monochrome(size, &mut pixels).unwrap();
+    let mut pixels = vec![0xFF; READER_DEPTH.byte_len(size).unwrap()];
+    let mut target = PackedImage::new(size, READER_DEPTH, &mut pixels).unwrap();
     brewthink::image::render(
         source,
         &mut target,
         RenderOptions {
             scale: ScaleMode::Cover,
-            dither: Dither::Ordered4x4,
+            dither: Dither::None,
         },
     );
     OwnedCover { size, pixels }

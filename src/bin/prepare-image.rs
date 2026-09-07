@@ -35,10 +35,9 @@ impl Arguments {
             "ordered" => (PixelDepth::Monochrome, Dither::Ordered4x4),
             "threshold" => (PixelDepth::Monochrome, Dither::Threshold(128)),
             "gray4" => (PixelDepth::Four, Dither::None),
-            "gray8" => (PixelDepth::Eight, Dither::None),
             value => {
                 return Err(format!(
-                    "unsupported quantizer {value:?}; use ordered, threshold, gray4, or gray8"
+                    "unsupported quantizer {value:?}; use ordered, threshold, or gray4"
                 )
                 .into());
             }

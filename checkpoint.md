@@ -2,7 +2,7 @@
 
 ## Active hardware override, grayscale bench, 2026-09-06
 
-This section supersedes the historical live-firmware state below. Source `main` was at `ef32fbb` when the diagnostic was added. The diagnostic changes and `docs/grayscale-depth.md` remain uncommitted.
+This section supersedes the historical live-firmware state below. Source `main` was at `ef32fbb` when the diagnostic was added. The grayscale PR preserves the diagnostic changes and `docs/grayscale-depth.md`. The original experiment checkout remains separate.
 
 - App1 now runs the explicitly triggered grayscale bench, not the reader app. Its USB protocol is `BREWGRAY/1`; normal `scripts/device-control.sh` reader commands do not apply.
 - Installed version 3 image `artifacts/grayscale-depth/eight-repeat/bench.bin`, 105,840 bytes, SHA-256 `9024b7218bc2697def152b7a7c7d64a45aac60e3880358bb27a81eb99f3c64a5`.
@@ -18,6 +18,14 @@ This section supersedes the historical live-firmware state below. Source `main` 
 - The current pre-experiment reader differs from the old verified storage image below. Its validated live readback is `backup/grayscale-before/reader.bin`, 503,952 bytes. Use that file for restoration, after reviewing its app1 range. It covers the entire diagnostic write and sector boundary.
 
 See [grayscale depth investigation](docs/grayscale-depth.md) for the pattern geometry, command protocol, evidence, and next measurement. The host work tab is closed; no monitor remains running.
+
+## Four-shade reader source integration
+
+The PR adds four logical shades, 2 bits per pixel, across images, covers, previews, sleep, screenshots, and the simulator. There is no eight-tone reader profile. This source has not been flashed, and none of its checks operated the connected device.
+
+The reader retains a 96,000-byte logical frame. Encoded limits remain 96 KiB for images, 128 KiB for covers, and 140 KiB for chapter resources. In-place publication and catalog parsing avoids large stack returns. The linked stack check reports 12,304 bytes required, including the unchanged 8,192-byte reserve, and 25,984 bytes available.
+
+Verification covers 173 host library tests, embedded Clippy, a release link and stack check, 11 browser tests, and real host CLI traffic over pseudo-terminals. These checks prove logical tone preservation and command sequences, not the new reader's optical behavior. Existing monochrome UI fixtures remain byte-identical. The source-pixel shrinking defect remains a separate image-quality limitation.
 
 ## Historical storage checkpoint
 

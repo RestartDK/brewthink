@@ -5,7 +5,6 @@ pub enum PixelDepth {
     Monochrome,
     #[default]
     Four,
-    Eight,
 }
 
 impl PixelDepth {
@@ -13,7 +12,6 @@ impl PixelDepth {
         match self {
             Self::Monochrome => 1,
             Self::Four => 2,
-            Self::Eight => 3,
         }
     }
 
@@ -25,7 +23,6 @@ impl PixelDepth {
         match bits {
             1 => Some(Self::Monochrome),
             2 => Some(Self::Four),
-            3 => Some(Self::Eight),
             _ => None,
         }
     }
@@ -42,9 +39,6 @@ impl PixelDepth {
     }
 }
 
-#[cfg(feature = "experimental-gray8")]
-pub const READER_DEPTH: PixelDepth = PixelDepth::Eight;
-#[cfg(not(feature = "experimental-gray8"))]
 pub const READER_DEPTH: PixelDepth = PixelDepth::Four;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -197,7 +191,7 @@ mod tests {
     #[test]
     fn every_tone_round_trips_in_lsb_first_bitplanes() {
         let size = Size::new(8, 2).unwrap();
-        for depth in [PixelDepth::Monochrome, PixelDepth::Four, PixelDepth::Eight] {
+        for depth in [PixelDepth::Monochrome, PixelDepth::Four] {
             let mut bytes = vec![0; depth.byte_len(size).unwrap()];
             let mut image = PackedImage::new(size, depth, &mut bytes).unwrap();
             for x in 0..8 {
@@ -236,12 +230,13 @@ mod tests {
 
     #[test]
     fn rejects_invalid_depth_and_buffer_shapes() {
+        assert_eq!(PixelDepth::from_bits(3), None);
         assert_eq!(PixelDepth::from_bits(4), None);
         assert!(PackedBitmap::new(Size::new(8, 1).unwrap(), PixelDepth::Four, &[0]).is_err());
-        assert!(PackedBitmap::new(Size::new(7, 1).unwrap(), PixelDepth::Eight, &[0; 3]).is_err());
+        assert!(PackedBitmap::new(Size::new(7, 1).unwrap(), PixelDepth::Four, &[0; 2]).is_err());
         assert_eq!(
-            PixelDepth::Eight.byte_len(Size::new(480, 800).unwrap()),
-            Ok(144_000)
+            PixelDepth::Four.byte_len(Size::new(480, 800).unwrap()),
+            Ok(96_000)
         );
     }
 }

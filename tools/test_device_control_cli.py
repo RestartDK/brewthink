@@ -83,8 +83,8 @@ class DeviceControlCliTests(unittest.TestCase):
             os.close(master)
             os.close(slave)
 
-    def test_screenshots_round_trip_legacy_four_and_eight_tones(self):
-        for bits, quantizer in [(1, "threshold"), (2, "gray4"), (3, "gray8")]:
+    def test_screenshots_round_trip_legacy_and_four_tones(self):
+        for bits, quantizer in [(1, "threshold"), (2, "gray4")]:
             with self.subTest(bits=bits), tempfile.TemporaryDirectory() as directory:
                 output = Path(directory) / "screen.png"
                 packed = Path(directory) / "frame.bin"
@@ -105,6 +105,22 @@ class DeviceControlCliTests(unittest.TestCase):
                 self.assertEqual(conversion.returncode, 0, conversion.stderr.decode())
                 self.assertEqual(packed.read_bytes(), frame)
 
+    def test_prepare_composites_alpha_and_writes_four_level_pgm(self):
+        with tempfile.TemporaryDirectory() as directory:
+            packed = Path(directory) / "frame.bin"
+            preview = Path(directory) / "preview.pgm"
+            result = subprocess.run([
+                str(self.prepare), str(ROOT / "web/tests/fixtures/gray-ramp.png"),
+                str(packed), str(preview), "64", "16", "contain", "gray4"
+            ], capture_output=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertEqual(len(packed.read_bytes()), 256)
+            header = b"P5\n64 16\n255\n"
+            pgm = preview.read_bytes()
+            self.assertTrue(pgm.startswith(header))
+            row = b"".join(bytes([level]) * 16 for level in (0, 85, 170, 255))
+            self.assertEqual(pgm[len(header):], row * 16)
+
     def test_bad_screen_checksum_never_writes_a_png(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "screen.png"
@@ -120,15 +136,13 @@ class DeviceControlCliTests(unittest.TestCase):
             self.assertIn(b"checksum mismatch", result.stderr)
             self.assertFalse(output.exists())
 
-    def test_upload_uses_the_advertised_eight_tone_image_limit(self):
+    def test_upload_transcodes_to_the_image_limit(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "ramp.png"
-            source.write_bytes((ROOT / "web/tests/fixtures/gray-ramp.png").read_bytes() + bytes(64 * 1024))
-            limit = 56 * 1024
+            source.write_bytes((ROOT / "web/tests/fixtures/gray-ramp.png").read_bytes() + bytes(100 * 1024))
+            limit = 96 * 1024
 
             def serve(peer):
-                self.assertEqual(peer.line(), b"BREWCTL/1 status\n")
-                peer.write(f"BREWCTL/1 IMAGE_PROFILE tones=8 max_image_bytes={limit}\nBREWCTL/1 STATUS view=home selected=0\nBREWCTL/1 DONE command=status status=ok\n".encode())
                 command = peer.line().decode().strip().split()
                 self.assertEqual(command[:3], ["BREWCTL/1", "upload", "image"])
                 self.assertEqual(command[3], "RAMP.JPG")
@@ -145,7 +159,7 @@ class DeviceControlCliTests(unittest.TestCase):
 
             result = self.client(["put-image", source], serve)
             self.assertEqual(result.returncode, 0, result.stderr.decode())
-            self.assertIn(b"limit=57344 transcoded=true", result.stdout)
+            self.assertIn(b"transcoded=yes", result.stdout)
 
 
 if __name__ == "__main__":

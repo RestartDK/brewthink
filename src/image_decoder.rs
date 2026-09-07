@@ -372,50 +372,50 @@ mod tests {
     const TRANSPARENT_PNG: &[u8] = include_bytes!("../web/tests/fixtures/transparent.png");
 
     #[test]
-    fn png_and_jpeg_preserve_four_and_eight_tones_without_dither() {
+    fn png_and_jpeg_preserve_four_tones_without_dither() {
         use crate::image::{Dither, PixelDepth};
-        for depth in [PixelDepth::Four, PixelDepth::Eight] {
-            let size = Size::new(64, 16).unwrap();
-            let mut bytes = vec![0; depth.byte_len(size).unwrap()];
-            let mut image = PackedImage::new(size, depth, &mut bytes).unwrap();
-            let options = RenderOptions {
-                scale: ScaleMode::Contain,
-                dither: Dither::None,
-            };
-            for format in [ImageFormat::Png, ImageFormat::Jpeg] {
-                match format {
-                    ImageFormat::Png => decode_png(
-                        include_bytes!("../web/tests/fixtures/gray-ramp.png"),
-                        &mut image,
-                        options,
-                        &mut PngDecodeWorkspace::new(),
-                    ),
-                    ImageFormat::Jpeg => decode_jpeg(
-                        include_bytes!("../web/tests/fixtures/gray-ramp.jpg"),
-                        &mut image,
-                        options,
-                        &mut JpegDecodeWorkspace::new(),
-                    ),
-                }
-                .unwrap();
-                let mut seen = 0u8;
-                for band in 0..8 {
-                    let level = image.bitmap().level(band * 8 + 4, 8);
-                    seen |= 1 << level;
-                    for y in 2..14 {
-                        for x in band * 8 + 2..band * 8 + 6 {
-                            assert_eq!(image.bitmap().level(x, y), level, "{depth:?} {format:?}");
-                        }
+        let depth = PixelDepth::Four;
+
+        let size = Size::new(64, 16).unwrap();
+        let mut bytes = vec![0; depth.byte_len(size).unwrap()];
+        let mut image = PackedImage::new(size, depth, &mut bytes).unwrap();
+        let options = RenderOptions {
+            scale: ScaleMode::Contain,
+            dither: Dither::None,
+        };
+        for format in [ImageFormat::Png, ImageFormat::Jpeg] {
+            match format {
+                ImageFormat::Png => decode_png(
+                    include_bytes!("../web/tests/fixtures/gray-ramp.png"),
+                    &mut image,
+                    options,
+                    &mut PngDecodeWorkspace::new(),
+                ),
+                ImageFormat::Jpeg => decode_jpeg(
+                    include_bytes!("../web/tests/fixtures/gray-ramp.jpg"),
+                    &mut image,
+                    options,
+                    &mut JpegDecodeWorkspace::new(),
+                ),
+            }
+            .unwrap();
+            let mut seen = 0u8;
+            for band in 0..8 {
+                let level = image.bitmap().level(band * 8 + 4, 8);
+                seen |= 1 << level;
+                for y in 2..14 {
+                    for x in band * 8 + 2..band * 8 + 6 {
+                        assert_eq!(image.bitmap().level(x, y), level, "{depth:?} {format:?}");
                     }
                 }
-                assert_eq!(
-                    seen,
-                    ((1u16 << depth.levels()) - 1) as u8,
-                    "{depth:?} {format:?}"
-                );
-                assert_eq!(image.bitmap().level(4, 8), 0);
-                assert_eq!(image.bitmap().level(60, 8), depth.levels() - 1);
             }
+            assert_eq!(
+                seen,
+                ((1u16 << depth.levels()) - 1) as u8,
+                "{depth:?} {format:?}"
+            );
+            assert_eq!(image.bitmap().level(4, 8), 0);
+            assert_eq!(image.bitmap().level(60, 8), depth.levels() - 1);
         }
     }
 

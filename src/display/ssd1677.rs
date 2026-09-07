@@ -861,104 +861,77 @@ mod tests {
     #[test]
     fn grayscale_planes_match_the_frozen_recipes_in_every_rotation() {
         use crate::image::{PackedImage, PixelDepth, Size};
-        let recipes = [
-            (3u8, 0u8),
-            (2, 1),
-            (2, 0),
-            (1, 1),
-            (0, 1),
-            (1, 0),
-            (1, 2),
-            (0, 0),
-        ];
         for rotation in [
             Rotation::Degrees0,
             Rotation::Degrees90,
             Rotation::Degrees180,
             Rotation::Degrees270,
         ] {
-            for depth in [PixelDepth::Four, PixelDepth::Eight] {
-                let size = Size::new(rotation.logical_width(), rotation.logical_height()).unwrap();
-                let mut bytes = vec![0; depth.byte_len(size).unwrap()];
-                let mut image = PackedImage::new(size, depth, &mut bytes).unwrap();
-                for y in 0..size.height() {
-                    for x in 0..size.width() {
-                        let level = (x % usize::from(depth.levels())) as u8;
-                        image.set_luma(
-                            x,
-                            y,
-                            (u16::from(level) * 255 / u16::from(depth.levels() - 1)) as u8,
-                        );
-                    }
+            let depth = PixelDepth::Four;
+
+            let size = Size::new(rotation.logical_width(), rotation.logical_height()).unwrap();
+            let mut bytes = vec![0; depth.byte_len(size).unwrap()];
+            let mut image = PackedImage::new(size, depth, &mut bytes).unwrap();
+            for y in 0..size.height() {
+                for x in 0..size.width() {
+                    let level = (x % usize::from(depth.levels())) as u8;
+                    image.set_luma(
+                        x,
+                        y,
+                        (u16::from(level) * 255 / u16::from(depth.levels() - 1)) as u8,
+                    );
                 }
-                let mut bus = FakeBus::default();
-                let controller = Ssd1677::with_profile(X4DriveProfile::StockParity)
-                    .initialize(&mut bus)
-                    .unwrap();
-                let mut display = BufferedDisplay::with_controller_ram(controller, rotation);
-                bus.events.clear();
-                assert_eq!(
-                    display.refresh_image(
-                        &mut bus,
-                        &mut NoDelay,
-                        image.bitmap(),
-                        RefreshMode::Differential
-                    ),
-                    Ok(RefreshMode::FullClean)
-                );
-                assert_eq!(display.baseline_state(), BaselineState::Asleep);
-                let bw = plane_bytes(&bus.events, CMD_WRITE_RAM_BW);
-                let red = plane_bytes(&bus.events, CMD_WRITE_RAM_RED);
-                let passes = if depth == PixelDepth::Eight { 2 } else { 1 };
-                assert_eq!(bw.len(), FRAME_BYTES * passes);
-                assert_eq!(red.len(), FRAME_BYTES * passes);
-                for panel_y in 0..super::HEIGHT {
-                    for panel_x in 0..super::WIDTH {
-                        let x = match rotation {
-                            Rotation::Degrees0 => panel_x,
-                            Rotation::Degrees90 => panel_y,
-                            Rotation::Degrees180 => super::WIDTH - 1 - panel_x,
-                            Rotation::Degrees270 => super::HEIGHT - 1 - panel_y,
-                        };
-                        let level = x % usize::from(depth.levels());
-                        for pass in 0..passes {
-                            let expected = if depth == PixelDepth::Four {
-                                3 - level as u8
-                            } else if pass == 0 {
-                                recipes[level].0
-                            } else {
-                                recipes[level].1
-                            };
-                            let offset =
-                                pass * FRAME_BYTES + panel_y * super::ROW_BYTES + panel_x / 8;
-                            let mask = 0x80 >> (panel_x % 8);
-                            let actual = u8::from(bw[offset] & mask != 0)
-                                | u8::from(red[offset] & mask != 0) << 1;
-                            assert_eq!(actual, expected);
-                        }
-                    }
-                }
-                let controls: Vec<_> = bus
-                    .events
-                    .iter()
-                    .filter_map(|event| match event {
-                        Event::Command(CMD_DISPLAY_UPDATE_CTRL2, data) => Some(data[0]),
-                        _ => None,
-                    })
-                    .collect();
-                assert_eq!(
-                    controls,
-                    if passes == 2 {
-                        vec![0xC7, 0xCF]
-                    } else {
-                        vec![0xC7]
-                    }
-                );
-                assert_eq!(
-                    bus.events.last(),
-                    Some(&Event::Command(CMD_DEEP_SLEEP, vec![3]))
-                );
             }
+            let mut bus = FakeBus::default();
+            let controller = Ssd1677::with_profile(X4DriveProfile::StockParity)
+                .initialize(&mut bus)
+                .unwrap();
+            let mut display = BufferedDisplay::with_controller_ram(controller, rotation);
+            bus.events.clear();
+            assert_eq!(
+                display.refresh_image(
+                    &mut bus,
+                    &mut NoDelay,
+                    image.bitmap(),
+                    RefreshMode::Differential
+                ),
+                Ok(RefreshMode::FullClean)
+            );
+            assert_eq!(display.baseline_state(), BaselineState::Asleep);
+            let bw = plane_bytes(&bus.events, CMD_WRITE_RAM_BW);
+            let red = plane_bytes(&bus.events, CMD_WRITE_RAM_RED);
+            assert_eq!(bw.len(), FRAME_BYTES);
+            assert_eq!(red.len(), FRAME_BYTES);
+            for panel_y in 0..super::HEIGHT {
+                for panel_x in 0..super::WIDTH {
+                    let x = match rotation {
+                        Rotation::Degrees0 => panel_x,
+                        Rotation::Degrees90 => panel_y,
+                        Rotation::Degrees180 => super::WIDTH - 1 - panel_x,
+                        Rotation::Degrees270 => super::HEIGHT - 1 - panel_y,
+                    };
+                    let level = x % usize::from(depth.levels());
+                    let expected = 3 - level as u8;
+                    let offset = panel_y * super::ROW_BYTES + panel_x / 8;
+                    let mask = 0x80 >> (panel_x % 8);
+                    let actual =
+                        u8::from(bw[offset] & mask != 0) | u8::from(red[offset] & mask != 0) << 1;
+                    assert_eq!(actual, expected);
+                }
+            }
+            let controls: Vec<_> = bus
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::Command(CMD_DISPLAY_UPDATE_CTRL2, data) => Some(data[0]),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(controls, vec![0xC7]);
+            assert_eq!(
+                bus.events.last(),
+                Some(&Event::Command(CMD_DEEP_SLEEP, vec![3]))
+            );
         }
     }
 
@@ -1023,9 +996,9 @@ mod tests {
             Err(Error::InvalidImageDimensions)
         );
         assert!(bus.events.is_empty());
-        let mut bytes = vec![255; FRAME_BYTES * 3];
+        let mut bytes = vec![255; FRAME_BYTES * 2];
         let mut image =
-            PackedImage::new(Size::new(480, 800).unwrap(), PixelDepth::Eight, &mut bytes).unwrap();
+            PackedImage::new(Size::new(480, 800).unwrap(), PixelDepth::Four, &mut bytes).unwrap();
         image.set_luma(0, 0, 128);
         bus.fail_next_wait = true;
         assert!(

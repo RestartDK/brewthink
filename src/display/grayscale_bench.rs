@@ -3,7 +3,7 @@ use embedded_hal::delay::DelayNs;
 use super::grayscale::{
     ADJUSTMENT_WAVEFORM, EIGHT_RECIPES, FACTORY_WAVEFORM, SettledBus, TransitionRecipe, write_pass,
 };
-use super::ssd1677::{DisplayBus, Error, FRAME_BYTES, Ssd1677, WIDTH, X4DriveProfile};
+use super::ssd1677::{DisplayBus, Error, Ssd1677, WIDTH, X4DriveProfile};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Pattern {
@@ -219,6 +219,7 @@ fn fill_plane(pass: PaintPass, bit: u8, offset: usize, output: &mut [u8]) {
 mod tests {
     extern crate std;
     use super::*;
+    use crate::display::ssd1677::FRAME_BYTES;
     use std::{vec, vec::Vec};
 
     #[derive(Default)]

@@ -7,11 +7,7 @@ pub const MAX_DEVICE_SPINE_ITEMS: usize = 64;
 pub const MAX_DEVICE_MANIFEST_ITEMS: usize = 512;
 pub const MAX_CONTAINER_BYTES: usize = 2 * 1024;
 pub const MAX_PACKAGE_BYTES: usize = 64 * 1024;
-pub const MAX_DEVICE_RESOURCE_BYTES: usize = if cfg!(feature = "experimental-gray8") {
-    96 * 1024
-} else {
-    140 * 1024
-};
+pub const MAX_DEVICE_RESOURCE_BYTES: usize = 140 * 1024;
 pub const MAX_DEVICE_PATH_BYTES: usize = 128;
 
 const EPUB_MIMETYPE: &[u8] = b"application/epub+zip";

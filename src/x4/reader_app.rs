@@ -951,14 +951,6 @@ impl<'a> UsbControlRuntime<'a> {
 }
 
 fn write_control_status(app: &App) {
-    esp_println::println!(
-        "BREWCTL/1 IMAGE_PROFILE tones={} max_image_bytes={} max_cover_bytes={} max_resource_bytes={} experimental={}",
-        READER_DEPTH.levels(),
-        MAX_DEVICE_IMAGE_BYTES,
-        MAX_ENCODED_COVER_BYTES,
-        MAX_DEVICE_RESOURCE_BYTES,
-        cfg!(feature = "experimental-gray8"),
-    );
     match app.view() {
         AppView::Home(state) => {
             esp_println::println!(

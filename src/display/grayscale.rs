@@ -15,25 +15,14 @@ pub(super) fn paint<B: DisplayBus, D: DelayNs>(
     let mut bus = SettledBus { inner: bus, delay };
     let display = Ssd1677::with_profile(X4DriveProfile::StockParity).initialize(&mut bus)?;
     write_pass(&mut bus, &FACTORY_WAVEFORM, 0xC7, |bit, offset, output| {
-        fill_image_plane(image, rotation, false, bit, offset, output);
+        fill_image_plane(image, rotation, bit, offset, output);
     })?;
-    if image.depth() == PixelDepth::Eight {
-        write_pass(
-            &mut bus,
-            &ADJUSTMENT_WAVEFORM,
-            0xCF,
-            |bit, offset, output| {
-                fill_image_plane(image, rotation, true, bit, offset, output);
-            },
-        )?;
-    }
     display.enter_deep_sleep(&mut bus)
 }
 
 fn fill_image_plane(
     image: PackedBitmap<'_>,
     rotation: Rotation,
-    adjustment: bool,
     bit: u8,
     offset: usize,
     output: &mut [u8],
@@ -49,14 +38,6 @@ fn fill_image_plane(
                 }
             }
             PixelDepth::Four => 3 - level,
-            PixelDepth::Eight => {
-                let recipe = EIGHT_RECIPES[usize::from(level)];
-                if adjustment {
-                    recipe.adjustment
-                } else {
-                    recipe.base
-                }
-            }
         };
         state & (1 << bit) == 0
     });
@@ -140,6 +121,7 @@ pub(super) const FACTORY_WAVEFORM: [u8; 110] = [
     0x00, 0x00, 0x00, 0x01, 0x22, 0x22, 0x22, 0x22, 0x22, 0x17, 0x41, 0xA8, 0x32, 0x30,
 ];
 
+#[cfg(feature = "grayscale-bench")]
 pub(super) const ADJUSTMENT_WAVEFORM: [u8; 110] = [
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x54, 0x54, 0x40, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0xAA, 0xA0, 0xA8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA2, 0x22,
@@ -150,12 +132,14 @@ pub(super) const ADJUSTMENT_WAVEFORM: [u8; 110] = [
     0x00, 0x00, 0x00, 0x00, 0x8F, 0x8F, 0x8F, 0x8F, 0x8F, 0x17, 0x41, 0xA8, 0x32, 0x30,
 ];
 
+#[cfg(feature = "grayscale-bench")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct TransitionRecipe {
     pub(super) base: u8,
     pub(super) adjustment: u8,
 }
 
+#[cfg(feature = "grayscale-bench")]
 pub(super) const EIGHT_RECIPES: [TransitionRecipe; 8] = [
     TransitionRecipe {
         base: 3,

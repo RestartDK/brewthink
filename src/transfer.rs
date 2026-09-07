@@ -2,11 +2,7 @@ use crc32fast::Hasher;
 
 use crate::image_decoder::ImageFormat;
 
-pub const MAX_IMAGE_BYTES: usize = if cfg!(feature = "experimental-gray8") {
-    56 * 1024
-} else {
-    96 * 1024
-};
+pub const MAX_IMAGE_BYTES: usize = 96 * 1024;
 const MAX_IMAGE_STEM_BYTES: usize = 8;
 const IMAGE_NAME_BYTES: usize = 12;
 
