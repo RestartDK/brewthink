@@ -255,15 +255,17 @@ where
 
 fn parse_container<E>(encoded: &[u8]) -> Result<FixedString<256>, DeviceEpubError<E>> {
     let mut reader = XmlReader::new(encoded)?;
+    let mut package_path = None;
     while let Some(event) = reader.next_event()? {
         if let XmlEvent::Start(tag) = event
+            && package_path.is_none()
             && tag.local_name() == "rootfile"
             && let Some(path) = tag.attribute("full-path")?
         {
-            return FixedString::from_decoded(path).map_err(DeviceEpubError::Xml);
+            package_path = Some(FixedString::from_decoded(path)?);
         }
     }
-    Err(DeviceEpubError::InvalidContainer)
+    package_path.ok_or(DeviceEpubError::InvalidContainer)
 }
 
 #[inline(always)]
@@ -307,6 +309,11 @@ fn parse_package_structure<E>(
     scratch: &mut DevicePackageScratch,
     publication: &mut DevicePublication,
 ) -> Result<(), DeviceEpubError<E>> {
+    enum MetadataField {
+        Title,
+        Creator,
+    }
+
     let mut reader = XmlReader::new(encoded)?;
     let mut in_metadata = false;
     let mut text_field = None;
@@ -314,8 +321,12 @@ fn parse_package_structure<E>(
         match event {
             XmlEvent::Start(tag) => match tag.local_name() {
                 "metadata" => in_metadata = true,
-                "title" if in_metadata && publication.title.is_empty() => text_field = Some(0),
-                "creator" if in_metadata && publication.creator.is_empty() => text_field = Some(1),
+                "title" if in_metadata && publication.title.is_empty() => {
+                    text_field = Some(MetadataField::Title)
+                }
+                "creator" if in_metadata && publication.creator.is_empty() => {
+                    text_field = Some(MetadataField::Creator)
+                }
                 "meta" if in_metadata => {
                     if tag.attribute("name")? == Some("cover")
                         && let Some(id) = tag.attribute("content")?
@@ -340,13 +351,17 @@ fn parse_package_structure<E>(
                 _ => {}
             },
             XmlEvent::Text(text) => match text_field {
-                Some(0) => crate::bounded_xml::decode_entities(text, |character| {
-                    publication.title.push(character)
-                })?,
-                Some(1) => crate::bounded_xml::decode_entities(text, |character| {
-                    publication.creator.push(character)
-                })?,
-                _ => {}
+                Some(MetadataField::Title) => {
+                    for character in text {
+                        publication.title.push(character?)?;
+                    }
+                }
+                Some(MetadataField::Creator) => {
+                    for character in text {
+                        publication.creator.push(character?)?;
+                    }
+                }
+                None => {}
             },
             XmlEvent::End(name) => match name {
                 "metadata" => {
@@ -572,6 +587,33 @@ mod tests {
             "EPUB/chapter.xhtml"
         );
         assert_eq!(book.publication().cover_path(), Some("EPUB/cover.png"));
+    }
+
+    #[test]
+    fn package_metadata_preserves_cdata_and_ignores_empty_title_elements() {
+        let mut scratch = DevicePackageScratch::new();
+        let xml = br#"<!DOCTYPE package [<!ENTITY custom "unused">]><package><metadata><title/>ignored<title><![CDATA[A &amp; B]]></title><creator><![CDATA[C & D]]></creator><description>&custom;</description></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="chapter"/></spine></package>"#;
+        let publication =
+            super::parse_package::<Infallible>("OPS/book.opf", xml, &mut scratch).unwrap();
+        assert_eq!(publication.title(), "A &amp; B");
+        assert_eq!(publication.creator(), "C & D");
+        assert_eq!(
+            publication.spine_item(0).unwrap().path(),
+            "OPS/chapter.xhtml"
+        );
+    }
+
+    #[test]
+    fn container_must_be_complete_before_its_path_is_returned() {
+        let result = super::parse_container::<Infallible>(
+            br#"<container><rootfile full-path="book.opf"/></wrong>"#,
+        );
+        assert!(matches!(
+            result,
+            Err(super::DeviceEpubError::Xml(
+                crate::bounded_xml::XmlError::Malformed
+            ))
+        ));
     }
 
     #[test]
