@@ -198,6 +198,7 @@ test("opens and selects images from Files", async ({ page }) => {
   await expect(page.locator("#selected-creator")).toHaveText("Selected for sleep");
 
   await page.reload();
+  await expect(page.locator("#frame-payload")).toHaveText("96,000 bytes · 4 tones");
   await page.keyboard.press("p");
   await expect(page.locator("#selected-title")).toHaveText("AYA.JPG");
 });

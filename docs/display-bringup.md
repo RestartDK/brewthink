@@ -2,7 +2,7 @@
 
 ## Scope
 
-Brewthink supports conservative monochrome full refreshes and explicit SSD1677 deep sleep on the Xteink X4's 800 × 480 GDEQ0426T82 panel. The reader also has experimental host-RAM and controller-RAM baseline storage for full-clean, quick-clean, and differential refreshes. Rectangular updates, custom LUTs, grayscale, and radio initialization remain excluded. Integrated diagnostics serialize display and read-only SD traffic through one SPI2 owner.
+Brewthink supports monochrome refreshes, four-shade images, and explicit SSD1677 deep sleep on the Xteink X4's 800 × 480 GDEQ0426T82 panel. The reader requires controller-RAM baseline storage. Diagnostic stages can also use host-RAM storage. Four-shade images use the fixed reviewed waveform described in [the image pipeline](image-pipeline.md). Rectangular updates, arbitrary LUT edits, and radio initialization remain excluded. Integrated diagnostics serialize display and read-only SD traffic through one SPI2 owner.
 
 The portable code is under `src/display/`:
 
