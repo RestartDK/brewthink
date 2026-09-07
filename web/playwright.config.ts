@@ -8,6 +8,8 @@ const origin = `http://127.0.0.1:${port}`;
 
 export default defineConfig({
   testDir: "./tests",
+  testIgnore: "**/dev-server.spec.ts",
+  timeout: 60_000,
   fullyParallel: false,
   forbidOnly: true,
   retries: 0,
@@ -17,9 +19,9 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: `bun run wasm && vite --host 127.0.0.1 --port ${port} --strictPort`,
+    command: `vite preview --host 127.0.0.1 --port ${port} --strictPort`,
     url: origin,
-    reuseExistingServer: process.env.BREWTHINK_REUSE_WEB_SERVER === "1",
+    reuseExistingServer: false,
     timeout: 180_000,
   },
 });

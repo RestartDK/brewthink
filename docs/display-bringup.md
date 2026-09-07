@@ -2,7 +2,7 @@
 
 ## Scope
 
-Brewthink supports conservative monochrome full refreshes and explicit SSD1677 deep sleep on the Xteink X4's 800 × 480 GDEQ0426T82 panel. The reader also has experimental host-RAM and controller-RAM baseline storage for full-clean, quick-clean, and differential refreshes. Rectangular updates, custom LUTs, grayscale, and radio initialization remain excluded. Integrated diagnostics serialize display and read-only SD traffic through one SPI2 owner.
+Brewthink supports monochrome refreshes, four-shade images, and explicit SSD1677 deep sleep on the Xteink X4's 800 × 480 GDEQ0426T82 panel. The reader requires controller-RAM baseline storage. Diagnostic stages can also use host-RAM storage. Four-shade images use the fixed reviewed waveform described in [the image pipeline](image-pipeline.md). Rectangular updates, arbitrary LUT edits, and radio initialization remain excluded. Integrated diagnostics serialize display and read-only SD traffic through one SPI2 owner.
 
 The portable code is under `src/display/`:
 
@@ -108,21 +108,16 @@ Two X4 drive profiles are available:
 | Fast differential | Booster tail `40`, border `01` | `F4` | `D4` with temperature `5A` | `1C` |
 | Stock parity | Booster tail `80`, border `80` | `F7` | `D7` with temperature `5A` | `FC` |
 
-The reader now defaults to the conservative `stock-parity` drive profile, memory-saving `controller-ram` storage, and mixed `automatic` refresh policy. These defaults have compile-time and command-transcript coverage but are not yet verified on the physical panel. Compare baseline storage while holding the drive profile and refresh mode constant:
+The reader now defaults to the conservative `stock-parity` drive profile, memory-saving `controller-ram` storage, and mixed `automatic` refresh policy. These defaults have compile-time and command-transcript coverage but are not yet verified on the physical panel. The reader requires controller-RAM baseline storage; `build.rs` rejects host-RAM reader builds because they exceed the memory budget. Build a supported differential reader with:
 
 ```bash
-BREWTHINK_X4_DRIVE_PROFILE=stock-parity \
-BREWTHINK_PREVIOUS_FRAME_STORAGE=host-ram \
-BREWTHINK_DISPLAY_REFRESH=differential \
-  scripts/build-reader-app1.sh artifacts/brewthink-reader-stock-parity-host-ram-differential-app1.bin
-
 BREWTHINK_X4_DRIVE_PROFILE=stock-parity \
 BREWTHINK_PREVIOUS_FRAME_STORAGE=controller-ram \
 BREWTHINK_DISPLAY_REFRESH=differential \
   scripts/build-reader-app1.sh artifacts/brewthink-reader-stock-parity-controller-ram-differential-app1.bin
 ```
 
-The exact accepted `BREWTHINK_X4_DRIVE_PROFILE` values are defined in `build.rs`. Accepted previous-frame storage values are `host-ram` and `controller-ram`. Accepted refresh policies are `automatic`, `full-clean`, `quick-clean`, and `differential`. Building does not touch the device. Non-default combinations have command-transcript tests but are not yet verified on the physical panel.
+The exact accepted `BREWTHINK_X4_DRIVE_PROFILE` values are defined in `build.rs`. Diagnostic stages accept `host-ram` and `controller-ram`; the reader accepts only `controller-ram`. Accepted refresh policies are `automatic`, `full-clean`, `quick-clean`, and `differential`. Building does not touch the device. Non-default combinations have command-transcript tests but are not yet verified on the physical panel.
 
 ## Display deep sleep
 
