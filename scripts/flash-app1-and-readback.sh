@@ -6,15 +6,19 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/common.sh"
 
 IMAGE="$DEFAULT_IMAGE"
+REVIEWED_SHA=""
+MONITOR_ELF=""
 YES=0
 MONITOR=0
 while (($#)); do
   case "$1" in
     --image) IMAGE="${2:?missing image}"; shift 2 ;;
+    --image-sha256) REVIEWED_SHA="${2:?missing image SHA-256}"; shift 2 ;;
+    --elf) MONITOR_ELF="${2:?missing monitor ELF}"; shift 2 ;;
     --yes|-y) YES=1; shift ;;
     --monitor) MONITOR=1; shift ;;
     --help|-h)
-      echo "Usage: $0 [--image PATH] [--yes] [--monitor]"
+      echo "Usage: $0 [--image PATH] [--image-sha256 SHA] [--yes] [--monitor --elf PATH]"
       echo "Writes only app1 at $APP1_OFFSET_HEX, verifies readback, then resets and optionally monitors."
       echo 'Requires an explicit ESPFLASH_PORT or ESPTOOL_PORT. Boot selection is unchanged.'
       exit 0 ;;
@@ -22,13 +26,26 @@ while (($#)); do
   esac
 done
 
+if (( MONITOR == 1 )) && [[ -z "$MONITOR_ELF" ]]; then
+  echo 'error: --monitor requires --elf with the reviewed image matching its symbols' >&2
+  exit 1
+fi
+if (( MONITOR == 0 )) && [[ -n "$MONITOR_ELF" ]]; then
+  echo 'error: --elf requires --monitor' >&2
+  exit 1
+fi
+
 private_workspace
 SOURCE_IMAGE="$IMAGE"
 IMAGE="$WORK_DIR/app1.bin"
 snapshot_file "$SOURCE_IMAGE" "$IMAGE"
+if [[ -n "$REVIEWED_SHA" ]]; then
+  verify_backup "$IMAGE" "$REVIEWED_SHA" "$(file_size "$IMAGE")" --image-sha256
+fi
 "$ROOT_DIR/scripts/check-app1-image.sh" "$IMAGE" "$WORK_DIR/image-info.txt"
 if (( MONITOR == 1 )); then
-  snapshot_file "$ELF" "$WORK_DIR/monitor.elf"
+  snapshot_file "$MONITOR_ELF" "$WORK_DIR/monitor.elf"
+  printf 'Monitor symbols: %s, SHA-256 %s\n' "$MONITOR_ELF" "$(sha256_file "$WORK_DIR/monitor.elf")"
 fi
 SIZE="$(file_size "$IMAGE")"
 ERASE_SIZE="$(round_up_to_sector "$SIZE")"

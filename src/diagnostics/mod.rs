@@ -10,6 +10,7 @@ pub enum DiagnosticStage {
     IntegratedDevice,
     SleepWake,
     ReaderApp,
+    GrayscaleBench,
     DisplayReset,
     Display(DisplayDiagnosticStage),
 }
@@ -25,6 +26,7 @@ impl DiagnosticStage {
             Self::IntegratedDevice => stage_names::INTEGRATED_DEVICE,
             Self::SleepWake => stage_names::SLEEP_WAKE,
             Self::ReaderApp => stage_names::READER_APP,
+            Self::GrayscaleBench => stage_names::GRAYSCALE_BENCH,
             Self::DisplayReset => stage_names::DISPLAY_RESET,
             Self::Display(stage) => stage.name(),
         }
@@ -66,6 +68,7 @@ impl core::str::FromStr for DiagnosticStage {
             stage_names::INTEGRATED_DEVICE => Ok(Self::IntegratedDevice),
             stage_names::SLEEP_WAKE => Ok(Self::SleepWake),
             stage_names::READER_APP => Ok(Self::ReaderApp),
+            stage_names::GRAYSCALE_BENCH => Ok(Self::GrayscaleBench),
             stage_names::DISPLAY_RESET => Ok(Self::DisplayReset),
             stage_names::DISPLAY_INITIALIZE => {
                 Ok(Self::Display(DisplayDiagnosticStage::Initialize))
@@ -140,6 +143,7 @@ mod tests {
             ("integrated-device", DiagnosticStage::IntegratedDevice),
             ("sleep-wake", DiagnosticStage::SleepWake),
             ("reader-app", DiagnosticStage::ReaderApp),
+            ("grayscale-bench", DiagnosticStage::GrayscaleBench),
             ("display-reset", DiagnosticStage::DisplayReset),
             (
                 "display-initialize",
@@ -187,7 +191,7 @@ mod tests {
 
     #[test]
     fn stage_name_list_matches_the_parser() {
-        assert_eq!(stage_names::ALL_STAGES.len(), 18);
+        assert_eq!(stage_names::ALL_STAGES.len(), 19);
         for name in stage_names::ALL_STAGES {
             let parsed: DiagnosticStage = name.parse().unwrap();
             assert_eq!(parsed.name(), *name);

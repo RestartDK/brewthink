@@ -168,9 +168,28 @@ Only run after reviewing the printed offset and size:
 ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/flash-app1-and-readback.sh
 ```
 
-The script copies the image to a private read-only snapshot before inspection and confirmation. It writes only `app1` at `0x650000` and compares the same byte count on readback. Reset and optional `--monitor` occur only after verification. A failure stops without a final reset. The monitor ELF is also snapshotted before confirmation.
+The script copies the image to a private read-only snapshot before inspection and confirmation. It writes only `app1` at `0x650000` and compares the same byte count on readback. Reset and optional `--monitor` occur only after verification. A failure stops without a final reset. Monitoring requires an explicit `--elf PATH` from the reviewed image's build. The script snapshots those symbols before confirmation rather than taking whichever ELF was built last. The operator must confirm that image and ELF belong together; the script does not prove that association.
 
 No bootloader, partition table, NVS, filesystem, `app0`, or `otadata` write occurs. The existing boot selection remains unchanged. That selection may already be `app1`.
+
+For a preserved reader image, supply its independently recorded digest with `--image-sha256`. A mismatch fails before hardware access. After separate flash authorization and review of the exact app1 range, the restore invocation is:
+
+```bash
+ESPFLASH_PORT=/dev/cu.usbmodemXXXX scripts/flash-app1-and-readback.sh \
+  --image "$READER_BACKUP" --image-sha256 "$VERIFIED_READER_SHA"
+```
+
+This covers the pre-grayscale reader readback identified in `checkpoint.md`. Do not substitute the older historical reader artifact or derive the trusted digest from an unverified current file. Fresh builds may omit the digest option and review the printed snapshot digest instead.
+
+If readback fails, do not repeat the write blindly. Keep the reviewed byte count and expected SHA-256 from the write review. A manual readback can enter download mode and reset the processor, but does not write flash:
+
+```bash
+espflash read-flash --chip esp32c3 --port "$ESPFLASH_PORT" --after no-reset \
+  0x650000 "$REVIEWED_SIZE" "$READBACK_FILE"
+shasum -a 256 "$READBACK_FILE"
+```
+
+Compare the result with the recorded expected digest. Only after a match, reset the chip to run the selected app with `espflash reset --chip esp32c3 --port "$ESPFLASH_PORT"`. A mismatch stops recovery for inspection. The script reports both digests and the first differing byte when readback completes but differs.
 
 ## Switch boot selection to app1
 

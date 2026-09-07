@@ -12,7 +12,7 @@ import zlib
 
 ROOT = Path(__file__).resolve().parent.parent
 FAKE_TOOL = r'''#!/usr/bin/env python3
-import json, os, sys
+import hashlib, json, os, sys
 from pathlib import Path
 args = sys.argv[1:]
 with open(os.environ["FAKE_LOG"], "a") as log:
@@ -30,6 +30,8 @@ elif args[0] == "board-info":
     print("Chip type: esp32c3\nFlash size: " + os.environ.get("FAKE_SIZE", "16MB") + "\nCrystal frequency: 40 MHz\nSecure Boot: Disabled\nFlash Encryption: Disabled")
     if "MUTATE_SOURCE" in os.environ:
         Path(os.environ["MUTATE_SOURCE"]).write_bytes(b"changed")
+    if "MUTATE_ELF" in os.environ:
+        Path(os.environ["MUTATE_ELF"]).write_bytes(b"changed")
 elif args[0] == "write-bin":
     offset, source = args[-2:]
     if os.environ.get("FAIL_WRITE") == "1":
@@ -53,7 +55,10 @@ elif args[0] == "erase-region":
     with open(os.environ["FAKE_FLASH"], "r+b") as flash:
         flash.seek(offset)
         flash.write(b"\xff" * size)
-elif args[0] not in ("monitor", "reset"):
+elif args[0] == "monitor":
+    with open(os.environ["FAKE_LOG"], "a") as log:
+        log.write(json.dumps(["monitor-elf", hashlib.sha256(Path(args[args.index("--elf") + 1]).read_bytes()).hexdigest()]) + "\n")
+elif args[0] != "reset":
     raise SystemExit("unexpected espflash command")
 '''
 
@@ -87,6 +92,7 @@ class FlashSafetyTests(unittest.TestCase):
         elf = self.root / "target/riscv32imc-unknown-none-elf/release/brewthink"
         elf.parent.mkdir(parents=True)
         elf.write_bytes(b"test-elf")
+        self.elf = elf
         self.backup = self.root / "stock.bin"
         stock = bytearray(b"\xff" * 0x1000000)
         stock[0xE000:0x10000] = ota(1)
@@ -113,10 +119,37 @@ class FlashSafetyTests(unittest.TestCase):
                 hashlib.sha256(self.backup.read_bytes()).hexdigest(), "--yes")
 
     def test_monitor_follows_readback(self):
-        result = self.run_script("flash-app1-and-readback.sh", "--image", str(self.image), "--yes", "--monitor")
+        result = self.run_script("flash-app1-and-readback.sh", "--image", str(self.image), "--yes", "--monitor", "--elf", str(self.elf))
         self.assert_success(result)
         actions = [command[1] for command in self.commands() if command[0] == "espflash"]
         self.assertLess(actions.index("read-flash"), actions.index("monitor"))
+
+    def test_app1_accepts_the_reviewed_image_digest(self):
+        digest = hashlib.sha256(self.image.read_bytes()).hexdigest()
+        result = self.run_script("flash-app1-and-readback.sh", "--image", str(self.image),
+                                 "--image-sha256", digest, "--yes")
+        self.assert_success(result)
+        self.assertTrue(any(command[1] == "write-bin" for command in self.commands()))
+
+    def test_app1_rejects_a_mismatched_digest_before_hardware_access(self):
+        result = self.run_script("flash-app1-and-readback.sh", "--image", str(self.image),
+                                 "--image-sha256", "0" * 64, "--yes")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.commands(), [])
+
+    def test_monitor_requires_an_explicit_matching_elf(self):
+        result = self.run_script("flash-app1-and-readback.sh", "--image", str(self.image), "--yes", "--monitor")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.commands(), [])
+
+    def test_monitor_uses_the_selected_elf_snapshot(self):
+        selected = self.root / "reader.elf"
+        selected.write_bytes(b"reviewed reader symbols")
+        digest = hashlib.sha256(selected.read_bytes()).hexdigest()
+        result = self.run_script("flash-app1-and-readback.sh", "--image", str(self.image), "--yes",
+                                 "--monitor", "--elf", str(selected), MUTATE_ELF=str(selected))
+        self.assert_success(result)
+        self.assertIn(["monitor-elf", digest], self.commands())
 
     def test_reviewed_image_is_not_replaced_by_a_concurrent_build(self):
         result = self.run_script("flash-app1-and-readback.sh", "--image", str(self.image), "--yes",
@@ -127,9 +160,12 @@ class FlashSafetyTests(unittest.TestCase):
             self.assertEqual(flash.read(7), b"initial")
 
     def test_failed_readback_never_monitors_or_resets(self):
-        result = self.run_script("flash-app1-and-readback.sh", "--image", str(self.image), "--yes", "--monitor",
+        result = self.run_script("flash-app1-and-readback.sh", "--image", str(self.image), "--yes", "--monitor", "--elf", str(self.elf),
                                  CORRUPT_READBACK="1")
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn("readback differs", result.stderr)
+        self.assertIn(hashlib.sha256(self.image.read_bytes()).hexdigest(), result.stderr)
+        self.assertTrue(any(command[1] == "read-flash" for command in self.commands()))
         self.assertFalse(any(command[1] in ("monitor", "reset") for command in self.commands()))
 
     def test_failed_write_never_reads_back(self):

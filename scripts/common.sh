@@ -113,14 +113,14 @@ snapshot_file() {
 }
 
 verify_backup() {
-  local path="$1" expected_sha="$2" expected_size="$3"
+  local path="$1" expected_sha="$2" expected_size="$3" digest_option="${4:---backup-sha256}"
   if [[ ! "$expected_sha" =~ ^[[:xdigit:]]{64}$ ]]; then
-    echo 'error: provide the reviewed backup SHA-256 with --backup-sha256' >&2
+    echo "error: provide the reviewed SHA-256 with $digest_option" >&2
     exit 1
   fi
   if [[ "$(sha256_file "$path")" != "$(printf '%s' "$expected_sha" | tr '[:upper:]' '[:lower:]')" ]] ||
      (( $(file_size "$path") != expected_size )); then
-    echo 'error: backup does not match the reviewed SHA-256 and size' >&2
+    echo 'error: payload does not match the reviewed SHA-256 and size' >&2
     exit 1
   fi
 }
@@ -163,9 +163,18 @@ probe_x4() {
 
 verify_app_image() {
   esptool --chip "$CHIP" image-info "$1" > "$WORK_DIR/app-image-info.txt"
-  grep -Eq '^ESP32-C3 Image Header$' "$WORK_DIR/app-image-info.txt"
-  grep -Eq '^Checksum: .*\(valid\)$' "$WORK_DIR/app-image-info.txt"
-  grep -Eq '^Validation hash: .*\(valid\)$' "$WORK_DIR/app-image-info.txt"
+  if ! grep -Eq '^ESP32-C3 Image Header$' "$WORK_DIR/app-image-info.txt"; then
+    echo 'error: recovery image is not an ESP32-C3 application' >&2
+    exit 1
+  fi
+  if ! grep -Eq '^Checksum: .*\(valid\)$' "$WORK_DIR/app-image-info.txt"; then
+    echo 'error: recovery image checksum is invalid' >&2
+    exit 1
+  fi
+  if ! grep -Eq '^Validation hash: .*\(valid\)$' "$WORK_DIR/app-image-info.txt"; then
+    echo 'error: recovery image validation hash is invalid' >&2
+    exit 1
+  fi
 }
 
 write_and_verify() {
@@ -188,6 +197,9 @@ write_and_verify() {
   espflash read-flash --chip "$CHIP" "${PORT_ARGS[@]}" --after no-reset "$offset" "$size" "$readback"
   if ! cmp -s "$image" "$readback"; then
     echo 'error: readback differs; leaving the chip in download mode' >&2
+    printf 'Offset: %s, bytes: %s\nExpected SHA-256: %s\nReadback SHA-256: %s\n' \
+      "$offset" "$size" "$(sha256_file "$image")" "$(sha256_file "$readback")" >&2
+    cmp "$image" "$readback" >&2 || true
     exit 1
   fi
 }
