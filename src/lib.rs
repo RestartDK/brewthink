@@ -1,6 +1,6 @@
 #![no_std]
 
-#[cfg(feature = "epub")]
+#[cfg(any(feature = "epub", feature = "web-sim"))]
 extern crate std;
 
 pub mod app;
@@ -28,6 +28,8 @@ pub mod library;
 pub mod power;
 pub mod reader;
 pub mod settings;
+#[cfg(feature = "web-sim")]
+pub mod simulator;
 pub mod sleep;
 pub mod storage;
 #[cfg(feature = "image-decoder")]

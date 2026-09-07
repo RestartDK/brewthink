@@ -8,6 +8,9 @@ pub use crate::image_decoder::{JpegDecodeWorkspace, PngDecodeWorkspace};
 pub const COVER_WIDTH: usize = 176;
 pub const COVER_HEIGHT: usize = 264;
 pub const COVER_BYTES: usize = COVER_WIDTH * COVER_HEIGHT / 8;
+pub const SHELF_COVER_WIDTH: usize = COVER_WIDTH / 2;
+pub const SHELF_COVER_HEIGHT: usize = COVER_HEIGHT / 2;
+pub const SHELF_COVER_BYTES: usize = SHELF_COVER_WIDTH * SHELF_COVER_HEIGHT / 8;
 pub const MAX_ENCODED_COVER_BYTES: u32 = 128 * 1024;
 
 pub type CoverDecodeWorkspace = PngDecodeWorkspace;
@@ -60,6 +63,34 @@ pub fn bitmap(bytes: &[u8; COVER_BYTES]) -> MonochromeBitmap<'_> {
         .expect("the packed cover buffer has the exact required length")
 }
 
+pub fn downsample_cover(source: &[u8; COVER_BYTES], output: &mut [u8; SHELF_COVER_BYTES]) {
+    let source = bitmap(source);
+    output.fill(0xFF);
+    for y in 0..SHELF_COVER_HEIGHT {
+        for x in 0..SHELF_COVER_WIDTH {
+            let source_x = x * 2;
+            let source_y = y * 2;
+            let black = usize::from(source.pixel_is_black(source_x, source_y))
+                + usize::from(source.pixel_is_black(source_x + 1, source_y))
+                + usize::from(source.pixel_is_black(source_x, source_y + 1))
+                + usize::from(source.pixel_is_black(source_x + 1, source_y + 1));
+            if black >= 2 {
+                let pixel = y * SHELF_COVER_WIDTH + x;
+                output[pixel / 8] &= !(0x80 >> (pixel % 8));
+            }
+        }
+    }
+}
+
+pub fn shelf_bitmap(bytes: &[u8; SHELF_COVER_BYTES]) -> MonochromeBitmap<'_> {
+    MonochromeBitmap::new(
+        Size::new(SHELF_COVER_WIDTH, SHELF_COVER_HEIGHT)
+            .expect("the shelf cover dimensions are non-zero"),
+        bytes,
+    )
+    .expect("the shelf cover buffer matches its dimensions")
+}
+
 fn cover_size() -> Size {
     Size::new(COVER_WIDTH, COVER_HEIGHT).expect("cover dimensions are non-zero")
 }
@@ -93,6 +124,29 @@ mod tests {
             let count = self.0.len().saturating_sub(start).min(output.len());
             output[..count].copy_from_slice(&self.0[start..start + count]);
             Ok(count)
+        }
+    }
+
+    #[test]
+    fn shelf_downsampling_counts_all_four_pixels_including_ties() {
+        for mask in 0u8..16 {
+            let mut source = [0xff; COVER_BYTES];
+            for (bit, (byte, flag)) in [(0, 0x80), (0, 0x40), (22, 0x80), (22, 0x40)]
+                .into_iter()
+                .enumerate()
+            {
+                if mask & (1 << bit) != 0 {
+                    source[byte] &= !flag;
+                }
+            }
+            let mut output = [0; super::SHELF_COVER_BYTES];
+            super::downsample_cover(&source, &mut output);
+            assert_eq!(
+                output[0],
+                if mask.count_ones() >= 2 { 0x7f } else { 0xff },
+                "mask {mask:04b}"
+            );
+            assert!(output[1..].iter().all(|byte| *byte == 0xff));
         }
     }
 

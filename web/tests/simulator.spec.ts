@@ -120,7 +120,7 @@ test("reports invalid EPUB input without losing the simulator", async ({ page })
   await page.locator("#epub-file").setInputFiles(path.resolve("tests/fixtures/checker.ppm"));
 
   await expect(page.locator("#selected-title")).toHaveText("EPUB rejected");
-  await expect(page.locator("#message")).toContainText("InvalidZip");
+  await expect(page.locator("#message")).toContainText("MissingCentralDirectory");
   await expect(page.locator("#display-placeholder")).toBeVisible();
   await page.getByRole("button", { name: "Reset sample" }).click();
   await expect(page.locator("#selected-title")).toHaveText("BOOKS");
@@ -191,6 +191,8 @@ test("opens and selects images from Files", async ({ page }) => {
   await expect(page.locator("#selected-creator")).toHaveText("Selected for sleep");
 
   await page.reload();
+  await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
+  await expect(page.locator("#display-placeholder")).toBeHidden();
   await page.keyboard.press("p");
   await expect(page.locator("#selected-title")).toHaveText("AYA.JPG");
 });

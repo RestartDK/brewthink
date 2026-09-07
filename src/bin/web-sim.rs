@@ -1,32 +1,25 @@
-use std::io::Cursor;
-
 use brewthink::{
     app::{
         App, AppEffect, AppInput, AppPreferences, AppView, Direction, FilesState, ImageId,
         ReaderPreferences, ReadingLocation, ResumePoint, SettingsItem, SleepScreenSource,
     },
-    epub::{ChapterContent, ContentStyle, EpubBook},
+    cover::{SHELF_COVER_BYTES, downsample_cover, shelf_bitmap},
     files::{FileItem, FileKind},
-    image::{Dither, MonochromeBitmap, MonochromeImage, RenderOptions, RgbImage, ScaleMode, Size},
+    image::{MonochromeBitmap, MonochromeImage, Size},
     image_viewer::render_image_viewer,
     input::UsbState,
     library::ShelfBook,
     power::BatteryStatus,
-    reader::{ReaderLine, ReaderStyle, ReaderTheme, ReaderView},
+    reader::{ReaderLine, ReaderView},
     settings::CustomImagePreview,
+    simulator::{Book as OwnedBook, Cover, sample_books},
     sleep::SleepView,
     ui::{AppFrame, render_app},
 };
-use image::{ImageReader, Limits};
 use wasm_bindgen::prelude::*;
 
 const WIDTH: usize = 480;
 const HEIGHT: usize = 800;
-const COVER_WIDTH: usize = 176;
-const COVER_HEIGHT: usize = 264;
-const MAX_BOOK_TEXT_BYTES: usize = 8 * 1024 * 1024;
-const MAX_CHAPTERS: usize = 512;
-const PAGE_HEIGHT: usize = brewthink::reader::BODY_BOTTOM - brewthink::reader::BODY_TOP;
 
 #[wasm_bindgen]
 #[derive(Clone, Copy)]
@@ -140,17 +133,14 @@ pub struct WebLibrary {
 #[wasm_bindgen]
 impl WebLibrary {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self, JsValue> {
         Self::with_preferences(ReaderPreferences::default().packed(), u32::MAX)
     }
 
     #[wasm_bindgen(js_name = withPreferences)]
-    pub fn with_preferences(packed: u32, selected_image: u32) -> Self {
+    pub fn with_preferences(packed: u32, selected_image: u32) -> Result<Self, JsValue> {
         let preferences = AppPreferences::from_packed(packed).unwrap_or_default();
-        let mut books = sample_books();
-        for book in &mut books {
-            book.layout(preferences.reader());
-        }
+        let books = sample_books().map_err(js_error)?;
         let images = sample_images();
         let selected_image = usize::try_from(selected_image)
             .ok()
@@ -158,7 +148,7 @@ impl WebLibrary {
             .map(ImageId::new);
         let mut app = App::with_catalog(books.len(), images.len(), selected_image, preferences);
         app.set_battery(BatteryStatus::from_percent(82, UsbState::Disconnected));
-        Self { books, images, app }
+        Ok(Self { books, images, app })
     }
 
     #[wasm_bindgen(js_name = fromEpub)]
@@ -169,12 +159,9 @@ impl WebLibrary {
         selected_image: u32,
     ) -> Result<WebLibrary, JsValue> {
         let preferences = AppPreferences::from_packed(packed_preferences).unwrap_or_default();
-        let imported = OwnedBook::from_epub(encoded, &file_name)?;
-        let mut books = sample_books();
+        let imported = OwnedBook::from_epub(encoded, &file_name).map_err(js_error)?;
+        let mut books = sample_books().map_err(js_error)?;
         books[0] = imported;
-        for book in &mut books {
-            book.layout(preferences.reader());
-        }
         let images = sample_images();
         let selected_image = usize::try_from(selected_image)
             .ok()
@@ -312,22 +299,10 @@ impl WebLibrary {
     }
 }
 
-impl Default for WebLibrary {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl WebLibrary {
     fn apply_input(&mut self, input: AppInput) -> bool {
-        let previous_preferences = self.app.preferences();
         let effect = self.app.input(input);
         let changed = effect != AppEffect::None;
-        if self.app.reader_preferences() != previous_preferences.reader() {
-            for book in &mut self.books {
-                book.layout(self.app.reader_preferences());
-            }
-        }
         self.resolve_effect(effect);
         changed
     }
@@ -346,10 +321,14 @@ impl WebLibrary {
                     else {
                         return self.app.chapter_failed().is_ok();
                     };
-                    match self.app.chapter_loaded(
-                        self.books[book.index()].chapters.len(),
-                        chapter.pages.len(),
-                    ) {
+                    let page = match chapter.page(0, self.app.reader_preferences()) {
+                        Ok(page) => page,
+                        Err(_) => return self.app.chapter_failed().is_ok(),
+                    };
+                    match self
+                        .app
+                        .chapter_loaded(self.books[book.index()].chapters.len(), page.page_count())
+                    {
                         Ok(next) => next,
                         Err(_) => return false,
                     }
@@ -368,18 +347,26 @@ impl WebLibrary {
     }
 
     fn render_library(&self, target: &mut MonochromeImage<'_>) -> Result<FrameMetadata, JsValue> {
+        let state = self.app.library();
+        let mut thumbnails = vec![[0xff; SHELF_COVER_BYTES]; self.books.len()];
         let books = self
             .books
             .iter()
-            .map(|book| {
-                ShelfBook::new(
-                    &book.title,
-                    &book.creator,
-                    book.cover.as_ref().map(OwnedCover::bitmap),
-                )
+            .zip(thumbnails.iter_mut())
+            .enumerate()
+            .map(|(index, (book, thumbnail))| {
+                let cover = match &book.cover {
+                    Cover::Decoded(bytes)
+                        if state.selected().is_some_and(|id| id.index() != index) =>
+                    {
+                        downsample_cover(bytes, thumbnail);
+                        Some(shelf_bitmap(thumbnail))
+                    }
+                    cover => cover.bitmap(),
+                };
+                ShelfBook::new(&book.title, &book.creator, cover)
             })
             .collect::<Vec<_>>();
-        let state = self.app.library();
         render_app(
             AppFrame::Library {
                 state,
@@ -493,16 +480,17 @@ impl WebLibrary {
     ) -> Result<FrameMetadata, JsValue> {
         let book = &self.books[location.book().index()];
         let chapter = &book.chapters[location.spine_index()];
-        let page = &chapter.pages[location.page_index()];
+        let page = chapter
+            .page(location.page_index(), self.app.reader_preferences())
+            .map_err(js_error)?;
         let lines = page
-            .lines
-            .iter()
-            .map(|line| ReaderLine::new(&line.text, line.style))
+            .lines()
+            .map(|line| ReaderLine::new(line.text(), line.style()))
             .collect::<Vec<_>>();
         render_app(
             AppFrame::Reader(ReaderView::new(
                 &book.title,
-                &chapter.title,
+                page.chapter_title(),
                 &lines,
                 location,
                 self.app.reader_preferences(),
@@ -565,7 +553,7 @@ impl WebLibrary {
                 }
                 SleepScreenSource::BookCover(book_id) => {
                     let book = &self.books[book_id.index()];
-                    let Some(cover) = book.cover.as_ref().map(OwnedCover::bitmap) else {
+                    let Some(cover) = book.cover.bitmap() else {
                         continue;
                     };
                     render_app(
@@ -651,131 +639,6 @@ impl FrameMetadata {
     }
 }
 
-struct OwnedBook {
-    file_name: String,
-    file_size: u32,
-    title: String,
-    creator: String,
-    cover: Option<OwnedCover>,
-    chapters: Vec<OwnedChapter>,
-}
-
-impl OwnedBook {
-    fn from_epub(encoded: &[u8], file_name: &str) -> Result<Self, JsValue> {
-        let mut epub = EpubBook::open(encoded).map_err(js_error)?;
-        let title = epub.publication().metadata().title().to_owned();
-        let creator = epub
-            .publication()
-            .metadata()
-            .primary_creator()
-            .unwrap_or("Unknown author")
-            .to_owned();
-        let cover = epub
-            .read_cover()
-            .map_err(js_error)?
-            .map(|encoded| decode_cover(&encoded))
-            .transpose()?;
-        let linear_spine = epub
-            .publication()
-            .spine()
-            .iter()
-            .enumerate()
-            .filter_map(|(index, item)| item.is_linear().then_some(index))
-            .collect::<Vec<_>>();
-        if linear_spine.len() > MAX_CHAPTERS {
-            return Err(JsValue::from_str("EPUB exceeds the 512 chapter limit"));
-        }
-        let mut text_bytes = 0usize;
-        let mut chapters = Vec::with_capacity(linear_spine.len());
-        for spine_index in linear_spine {
-            let content = epub.read_spine_document(spine_index).map_err(js_error)?;
-            text_bytes = text_bytes.saturating_add(
-                content
-                    .blocks()
-                    .iter()
-                    .map(|block| block.text().len())
-                    .sum::<usize>(),
-            );
-            if text_bytes > MAX_BOOK_TEXT_BYTES {
-                return Err(JsValue::from_str(
-                    "EPUB exceeds the 8 MiB rendered-text limit",
-                ));
-            }
-            chapters.push(OwnedChapter::from_content(content, chapters.len()));
-        }
-        if chapters.is_empty() {
-            return Err(JsValue::from_str("EPUB has no linear readable chapters"));
-        }
-        Ok(Self {
-            file_name: file_name.into(),
-            file_size: encoded.len().min(u32::MAX as usize) as u32,
-            title,
-            creator,
-            cover,
-            chapters,
-        })
-    }
-
-    fn layout(&mut self, preferences: ReaderPreferences) {
-        for chapter in &mut self.chapters {
-            chapter.layout(preferences);
-        }
-    }
-}
-
-struct OwnedChapter {
-    title: String,
-    source: Vec<OwnedLine>,
-    pages: Vec<OwnedPage>,
-}
-
-impl OwnedChapter {
-    fn from_content(content: ChapterContent, index: usize) -> Self {
-        let title = content
-            .title()
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("Section {}", index + 1));
-        let source = content
-            .blocks()
-            .iter()
-            .map(|block| OwnedLine {
-                text: block.text().into(),
-                style: reader_style(block.style()),
-            })
-            .collect();
-        Self {
-            title,
-            source,
-            pages: Vec::new(),
-        }
-    }
-
-    fn layout(&mut self, preferences: ReaderPreferences) {
-        self.pages = paginate(&self.source, preferences);
-    }
-}
-
-struct OwnedPage {
-    lines: Vec<OwnedLine>,
-}
-
-struct OwnedLine {
-    text: String,
-    style: ReaderStyle,
-}
-
-struct OwnedCover {
-    size: Size,
-    pixels: Vec<u8>,
-}
-
-impl OwnedCover {
-    fn bitmap(&self) -> MonochromeBitmap<'_> {
-        MonochromeBitmap::new(self.size, &self.pixels)
-            .expect("owned cover shape was checked when it was packed")
-    }
-}
-
 struct OwnedImage {
     index: usize,
     name: String,
@@ -813,118 +676,6 @@ impl OwnedImage {
     }
 }
 
-fn paginate(source: &[OwnedLine], preferences: ReaderPreferences) -> Vec<OwnedPage> {
-    let theme = ReaderTheme::from_preferences(preferences);
-    let mut pages = Vec::new();
-    let mut lines = Vec::new();
-    let mut used_height = 0;
-    for block in source {
-        let style = block.style;
-        for text in wrap_text(&block.text, theme, style) {
-            push_line(
-                &mut pages,
-                &mut lines,
-                &mut used_height,
-                OwnedLine { text, style },
-                theme,
-            );
-        }
-        if !lines.is_empty() {
-            push_line(
-                &mut pages,
-                &mut lines,
-                &mut used_height,
-                OwnedLine {
-                    text: String::new(),
-                    style: ReaderStyle::Body,
-                },
-                theme,
-            );
-        }
-    }
-    if !lines.is_empty() {
-        pages.push(OwnedPage { lines });
-    }
-    if pages.is_empty() {
-        pages.push(OwnedPage {
-            lines: vec![OwnedLine {
-                text: "This section contains no readable text.".into(),
-                style: ReaderStyle::Body,
-            }],
-        });
-    }
-    pages
-}
-
-fn push_line(
-    pages: &mut Vec<OwnedPage>,
-    lines: &mut Vec<OwnedLine>,
-    used_height: &mut usize,
-    line: OwnedLine,
-    theme: ReaderTheme,
-) {
-    let height = theme.line_height(line.style);
-    if *used_height + height > PAGE_HEIGHT && !lines.is_empty() {
-        pages.push(OwnedPage {
-            lines: std::mem::take(lines),
-        });
-        *used_height = 0;
-    }
-    *used_height += height;
-    lines.push(line);
-}
-
-fn wrap_text(text: &str, theme: ReaderTheme, style: ReaderStyle) -> Vec<String> {
-    let line_width = theme.line_width(style);
-    let space_width = theme.character_width(style, ' ');
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    let mut current_width = 0;
-    for word in text.split_whitespace() {
-        let word_width = theme.text_width(style, word);
-        if !current.is_empty() && current_width + space_width + word_width > line_width {
-            lines.push(std::mem::take(&mut current));
-            current_width = 0;
-        }
-        if word_width > line_width {
-            for character in word.chars() {
-                let character_width = theme.character_width(style, character);
-                if !current.is_empty() && current_width + character_width > line_width {
-                    lines.push(std::mem::take(&mut current));
-                    current_width = 0;
-                }
-                current.push(character);
-                current_width += character_width;
-            }
-            continue;
-        }
-        if !current.is_empty() {
-            current.push(' ');
-            current_width += space_width;
-        }
-        current.push_str(word);
-        current_width += word_width;
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    if lines.is_empty() {
-        lines.push(String::new());
-    }
-    lines
-}
-
-const fn reader_style(style: ContentStyle) -> ReaderStyle {
-    match style {
-        ContentStyle::Body => ReaderStyle::Body,
-        ContentStyle::Heading => ReaderStyle::Heading,
-        ContentStyle::Quote => ReaderStyle::Quote,
-        ContentStyle::ListItem => ReaderStyle::ListItem,
-        ContentStyle::Preformatted => ReaderStyle::Preformatted,
-        ContentStyle::Caption => ReaderStyle::Caption,
-    }
-}
-
 fn sample_images() -> Vec<OwnedImage> {
     [
         ("ANOTHE.JPG", FileKind::Jpeg),
@@ -936,121 +687,6 @@ fn sample_images() -> Vec<OwnedImage> {
     .enumerate()
     .map(|(index, (name, kind))| OwnedImage::sample(index, name, kind))
     .collect()
-}
-
-fn sample_books() -> Vec<OwnedBook> {
-    [
-        (
-            "study-in-scarlet.epub",
-            "A Study in Scarlet",
-            "Arthur Conan Doyle",
-        ),
-        (
-            "pride-and-prejudice.epub",
-            "Pride and Prejudice",
-            "Jane Austen",
-        ),
-        ("walden.epub", "Walden", "Henry David Thoreau"),
-        ("frankenstein.epub", "Frankenstein", "Mary Shelley"),
-    ]
-    .into_iter()
-    .enumerate()
-    .map(|(index, (file_name, title, creator))| OwnedBook {
-        file_name: file_name.into(),
-        file_size: 180_000 + index as u32 * 74_000,
-        title: title.into(),
-        creator: creator.into(),
-        cover: Some(pattern_cover(index)),
-        chapters: sample_chapters(title),
-    })
-    .collect()
-}
-
-fn sample_chapters(title: &str) -> Vec<OwnedChapter> {
-    (0..3)
-        .map(|chapter| {
-            let source = (0..18)
-                .map(|paragraph| OwnedLine {
-                    text: format!(
-                        "{} · section {} · passage {}. This public-domain sample proves page turning, chapter boundaries, sleep, wake, and reading-position resume in the shared application state.",
-                        title,
-                        chapter + 1,
-                        paragraph + 1
-                    ),
-                    style: if paragraph == 0 {
-                        ReaderStyle::Heading
-                    } else {
-                        ReaderStyle::Body
-                    },
-                })
-                .collect();
-            OwnedChapter {
-                title: format!("Section {}", chapter + 1),
-                source,
-                pages: Vec::new(),
-            }
-        })
-        .collect()
-}
-
-fn decode_cover(encoded: &[u8]) -> Result<OwnedCover, JsValue> {
-    let mut reader = ImageReader::new(Cursor::new(encoded))
-        .with_guessed_format()
-        .map_err(js_error)?;
-    let mut limits = Limits::default();
-    limits.max_image_width = Some(2_048);
-    limits.max_image_height = Some(2_048);
-    limits.max_alloc = Some(32 * 1024 * 1024);
-    reader.limits(limits);
-    let rgba = reader.decode().map_err(js_error)?.into_rgba8();
-    let size = Size::new(rgba.width() as usize, rgba.height() as usize).map_err(js_error)?;
-    let mut pixels = Vec::with_capacity(size.width() * size.height() * 3);
-    for pixel in rgba.pixels() {
-        let alpha = u16::from(pixel[3]);
-        for channel in &pixel.0[..3] {
-            let composited = (u16::from(*channel) * alpha + 255 * (255 - alpha) + 127) / 255;
-            pixels.push(composited as u8);
-        }
-    }
-    let source = RgbImage::new(size, &pixels).map_err(js_error)?;
-    Ok(pack_cover(&source))
-}
-
-fn pattern_cover(index: usize) -> OwnedCover {
-    const WIDTH: usize = 48;
-    const HEIGHT: usize = 72;
-    let mut pixels = vec![255; WIDTH * HEIGHT * 3];
-    for y in 0..HEIGHT {
-        for x in 0..WIDTH {
-            let border = x < 2 || y < 2 || x >= WIDTH - 2 || y >= HEIGHT - 2;
-            let pattern = match index {
-                0 => (x / 6 + y / 6) % 2 == 0,
-                1 => x % 11 < 3,
-                2 => (x + y) % 13 < 4,
-                _ => x.abs_diff(WIDTH / 2) + y.abs_diff(HEIGHT / 2) < 18,
-            };
-            let shade = if border || pattern { 24 } else { 232 };
-            let offset = (y * WIDTH + x) * 3;
-            pixels[offset..offset + 3].fill(shade);
-        }
-    }
-    let source = RgbImage::new(Size::new(WIDTH, HEIGHT).unwrap(), &pixels).unwrap();
-    pack_cover(&source)
-}
-
-fn pack_cover(source: &RgbImage<'_>) -> OwnedCover {
-    let size = Size::new(COVER_WIDTH, COVER_HEIGHT).unwrap();
-    let mut pixels = vec![0xFF; COVER_WIDTH * COVER_HEIGHT / 8];
-    let mut target = MonochromeImage::new(size, &mut pixels).unwrap();
-    brewthink::image::render(
-        source,
-        &mut target,
-        RenderOptions {
-            scale: ScaleMode::Cover,
-            dither: Dither::Ordered4x4,
-        },
-    );
-    OwnedCover { size, pixels }
 }
 
 #[wasm_bindgen]

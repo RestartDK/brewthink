@@ -1,0 +1,40 @@
+name: Simulator parity
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: simulator-parity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install the repository Rust toolchain
+        run: |
+          rustup show active-toolchain
+          rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install wasm-bindgen-cli --version 0.2.121 --locked
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - working-directory: web
+        run: |
+          bun install --frozen-lockfile
+          bunx playwright install --with-deps chromium
+      - run: bash scripts/check-simulator-parity.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: simulator-parity
+          path: artifacts/simulator-parity

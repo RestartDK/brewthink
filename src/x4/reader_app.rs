@@ -29,8 +29,8 @@ use crate::{
     bounded_layout::{BoundedPage, MAX_PAGE_LINES, layout_xhtml_page_into},
     bounded_xml::FixedString,
     cover::{
-        COVER_BYTES, CoverDecodeWorkspace, JpegDecodeWorkspace, bitmap, decode_jpeg_cover,
-        decode_png_cover, encoded_cover_fits,
+        COVER_BYTES, CoverDecodeWorkspace, JpegDecodeWorkspace, SHELF_COVER_BYTES, bitmap,
+        decode_jpeg_cover, decode_png_cover, downsample_cover, encoded_cover_fits, shelf_bitmap,
     },
     device_epub::{
         DeviceEpub, DevicePackageScratch, MAX_DEVICE_PATH_BYTES, MAX_DEVICE_RESOURCE_BYTES,
@@ -40,7 +40,7 @@ use crate::{
         ssd1677::{BufferedDisplay, RefreshPolicy, RefreshPolicyMode, Ssd1677, X4DriveProfile},
     },
     files::{FileItem, FileKind},
-    image::{MonochromeBitmap, MonochromeImage, RenderOptions, ScaleMode, Size},
+    image::{MonochromeImage, RenderOptions, ScaleMode, Size},
     image_decoder::{ImageFormat, decode_jpeg, decode_png},
     image_viewer::render_image_viewer,
     input::{
@@ -74,9 +74,6 @@ const _: () = {
     assert!(core::mem::size_of::<CoverDecodeWorkspace>() <= IMAGE_DECODER_BYTES);
     assert!(core::mem::size_of::<JpegDecodeWorkspace>() <= IMAGE_DECODER_BYTES);
 };
-const SHELF_COVER_WIDTH: usize = 88;
-const SHELF_COVER_HEIGHT: usize = 132;
-const SHELF_COVER_BYTES: usize = SHELF_COVER_WIDTH * SHELF_COVER_HEIGHT / 8;
 const X4_DRIVE_PROFILE: &str = match option_env!("BREWTHINK_X4_DRIVE_PROFILE") {
     Some(profile) => profile,
     None => "stock-parity",
@@ -1983,34 +1980,6 @@ fn resume_checksum(record: ResumeRecord) -> u32 {
     .fold(0x811C_9DC5, |hash, value| {
         (hash ^ value).wrapping_mul(0x0100_0193)
     })
-}
-
-fn downsample_cover(source: &[u8; COVER_BYTES], output: &mut [u8; SHELF_COVER_BYTES]) {
-    let source = bitmap(source);
-    output.fill(0xFF);
-    for y in 0..SHELF_COVER_HEIGHT {
-        for x in 0..SHELF_COVER_WIDTH {
-            let source_x = x * 2;
-            let source_y = y * 2;
-            let black = usize::from(source.pixel_is_black(source_x, source_y))
-                + usize::from(source.pixel_is_black(source_x + 1, source_y))
-                + usize::from(source.pixel_is_black(source_x, source_y + 1))
-                + usize::from(source.pixel_is_black(source_x + 1, source_y + 1));
-            if black >= 2 {
-                let pixel = y * SHELF_COVER_WIDTH + x;
-                output[pixel / 8] &= !(0x80 >> (pixel % 8));
-            }
-        }
-    }
-}
-
-fn shelf_bitmap(bytes: &[u8; SHELF_COVER_BYTES]) -> MonochromeBitmap<'_> {
-    MonochromeBitmap::new(
-        Size::new(SHELF_COVER_WIDTH, SHELF_COVER_HEIGHT)
-            .expect("the shelf cover dimensions are non-zero"),
-        bytes,
-    )
-    .expect("the shelf cover buffer matches its dimensions")
 }
 
 fn frame_size() -> Size {

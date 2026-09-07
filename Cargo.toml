@@ -15,7 +15,7 @@ sd-card             = ["dep:embedded-sdmmc"]
 sd-diagnostic       = ["dep:crc32fast"]
 sd-card-write       = ["sd-card"]
 sd-write-diagnostic = ["sd-card-write"]
-web-sim             = ["dep:image", "dep:wasm-bindgen", "epub"]
+web-sim             = ["dep:wasm-bindgen", "device-reader"]
 
 [[bin]]
 name = "brewthink"
@@ -39,6 +39,11 @@ required-features = ["epub"]
 [[bin]]
 name              = "inspect-device-epub"
 path              = "./src/bin/inspect-device-epub.rs"
+required-features = ["device-reader"]
+
+[[bin]]
+name              = "simulator-oracle"
+path              = "./tools/simulator-oracle.rs"
 required-features = ["device-reader"]
 
 [[bin]]
