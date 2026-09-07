@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 
 export async function captureFrame(page: Page, filePath: string): Promise<void> {
   const encoded = await page.locator("#display").evaluate((element) => {
@@ -16,5 +17,6 @@ export async function captureFrame(page: Page, filePath: string): Promise<void> 
     }
     return element.toDataURL("image/png").slice("data:image/png;base64,".length);
   });
+  await mkdir(dirname(filePath), { recursive: true });
   await writeFile(filePath, Buffer.from(encoded, "base64"));
 }

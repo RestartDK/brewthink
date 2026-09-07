@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test } from "@playwright/test";
-import { mkdir, readFile, stat, utimes } from "node:fs/promises";
+import { expect, test, type Page } from "@playwright/test";
+import { readFile, stat, utimes } from "node:fs/promises";
 import { captureFrame } from "./capture-frame";
 import path from "node:path";
 
@@ -10,6 +10,11 @@ const configuredEpub = process.env.BREWTHINK_TEST_EPUB;
 const walkthroughDirectory = process.env.BREWTHINK_WALKTHROUGH_DIR;
 
 test.use({ viewport: { width: 1440, height: 1000 } });
+
+async function continueFromCover(page: Page): Promise<void> {
+  await expect(page.locator("#preview-heading")).toHaveText("Book cover · 480 × 800");
+  await page.keyboard.press("Enter");
+}
 
 test("runs the complete library, reader, sleep, wake, and resume loop", async ({
   page,
@@ -40,6 +45,7 @@ test("runs the complete library, reader, sleep, wake, and resume loop", async ({
   await expect(page.locator("#selection-position")).toHaveText("4 / 4");
 
   await page.keyboard.press("Enter");
+  await continueFromCover(page);
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
   await expect(page.locator("#selection-position")).toHaveText("Chapter 1 / 3");
   await expect(page.locator("#view-position")).toHaveText("1 / 8");
@@ -92,6 +98,7 @@ test("parses an EPUB, renders its cover, and opens its spine text", async ({ pag
   await expect(page.locator("#reset-library")).toBeEnabled();
 
   await page.getByRole("button", { name: "Confirm" }).click();
+  await continueFromCover(page);
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
   await expect(page.locator("#selection-position")).toContainText("Chapter 1 /");
   await expect(page.locator("#message")).toContainText("saved progress");
@@ -164,6 +171,7 @@ test("opens files and applies reader typography settings", async ({ page }) => {
   await page.keyboard.press("ArrowUp");
   await page.keyboard.press("Enter");
   await page.keyboard.press("Enter");
+  await continueFromCover(page);
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
   await expect(page.locator("#view-position")).toHaveText("1 / 2");
 
@@ -209,6 +217,7 @@ test("uses custom sleep away from reading and a cover inside the reader", async 
 
   await page.keyboard.press("Enter");
   await page.keyboard.press("Enter");
+  await continueFromCover(page);
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
   await page.keyboard.press("p");
   await expect(page.locator("#preview-heading")).toHaveText(
@@ -224,6 +233,7 @@ test("keeps the reader simulator usable at a narrow viewport", async ({ page }) 
   await expect(page.locator("#selected-title")).toHaveText("Books");
   await page.keyboard.press("Enter");
   await page.keyboard.press("Enter");
+  await continueFromCover(page);
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
   await expect(page.locator("#display")).toBeVisible();
 
@@ -239,7 +249,6 @@ test("captures the app-shell visual walkthrough", async ({ page }) => {
   if (walkthroughDirectory === undefined) {
     return;
   }
-  await mkdir(walkthroughDirectory, { recursive: true });
   await page.goto("/");
   await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
   await captureFrame(page, path.join(walkthroughDirectory, "01-home.png"));
@@ -269,18 +278,21 @@ test("captures the app-shell visual walkthrough", async ({ page }) => {
   await page.keyboard.press("ArrowUp");
   await page.keyboard.press("Enter");
   await page.keyboard.press("Enter");
+  await expect(page.locator("#preview-heading")).toHaveText("Book cover · 480 × 800");
+  await captureFrame(page, path.join(walkthroughDirectory, "05-cover.png"));
+  await continueFromCover(page);
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
-  await captureFrame(page, path.join(walkthroughDirectory, "05-reader.png"));
+  await captureFrame(page, path.join(walkthroughDirectory, "06-reader.png"));
   await page.keyboard.press("Enter");
   await expect(page.locator("#preview-heading")).toHaveText("Reading controls · 480 × 800");
-  await captureFrame(page, path.join(walkthroughDirectory, "06-drawer.png"));
+  await captureFrame(page, path.join(walkthroughDirectory, "07-drawer.png"));
   await page.keyboard.press("Escape");
 
   await page.keyboard.press("p");
   await expect(page.locator("#preview-heading")).toHaveText(
     "Retained sleep screen · 480 × 800",
   );
-  await captureFrame(page, path.join(walkthroughDirectory, "07-sleep.png"));
+  await captureFrame(page, path.join(walkthroughDirectory, "08-sleep.png"));
 });
 
 test("opens the drawer, stages page and chapter jumps, and reflows typography", async ({ page }) => {
@@ -288,12 +300,13 @@ test("opens the drawer, stages page and chapter jumps, and reflows typography", 
   await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
   await page.keyboard.press("Enter");
   await page.keyboard.press("Enter");
+  await continueFromCover(page);
   const original = await page.locator("#view-position").textContent();
   await page.keyboard.press("Enter");
   await expect(page.locator("#preview-heading")).toHaveText("Reading controls · 480 × 800");
   await expect(page.locator("#view-position")).toHaveText(original ?? "");
   await page.keyboard.press("ArrowRight");
-  await expect(page.locator("#view-position")).toHaveText("2 / 8");
+  await expect(page.locator("#view-position")).toHaveText(original ?? "");
   await page.keyboard.press("Escape");
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
   await expect(page.locator("#view-position")).toHaveText(original ?? "");
@@ -303,7 +316,7 @@ test("opens the drawer, stages page and chapter jumps, and reflows typography", 
   await expect(page.locator("#view-position")).toHaveText("2 / 8");
   await page.keyboard.press("Enter");
   await page.keyboard.press("ArrowDown");
-  await expect(page.locator("#selected-creator")).toHaveText("Chapter");
+  await expect(page.locator("#selected-creator")).toHaveText("Chapter: Section 1");
   await page.keyboard.press("ArrowRight");
   await page.keyboard.press("Enter");
   await expect(page.locator("#selection-position")).toHaveText("Chapter 2 / 3");

@@ -1,5 +1,8 @@
 mod app;
 mod components;
+mod drawer;
+#[cfg(test)]
+mod drawer_tests;
 mod frame;
 mod icons;
 mod layout;
@@ -8,13 +11,16 @@ mod theme;
 
 pub use app::{AppFrame, AppRenderError, render_app};
 pub use components::{AppBar, CommandBar, FileRow, Label, MenuRow, Selection, SettingsRow};
+pub use drawer::DrawerSurface;
 pub use frame::{FixedText, FrameTarget};
 pub use icons::Icon;
 pub(crate) use layout::{ui, ui_column};
 pub use reader_drawer::draw_reader_drawer;
+pub(crate) use theme::text_font;
 pub use theme::{
     APP_BAR_RULE_Y, CONTENT_LEFT, CONTENT_TOP, CONTENT_WIDTH, FOOTER_RULE_Y, FOOTER_TEXT_Y,
-    FRAME_HEIGHT, FRAME_WIDTH, TextRole, text_style,
+    FRAME_HEIGHT, FRAME_WIDTH, FRONT_BUTTON_CENTERS, PANEL_CORNERS, ROW_CORNERS, TextRole,
+    text_width,
 };
 
 #[cfg(test)]
@@ -51,6 +57,33 @@ mod tests {
                     !battery.pixel_is_black(x, y),
                     "battery fill remained at ({x}, {y})"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn clipped_labels_ellipsize_at_glyph_boundaries_in_both_colors() {
+        use super::{Label, TextRole, text_width};
+        use embedded_graphics::{
+            geometry::{Point, Size as GraphicsSize},
+            pixelcolor::BinaryColor,
+        };
+        for (text, prefix) in [("WWWWWWWW", "WWW…"), ("éééééééé", "ééé…")] {
+            for color in [BinaryColor::On, BinaryColor::Off] {
+                let width = text_width(TextRole::ControlLabel, prefix) as u32;
+                let render = |text: &str| {
+                    let mut bytes = vec![if color == BinaryColor::On { 0xff } else { 0 }; 48_000];
+                    let mut image =
+                        MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+                    Label::new(text, TextRole::ControlLabel)
+                        .at(Point::new(18, 90))
+                        .color(color)
+                        .clipped_to(GraphicsSize::new(width, 34))
+                        .draw(&mut FrameTarget::new(&mut image))
+                        .unwrap();
+                    bytes
+                };
+                assert_eq!(render(text), render(prefix));
             }
         }
     }

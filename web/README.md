@@ -10,7 +10,7 @@ bun install
 bun run dev
 ```
 
-The built-in catalog uses public-domain titles and generated covers. Choose or drop a DRM-free EPUB to parse its package metadata and show its declared cover in the first shelf slot. The app opens on Home. Books shows the cover shelf, Files shows source EPUB names and sizes, and Settings changes the reader font, text size, and line spacing. Applied reader settings persist in browser storage. Use the on-screen controls or keyboard arrows to move and change values. In Reader, Confirm opens a drawer for page jumps, chapter selection, and typography. Up and Down choose a row. Left and Right change its value. Confirm applies it; Back cancels.
+The built-in catalog uses public-domain titles and generated covers. Choose or drop a DRM-free EPUB to parse its package metadata and show its declared cover in the first shelf slot. The app opens on Home. Books shows the cover shelf, Files shows source EPUB names and sizes, and Settings changes the reader font, text size, and line spacing. Applied reader settings persist in browser storage. Use the two front rockers, the right-edge buttons, or keyboard arrows. The simulator gets its front-button centers from the same Rust constants as the footer hints. A newly opened book shows only its cover; Confirm starts the text. Missing or invalid covers are skipped, and existing reading checkpoints resume directly. In Reader, Confirm opens a rounded bottom sheet for whole-book position, named chapter selection, and typography. Up and Down choose a row. Left and Right change its value. Confirm applies it; Back cancels. Whole-book position is an approximate equal-chapter estimate, not a global page count. EPUB nav/NCX labels name spine destinations; links to fragments in the same spine item do not create separate chapters.
 
 `bun run dev` watches both sides of the simulator. Vite hot-reloads TypeScript and CSS. Changes to Rust source, Cargo inputs, or the WASM build script trigger an incremental WASM rebuild and a full browser reload. A failed Rust build leaves the last generated module in place and reports the error in the terminal.
 
@@ -34,7 +34,7 @@ bun run build
 bun run test:e2e
 ```
 
-The browser tests cover Home, Books, Files, reader settings and reflow, the shared 2 × 2 shelf, directional navigation, synthetic EPUB metadata and cover parsing, sleep and resume, invalid input, narrow layouts, WCAG AA rules, and Rust-triggered WASM reloads.
+The browser tests cover Home, Books, Files, reader settings and reflow, rounded drawers, physical hint alignment, named navigation, whole-book endpoints, cover-only opening, optional-cover failures, sleep and resume, invalid input, narrow layouts, WCAG AA rules, and Rust-triggered WASM reloads. A synthetic 480 × 800 cover verifies every pixel to catch thumbnail enlargement or chrome overlays. The native decoder checks the same fixture. Regenerate the navigation/cover fixtures with `python3 scripts/generate-navigation-fixture.py` from the repository root.
 
 A private acceptance EPUB can be supplied without adding it to the repository:
 

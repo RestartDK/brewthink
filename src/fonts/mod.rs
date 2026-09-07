@@ -67,7 +67,13 @@ impl BitmapFont {
         self.glyph(character).advance
     }
 
-    pub(crate) fn draw<D>(self, text: &str, position: Point, target: &mut D) -> Result<(), D::Error>
+    pub(crate) fn draw<D>(
+        self,
+        text: &str,
+        position: Point,
+        color: BinaryColor,
+        target: &mut D,
+    ) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = BinaryColor>,
     {
@@ -84,7 +90,7 @@ impl BitmapFont {
                             cursor_x + glyph.left + x as i32,
                             position.y + glyph.top + y as i32,
                         ),
-                        BinaryColor::On,
+                        color,
                     ))
                 })
             });
@@ -107,4 +113,5 @@ impl BitmapFont {
     }
 }
 
+pub(crate) mod noto_sans;
 pub(crate) mod noto_serif;

@@ -274,6 +274,7 @@ fn populated_shelf_and_settings_rows_match_the_pinned_contract() {
 fn reader_drawer_rows_match_the_pinned_contract() {
     let mut app = App::new(1);
     assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
+    assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
     assert!(matches!(
         app.input(AppInput::Confirm),
         AppEffect::LoadChapter { .. }

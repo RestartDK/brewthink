@@ -279,6 +279,15 @@ impl WebLibrary {
                     SettingsItem::ALL.len(),
                 )
             }
+            AppView::BookCover { book, .. } => {
+                let book = &self.books[book.index()];
+                let cover = book
+                    .cover
+                    .as_ref()
+                    .ok_or_else(|| JsValue::from_str("cover is unavailable"))?;
+                render_app(AppFrame::Cover(cover.frame.bitmap()), &mut frame).map_err(js_error)?;
+                FrameMetadata::book("cover", book)
+            }
             AppView::Reader(session) => self.render_reader(session.location(), &mut frame)?,
             AppView::ReaderDrawer(drawer) => {
                 self.render_reader(drawer.session().location(), &mut frame)?
@@ -363,6 +372,9 @@ impl WebLibrary {
                         Err(_) => return false,
                     }
                 }
+                AppEffect::Render if matches!(self.app.view(), AppView::BookCover { book, .. } if self.books[book.index()].cover.is_none()) => {
+                    self.app.input(AppInput::Confirm)
+                }
                 AppEffect::None | AppEffect::Render | AppEffect::EnterDeepSleep { .. } => {
                     return changed;
                 }
@@ -378,7 +390,7 @@ impl WebLibrary {
                 ShelfBook::new(
                     &book.title,
                     &book.creator,
-                    book.cover.as_ref().map(OwnedCover::bitmap),
+                    book.cover.as_ref().map(|cover| cover.thumbnail.bitmap()),
                 )
             })
             .collect::<Vec<_>>();
@@ -498,9 +510,13 @@ impl WebLibrary {
             .iter()
             .map(|line| ReaderLine::new(&line.text, line.style))
             .collect::<Vec<_>>();
+        let chapter_title = match self.app.view() {
+            AppView::ReaderDrawer(drawer) => &book.chapters[drawer.chapter()].title,
+            _ => &chapter.title,
+        };
         let mut view = ReaderView::new(
             &book.title,
-            &chapter.title,
+            chapter_title,
             &lines,
             self.app.reader_preferences(),
             self.app.battery(),
@@ -519,8 +535,13 @@ impl WebLibrary {
         if let AppView::ReaderDrawer(drawer) = self.app.view() {
             view = view.with_drawer(drawer);
             metadata.screen = "reader-drawer";
-            metadata.creator = drawer.selected().label().into();
-            metadata.page = drawer.page();
+            metadata.creator = match drawer.selected() {
+                brewthink::app::ReaderControl::Chapter => format!("Chapter: {chapter_title}"),
+                brewthink::app::ReaderControl::Position => {
+                    format!("Book position: {}%", drawer.position().percent())
+                }
+                other => other.label().into(),
+            };
             metadata.chapter = drawer.chapter();
         }
         render_app(AppFrame::Reader(view), target).map_err(js_error)?;
@@ -565,7 +586,7 @@ impl WebLibrary {
                 }
                 SleepScreenSource::BookCover(book_id) => {
                     let book = &self.books[book_id.index()];
-                    let Some(cover) = book.cover.as_ref().map(OwnedCover::bitmap) else {
+                    let Some(cover) = book.cover.as_ref().map(|cover| cover.frame.bitmap()) else {
                         continue;
                     };
                     render_app(AppFrame::Sleep(SleepView::book_cover(cover)), target)
@@ -663,9 +684,9 @@ impl OwnedBook {
             .to_owned();
         let cover = epub
             .read_cover()
-            .map_err(js_error)?
-            .map(|encoded| decode_cover(&encoded))
-            .transpose()?;
+            .ok()
+            .flatten()
+            .and_then(|encoded| decode_cover(&encoded).ok());
         let linear_spine = epub
             .publication()
             .spine()
@@ -676,6 +697,7 @@ impl OwnedBook {
         if linear_spine.len() > MAX_CHAPTERS {
             return Err(JsValue::from_str("EPUB exceeds the 512 chapter limit"));
         }
+        let titles = epub.chapter_titles();
         let mut text_bytes = 0usize;
         let mut chapters = Vec::with_capacity(linear_spine.len());
         for spine_index in linear_spine {
@@ -692,7 +714,11 @@ impl OwnedBook {
                     "EPUB exceeds the 8 MiB rendered-text limit",
                 ));
             }
-            chapters.push(OwnedChapter::from_content(content, chapters.len()));
+            let mut chapter = OwnedChapter::from_content(content, chapters.len());
+            if let Some(Some(title)) = titles.get(spine_index) {
+                chapter.title.clone_from(title);
+            }
+            chapters.push(chapter);
         }
         if chapters.is_empty() {
             return Err(JsValue::from_str("EPUB has no linear readable chapters"));
@@ -756,11 +782,16 @@ struct OwnedLine {
 }
 
 struct OwnedCover {
+    thumbnail: OwnedBitmap,
+    frame: OwnedBitmap,
+}
+
+struct OwnedBitmap {
     size: Size,
     pixels: Vec<u8>,
 }
 
-impl OwnedCover {
+impl OwnedBitmap {
     fn bitmap(&self) -> MonochromeBitmap<'_> {
         MonochromeBitmap::new(self.size, &self.pixels)
             .expect("owned cover shape was checked when it was packed")
@@ -1032,18 +1063,37 @@ fn pattern_cover(index: usize) -> OwnedCover {
 }
 
 fn pack_cover(source: &RgbImage<'_>) -> OwnedCover {
-    let size = Size::new(COVER_WIDTH, COVER_HEIGHT).unwrap();
-    let mut pixels = vec![0xFF; COVER_WIDTH * COVER_HEIGHT / 8];
+    OwnedCover {
+        thumbnail: pack_bitmap(
+            source,
+            Size::new(COVER_WIDTH, COVER_HEIGHT).unwrap(),
+            ScaleMode::Cover,
+        ),
+        frame: pack_bitmap(
+            source,
+            Size::new(WIDTH, HEIGHT).unwrap(),
+            ScaleMode::Contain,
+        ),
+    }
+}
+
+fn pack_bitmap(source: &RgbImage<'_>, size: Size, scale: ScaleMode) -> OwnedBitmap {
+    let mut pixels = vec![0xFF; size.width() * size.height() / 8];
     let mut target = MonochromeImage::new(size, &mut pixels).unwrap();
     brewthink::image::render(
         source,
         &mut target,
         RenderOptions {
-            scale: ScaleMode::Cover,
+            scale,
             dither: Dither::Ordered4x4,
         },
     );
-    OwnedCover { size, pixels }
+    OwnedBitmap { size, pixels }
+}
+
+#[wasm_bindgen]
+pub fn front_button_centers() -> Vec<i32> {
+    brewthink::ui::FRONT_BUTTON_CENTERS.to_vec()
 }
 
 #[wasm_bindgen]

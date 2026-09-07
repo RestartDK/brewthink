@@ -46,17 +46,17 @@ pub fn render_sleep(
         });
     }
     match view {
-        SleepView::Custom(image) => {
-            if image.size() != frame_size {
-                return Err(SleepRenderError::ImageSizeMismatch {
-                    actual: image.size(),
-                });
-            }
+        SleepView::Custom(image) | SleepView::BookCover(image) if image.size() == frame_size => {
             for y in 0..800 {
                 for x in 0..480 {
                     target.set_pixel(x, y, image.pixel_is_black(x, y));
                 }
             }
+        }
+        SleepView::Custom(image) => {
+            return Err(SleepRenderError::ImageSizeMismatch {
+                actual: image.size(),
+            });
         }
         SleepView::BookCover(cover) => {
             if cover.size() != Size::new(176, 264).unwrap() {

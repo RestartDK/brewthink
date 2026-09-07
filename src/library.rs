@@ -303,20 +303,20 @@ impl Drawable for ShelfFooter<'_> {
         Rectangle::new(self.top_left, GraphicsSize::new(444, 2))
             .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
             .draw(target)?;
-        let (first_line, second_line) = split_title(self.book.title, 48);
+        let (first_line, second_line) = split_title(self.book.title, 444);
         Label::new(first_line, TextRole::Heading)
-            .at(self.top_left + Point::new(0, 20))
+            .at(self.top_left + Point::new(0, 4))
             .clipped_to(GraphicsSize::new(444, 42))
             .draw(target)?;
         if let Some(second_line) = second_line {
             Label::new(second_line, TextRole::Heading)
-                .at(self.top_left + Point::new(0, 41))
-                .clipped_to(GraphicsSize::new(444, 21))
+                .at(self.top_left + Point::new(0, 30))
+                .clipped_to(GraphicsSize::new(444, 34))
                 .draw(target)?;
         }
         Label::new(self.book.creator, TextRole::Metadata)
-            .at(self.top_left + Point::new(0, 73))
-            .clipped_to(GraphicsSize::new(340, 12))
+            .at(self.top_left + Point::new(0, 59))
+            .clipped_to(GraphicsSize::new(340, 22))
             .draw(target)?;
 
         let mut page = FixedText::<48>::new();
@@ -330,7 +330,11 @@ impl Drawable for ShelfFooter<'_> {
         )
         .ok();
         Label::new(page.as_str(), TextRole::Metadata)
-            .at(self.top_left + Point::new(376, 73))
+            .at(self.top_left
+                + Point::new(
+                    444 - crate::ui::text_width(TextRole::Metadata, page.as_str()) as i32,
+                    59,
+                ))
             .draw(target)?;
         CommandBar::new(["Home", "Read", "Left", "Right"]).draw(target)
     }
@@ -351,11 +355,11 @@ fn cover_scale(cover: MonochromeBitmap<'_>) -> Result<usize, ShelfRenderError> {
 }
 
 fn split_title(title: &str, line_length: usize) -> (&str, Option<&str>) {
-    let Some(cutoff) = title
-        .char_indices()
-        .nth(line_length)
-        .map(|(index, _)| index)
-    else {
+    let mut width = 0;
+    let Some((cutoff, _)) = title.char_indices().find(|(_, character)| {
+        width += crate::ui::text_font(TextRole::Heading).character_width(*character);
+        width > line_length
+    }) else {
         return (title, None);
     };
     let first = &title[..cutoff];
@@ -466,7 +470,10 @@ mod tests {
         assert_eq!(
             split_title(
                 "The Art of Doing Science and Engineering: Learning to Learn",
-                48,
+                crate::ui::text_width(
+                    crate::ui::TextRole::Heading,
+                    "The Art of Doing Science and Engineering: "
+                ),
             ),
             (
                 "The Art of Doing Science and Engineering:",

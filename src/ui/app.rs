@@ -2,7 +2,7 @@ use crate::{
     app::{FilesState, HomeState, LibraryState, SettingsState},
     files::{FileItem, FilesRenderError, render_files},
     home::{HomeRenderError, render_home},
-    image::MonochromeImage,
+    image::{MonochromeBitmap, MonochromeImage},
     library::{ShelfBook, ShelfRenderError, render_shelf},
     power::BatteryStatus,
     reader::{ReaderRenderError, ReaderView, render_reader, render_reader_error},
@@ -31,6 +31,7 @@ pub enum AppFrame<'a> {
         battery: BatteryStatus,
         custom_image: CustomImagePreview<'a>,
     },
+    Cover(MonochromeBitmap<'a>),
     Reader(ReaderView<'a>),
     Sleep(SleepView<'a>),
     Error {
@@ -46,6 +47,7 @@ pub enum AppRenderError {
     Library(ShelfRenderError),
     Files(FilesRenderError),
     Settings(SettingsRenderError),
+    Cover(SleepRenderError),
     Reader(ReaderRenderError),
     Sleep(SleepRenderError),
 }
@@ -74,6 +76,9 @@ pub fn render_app(
             custom_image,
         } => {
             render_settings(state, battery, custom_image, target).map_err(AppRenderError::Settings)
+        }
+        AppFrame::Cover(bitmap) => {
+            render_sleep(SleepView::book_cover(bitmap), target).map_err(AppRenderError::Cover)
         }
         AppFrame::Reader(view) => render_reader(view, target).map_err(AppRenderError::Reader),
         AppFrame::Sleep(view) => render_sleep(view, target).map_err(AppRenderError::Sleep),

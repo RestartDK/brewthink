@@ -1,5 +1,9 @@
 use crate::power::{BatteryLevel, BatteryStatus};
+mod book_position;
+pub use book_position::BookPosition;
 
+#[cfg(test)]
+mod cover_tests;
 #[cfg(test)]
 mod reader_drawer_tests;
 
@@ -774,7 +778,7 @@ impl ReadingSession {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum ReaderControl {
-    Page,
+    Position,
     Chapter,
     Font,
     Size,
@@ -783,7 +787,7 @@ pub enum ReaderControl {
 
 impl ReaderControl {
     pub const ALL: [Self; 5] = [
-        Self::Page,
+        Self::Position,
         Self::Chapter,
         Self::Font,
         Self::Size,
@@ -792,7 +796,7 @@ impl ReaderControl {
 
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Page => "Page in chapter",
+            Self::Position => "Book position",
             Self::Chapter => "Chapter",
             Self::Font => "Font",
             Self::Size => "Text size",
@@ -805,7 +809,7 @@ impl ReaderControl {
 pub struct ReaderDrawer {
     session: ReadingSession,
     selected: ReaderControl,
-    page: usize,
+    position: BookPosition,
     chapter: usize,
     preferences: ReaderPreferences,
 }
@@ -814,8 +818,8 @@ impl ReaderDrawer {
     pub const fn new(session: ReadingSession, preferences: ReaderPreferences) -> Self {
         Self {
             session,
-            selected: ReaderControl::Page,
-            page: session.location.page_index,
+            selected: ReaderControl::Position,
+            position: BookPosition::from_location(session.location),
             chapter: session.location.spine_index,
             preferences,
         }
@@ -827,8 +831,8 @@ impl ReaderDrawer {
     pub const fn selected(self) -> ReaderControl {
         self.selected
     }
-    pub const fn page(self) -> usize {
-        self.page
+    pub const fn position(self) -> BookPosition {
+        self.position
     }
     pub const fn chapter(self) -> usize {
         self.chapter
@@ -849,15 +853,7 @@ impl ReaderDrawer {
             return;
         }
         match self.selected {
-            ReaderControl::Page => {
-                let count = self.session.location.page_count;
-                let step = count.div_ceil(20);
-                self.page = if direction == Direction::Left {
-                    self.page.saturating_sub(step)
-                } else {
-                    self.page.saturating_add(step).min(count - 1)
-                };
-            }
+            ReaderControl::Position => self.position.shift(direction),
             ReaderControl::Chapter => {
                 self.chapter = if direction == Direction::Left {
                     self.chapter.saturating_sub(1)
@@ -907,6 +903,7 @@ pub enum AppView {
     Files(FilesState),
     Settings(SettingsState),
     Loading(PendingChapter),
+    BookCover { book: BookId, origin: BookOrigin },
     Reader(ReadingSession),
     ReaderDrawer(ReaderDrawer),
     Image(ImageId),
@@ -1272,7 +1269,10 @@ impl App {
 
     fn current_render_effect(&self) -> AppEffect {
         match self.view {
-            AppView::Loading(_) | AppView::Reader(_) | AppView::Sleeping { .. } => AppEffect::None,
+            AppView::Loading(_)
+            | AppView::Reader(_)
+            | AppView::BookCover { .. }
+            | AppView::Sleeping { .. } => AppEffect::None,
             _ => AppEffect::Render,
         }
     }
@@ -1300,6 +1300,12 @@ impl App {
                     origin: session.origin,
                 }
             }
+            AppView::BookCover { book, origin } => ResumePoint::Reader {
+                book,
+                spine_index: 0,
+                page_index: 0,
+                origin,
+            },
             AppView::Image(image) => ResumePoint::Image { image },
             AppView::Sleeping { resume } => resume,
             AppView::Loading(pending) => self.origin_resume(pending.origin),
@@ -1375,6 +1381,14 @@ impl App {
                 AppEffect::Render
             }
             (AppView::Settings(_), AppInput::Back) => self.return_home(HomeItem::Settings),
+            (
+                AppView::BookCover { book, origin },
+                AppInput::Confirm | AppInput::Move(Direction::Right | Direction::Down),
+            ) => self.request_chapter(book, 0, PageTarget::First, origin),
+            (
+                AppView::BookCover { origin, .. },
+                AppInput::Back | AppInput::Move(Direction::Left | Direction::Up),
+            ) => self.return_to_origin(origin),
             (AppView::Reader(session), AppInput::Move(Direction::Right | Direction::Down)) => {
                 self.next_page(session)
             }
@@ -1563,7 +1577,10 @@ impl App {
                 },
                 origin,
             ),
-            None => self.request_chapter(book, 0, PageTarget::First, origin),
+            None => {
+                self.view = AppView::BookCover { book, origin };
+                AppEffect::Render
+            }
         }
     }
 
@@ -1579,11 +1596,13 @@ impl App {
                 drawer.session.origin,
             );
         }
-        let page_index = if drawer.selected == ReaderControl::Page {
-            drawer.page
-        } else {
-            location.page_index
-        };
+        if drawer.selected == ReaderControl::Position
+            && drawer.position != BookPosition::from_location(location)
+        {
+            let (spine_index, target) = drawer.position.target(location);
+            return self.request_chapter(location.book, spine_index, target, drawer.session.origin);
+        }
+        let page_index = location.page_index;
         if typography_changed {
             return self.request_chapter(
                 location.book,
@@ -1779,6 +1798,8 @@ mod tests {
 
     fn open_first_book(app: &mut App, pages: usize) {
         open_books(app);
+        assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
+        assert!(matches!(app.view(), AppView::BookCover { .. }));
         assert!(matches!(
             app.input(AppInput::Confirm),
             AppEffect::LoadChapter { .. }
@@ -1902,6 +1923,7 @@ mod tests {
         app.input(AppInput::Move(Direction::Down));
         app.input(AppInput::Confirm);
         app.input(AppInput::Move(Direction::Down));
+        assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
         assert!(matches!(
             app.input(AppInput::Confirm),
             AppEffect::LoadChapter { book, .. } if book.index() == 1
@@ -2106,6 +2128,7 @@ mod tests {
         let mut app = App::new(1);
         open_books(&mut app);
         app.input(AppInput::Confirm);
+        app.input(AppInput::Confirm);
         let loading = app.view();
         assert!(matches!(loading, AppView::Loading(_)));
         assert_eq!(
@@ -2142,6 +2165,7 @@ mod tests {
                 app.input(AppInput::Confirm);
                 let parent = app.view();
                 let resume = app.resume_point();
+                app.input(AppInput::Confirm);
                 app.input(AppInput::Confirm);
                 assert!(matches!(app.view(), AppView::Loading(_)));
                 assert_eq!(app.resume_point(), resume);

@@ -4,6 +4,7 @@ fn reading(pages: usize, chapters: usize) -> App {
     let mut app = App::new(1);
     app.input(AppInput::Confirm);
     app.input(AppInput::Confirm);
+    app.input(AppInput::Confirm);
     app.chapter_loaded(chapters, pages).unwrap();
     app
 }
@@ -21,9 +22,9 @@ fn confirm_opens_controls_without_turning_the_page_and_back_cancels() {
     app.input(AppInput::Move(Direction::Right));
     let original = app.resume_point();
     assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
-    assert_eq!(drawer(app).page(), 1);
+    assert_eq!(drawer(app).position().permille(), 3);
     app.input(AppInput::Move(Direction::Right));
-    assert_eq!(drawer(app).page(), 6);
+    assert_eq!(drawer(app).position().permille(), 53);
     assert_eq!(app.resume_point(), original);
     app.input(AppInput::Back);
     assert_eq!(app.resume_point(), original);
@@ -31,16 +32,24 @@ fn confirm_opens_controls_without_turning_the_page_and_back_cancels() {
 }
 
 #[test]
-fn page_slider_is_bounded_and_jumps_only_on_confirm() {
+fn book_slider_is_bounded_and_crosses_chapters_only_on_confirm() {
     for pages in [1, 2, 19, 20, 21, 100, 1000] {
-        let mut app = reading(pages, 1);
+        let mut app = reading(pages, 3);
         app.input(AppInput::Confirm);
         for _ in 0..30 {
             app.input(AppInput::Move(Direction::Right));
         }
-        assert_eq!(drawer(app).page(), pages - 1);
+        assert_eq!(drawer(app).position().percent(), 100);
         assert_eq!(app.input(AppInput::Move(Direction::Right)), AppEffect::None);
-        assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
+        assert_eq!(
+            app.input(AppInput::Confirm),
+            AppEffect::LoadChapter {
+                book: BookId::new(0),
+                spine_index: 2,
+                target: PageTarget::Last
+            }
+        );
+        app.chapter_loaded(3, pages).unwrap();
         let AppView::Reader(session) = app.view() else {
             panic!("reader expected")
         };
@@ -49,8 +58,25 @@ fn page_slider_is_bounded_and_jumps_only_on_confirm() {
         for _ in 0..30 {
             app.input(AppInput::Move(Direction::Left));
         }
-        assert_eq!(drawer(app).page(), 0);
+        assert_eq!(drawer(app).position().percent(), 0);
         assert_eq!(app.input(AppInput::Move(Direction::Left)), AppEffect::None);
+        assert_eq!(
+            app.input(AppInput::Confirm),
+            AppEffect::LoadChapter {
+                book: BookId::new(0),
+                spine_index: 0,
+                target: PageTarget::Progress {
+                    page_index: 0,
+                    page_count: 1001
+                }
+            }
+        );
+        app.chapter_loaded(3, pages).unwrap();
+        let AppView::Reader(session) = app.view() else {
+            panic!("reader expected")
+        };
+        assert_eq!(session.location().page_index(), 0);
+        assert_eq!(session.location().spine_index(), 0);
     }
 }
 

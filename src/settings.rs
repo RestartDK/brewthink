@@ -3,7 +3,7 @@ use embedded_graphics::{
     geometry::{Point, Size as GraphicsSize},
     pixelcolor::BinaryColor,
     prelude::{DrawTarget, Primitive},
-    primitives::{PrimitiveStyle, Rectangle},
+    primitives::{PrimitiveStyle, Rectangle, RoundedRectangle},
 };
 use embedded_layout::{
     View,
@@ -147,9 +147,12 @@ impl Drawable for SettingsPreview<'_> {
         Label::new(heading, TextRole::Body)
             .at(self.top_left)
             .draw(target)?;
-        Rectangle::new(
-            self.top_left + Point::new(0, 24),
-            GraphicsSize::new(CONTENT_WIDTH, 238),
+        RoundedRectangle::with_equal_corners(
+            Rectangle::new(
+                self.top_left + Point::new(0, 24),
+                GraphicsSize::new(CONTENT_WIDTH, 238),
+            ),
+            crate::ui::PANEL_CORNERS,
         )
         .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
         .draw(target)?;
@@ -175,9 +178,11 @@ impl Drawable for SettingsPreview<'_> {
                     })
                 }))?;
             } else {
-                Label::new(self.custom_image.label(), TextRole::Heading)
-                    .at(self.top_left + Point::new(30, 120))
-                    .draw(target)?;
+                crate::ui::Icon::Image.draw(
+                    target,
+                    self.top_left + Point::new(70, 124),
+                    BinaryColor::On,
+                )?;
             }
             let message = match self.custom_image {
                 CustomImagePreview::Ready { name, .. } => name,
@@ -185,35 +190,61 @@ impl Drawable for SettingsPreview<'_> {
                 CustomImagePreview::Invalid => "Replace the selected image",
             };
             Label::new(message, TextRole::Body)
-                .at(self.top_left + Point::new(172, 100))
+                .at(self.top_left + Point::new(172, 136))
+                .clipped_to(GraphicsSize::new(254, 28))
                 .draw(target)?;
             return Label::new(self.custom_image.label(), TextRole::Heading)
-                .at(self.top_left + Point::new(172, 132))
+                .at(self.top_left + Point::new(172, 96))
                 .draw(target);
         }
 
-        let lines = if sleep_preview {
-            [
-                "The selected book cover is used",
-                "while browsing or reading.",
-                "Built-in is the safe fallback.",
+        if sleep_preview {
+            for (index, line) in [
+                "Your book cover appears here.",
+                "Without a readable cover,",
+                "the built-in sleep screen is used.",
             ]
-        } else {
-            [
-                "A reader should disappear",
-                "behind the words. Adjust",
-                "the text until it feels right.",
-            ]
-        };
+            .into_iter()
+            .enumerate()
+            {
+                Label::new(line, TextRole::Body)
+                    .at(self.top_left + Point::new(30, 70 + index as i32 * 30))
+                    .draw(target)?;
+            }
+            return Ok(());
+        }
         let theme = ReaderTheme::from_preferences(self.state.draft().reader());
         let line_height = theme.line_height(ReaderStyle::Body) as i32;
-        for (index, line) in lines.into_iter().enumerate() {
+        let mut remaining =
+            "A reader should disappear behind the words. Adjust the text until it feels right.";
+        let mut y = 60;
+        while !remaining.is_empty() && y + line_height <= 254 {
+            let end = remaining
+                .char_indices()
+                .find_map(|(index, character)| {
+                    (theme.text_width(
+                        ReaderStyle::Body,
+                        &remaining[..index + character.len_utf8()],
+                    ) > CONTENT_WIDTH as usize - 60)
+                        .then_some(index)
+                })
+                .unwrap_or(remaining.len());
+            if end == 0 {
+                break;
+            }
+            let end = if end < remaining.len() {
+                remaining[..end].rfind(char::is_whitespace).unwrap_or(end)
+            } else {
+                end
+            };
             theme.draw_text(
-                line,
+                &remaining[..end],
                 ReaderStyle::Body,
-                self.top_left + Point::new(30, 60 + index as i32 * line_height),
+                self.top_left + Point::new(30, y),
                 target,
             )?;
+            remaining = remaining[end..].trim_start();
+            y += line_height;
         }
         Ok(())
     }
@@ -230,6 +261,42 @@ mod tests {
         input::UsbState,
         power::BatteryStatus,
     };
+
+    #[test]
+    fn every_reader_preference_keeps_the_preview_inside_its_panel() {
+        use crate::app::ReaderPreferences;
+        for font in 0..3 {
+            for size in 0..3 {
+                for spacing in 0..3 {
+                    let reader =
+                        ReaderPreferences::from_packed(font | (size << 8) | (spacing << 16))
+                            .unwrap();
+                    let preferences =
+                        AppPreferences::new(reader, crate::app::SleepScreenMode::Automatic);
+                    let mut bytes = std::vec![0xff; 48_000];
+                    let mut frame =
+                        MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+                    render_settings(
+                        SettingsState::new(preferences),
+                        BatteryStatus::from_percent(82, UsbState::Disconnected),
+                        CustomImagePreview::Missing,
+                        &mut frame,
+                    )
+                    .unwrap();
+                    for y in 440..710 {
+                        for x in 464..480 {
+                            assert!(!frame.pixel_is_black(x, y), "preview overflow at {x},{y}");
+                        }
+                    }
+                    for y in 680..710 {
+                        for x in 18..462 {
+                            assert!(!frame.pixel_is_black(x, y), "preview overflow at {x},{y}");
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn renders_every_settings_row_and_missing_image_state() {

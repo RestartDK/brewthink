@@ -3,11 +3,10 @@ use core::fmt::Write;
 use embedded_graphics::{
     Drawable, Pixel,
     draw_target::DrawTargetExt,
-    geometry::{Dimensions, Point, Size},
+    geometry::{Point, Size},
     pixelcolor::BinaryColor,
     prelude::{DrawTarget, Primitive},
     primitives::{PrimitiveStyle, Rectangle, RoundedRectangle},
-    text::{Baseline, Text},
 };
 use embedded_layout::View;
 
@@ -19,7 +18,7 @@ use crate::{
 
 use super::{
     APP_BAR_RULE_Y, CONTENT_LEFT, CONTENT_WIDTH, FOOTER_RULE_Y, FOOTER_TEXT_Y, FRAME_WIDTH,
-    FixedText, Icon, TextRole, text_style,
+    FRONT_BUTTON_CENTERS, FixedText, Icon, TextRole, text_font, text_width,
 };
 
 const POWER_SYMBOL_X: i32 = 386;
@@ -91,13 +90,11 @@ impl View for Label<'_> {
     fn bounds(&self) -> Rectangle {
         self.clip.map_or_else(
             || {
-                Text::with_baseline(
-                    self.text,
+                let font = text_font(self.role);
+                Rectangle::new(
                     self.top_left,
-                    text_style(self.role),
-                    Baseline::Top,
+                    Size::new(font.text_width(self.text) as u32, font.line_height() as u32),
                 )
-                .bounding_box()
             },
             |size| Rectangle::new(self.top_left, size),
         )
@@ -112,14 +109,37 @@ impl Drawable for Label<'_> {
     where
         D: DrawTarget<Color = Self::Color>,
     {
-        let mut style = text_style(self.role);
-        style.text_color = Some(self.color);
-        let text = Text::with_baseline(self.text, self.top_left, style, Baseline::Top);
+        let font = text_font(self.role);
         match self.clip {
-            Some(size) => text
-                .draw(&mut target.clipped(&Rectangle::new(self.top_left, size)))
-                .map(|_| ()),
-            None => text.draw(target).map(|_| ()),
+            Some(size) => {
+                let mut clipped = target.clipped(&Rectangle::new(self.top_left, size));
+                let width = size.width as usize;
+                if font.text_width(self.text) <= width {
+                    return font.draw(self.text, self.top_left, self.color, &mut clipped);
+                }
+                let ellipsis = font.text_width("…");
+                if width < ellipsis {
+                    return Ok(());
+                }
+                let mut used = 0;
+                let end = self
+                    .text
+                    .char_indices()
+                    .find_map(|(index, character)| {
+                        used += font.character_width(character);
+                        (used + ellipsis > width).then_some(index)
+                    })
+                    .unwrap_or(self.text.len());
+                let prefix = &self.text[..end];
+                font.draw(prefix, self.top_left, self.color, &mut clipped)?;
+                font.draw(
+                    "…",
+                    self.top_left + Point::new(font.text_width(prefix) as i32, 0),
+                    self.color,
+                    &mut clipped,
+                )
+            }
+            None => font.draw(self.text, self.top_left, self.color, target),
         }
     }
 }
@@ -163,8 +183,8 @@ impl Drawable for AppBar<'_> {
         D: DrawTarget<Color = Self::Color>,
     {
         Label::new(self.section, TextRole::Section)
-            .at(self.top_left + Point::new(CONTENT_LEFT, 20))
-            .clipped_to(Size::new(302, 22))
+            .at(self.top_left + Point::new(CONTENT_LEFT, 8))
+            .clipped_to(Size::new(302, 34))
             .draw(target)?;
         Icon::WifiOff.draw(target, self.top_left + Point::new(334, 15), BinaryColor::On)?;
         draw_battery(target, self.top_left, self.battery)
@@ -219,17 +239,23 @@ impl Drawable for CommandBar<'_> {
             .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
             .draw(target)?;
         let icons = [Icon::Back, Icon::Confirm, Icon::Left, Icon::Right];
-        let column = self.width / 4;
-        for (index, (icon, action)) in icons.into_iter().zip(self.actions).enumerate() {
-            let center = self.left + column as i32 * index as i32 + column as i32 / 2;
+        for ((icon, action), center) in icons
+            .into_iter()
+            .zip(self.actions)
+            .zip(FRONT_BUTTON_CENTERS)
+        {
+            let center = center + self.left - CONTENT_LEFT;
             icon.draw(
                 target,
                 Point::new(center - 12, self.rule_y + 8),
                 BinaryColor::On,
             )?;
             Label::new(action, TextRole::CommandHint)
-                .at(Point::new(center - action.len() as i32 * 3, self.text_y))
-                .clipped_to(Size::new(column, 10))
+                .at(Point::new(
+                    center - text_width(TextRole::CommandHint, action) as i32 / 2,
+                    self.text_y,
+                ))
+                .clipped_to(Size::new(92, 22))
                 .draw(target)?;
         }
         Ok(())
@@ -278,7 +304,7 @@ impl Drawable for MenuRow<'_> {
             .draw(target, self.top_left + Point::new(20, 26), color)?;
         Label::new(self.title, TextRole::ControlLabel)
             .color(color)
-            .at(self.top_left + Point::new(68, 29))
+            .at(self.top_left + Point::new(68, 22))
             .draw(target)
     }
 }
@@ -322,7 +348,7 @@ impl Drawable for SettingsRow<'_> {
         D: DrawTarget<Color = Self::Color>,
     {
         let (top, height, role, label_y) = match self.value {
-            Some(_) => (self.top_left, 46, TextRole::ControlLabel, 14),
+            Some(_) => (self.top_left, 46, TextRole::ControlLabel, 8),
             None => (
                 self.top_left + Point::new(0, 10),
                 64,
@@ -342,7 +368,7 @@ impl Drawable for SettingsRow<'_> {
             SettingsItem::SleepScreen => Icon::Moon,
             SettingsItem::Apply => Icon::Confirm,
         };
-        icon.draw(target, top + Point::new(20, label_y - 3), color)?;
+        icon.draw(target, top + Point::new(20, label_y + 3), color)?;
         Label::new(self.item.label(), role)
             .color(color)
             .at(top + Point::new(68, label_y))
@@ -350,7 +376,7 @@ impl Drawable for SettingsRow<'_> {
         if let Some(value) = self.value {
             Label::new(value, TextRole::Body)
                 .color(color)
-                .at(top + Point::new(268, 14))
+                .at(top + Point::new(428 - text_width(TextRole::Body, value) as i32, 10))
                 .draw(target)?;
         }
         Ok(())
@@ -404,8 +430,8 @@ impl Drawable for FileRow<'_> {
         icon.draw(target, self.top_left + Point::new(16, 19), color)?;
         Label::new(self.name, TextRole::ControlLabel)
             .color(color)
-            .at(self.top_left + Point::new(58, 12))
-            .clipped_to(Size::new(370, 18))
+            .at(self.top_left + Point::new(58, 3))
+            .clipped_to(Size::new(370, 30))
             .draw(target)?;
         let mut size = FixedText::<32>::new();
         write!(
@@ -417,7 +443,7 @@ impl Drawable for FileRow<'_> {
         .ok();
         Label::new(size.as_str(), TextRole::Metadata)
             .color(color)
-            .at(self.top_left + Point::new(58, 38))
+            .at(self.top_left + Point::new(58, 35))
             .draw(target)
     }
 }
@@ -431,7 +457,7 @@ where
     D: DrawTarget<Color = BinaryColor>,
 {
     if selection == Selection::Selected {
-        RoundedRectangle::with_equal_corners(bounds, Size::new(8, 8))
+        RoundedRectangle::with_equal_corners(bounds, super::ROW_CORNERS)
             .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
             .draw(target)?;
         Ok(BinaryColor::Off)
@@ -465,7 +491,7 @@ where
         }
     };
     Label::new(label.as_str(), TextRole::Metadata)
-        .at(origin + Point::new(410, 22))
+        .at(origin + Point::new(410, 17))
         .draw(target)?;
     if battery.usb().is_connected() {
         draw_external_power_symbol(target, origin)?;

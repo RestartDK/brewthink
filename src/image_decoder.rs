@@ -372,6 +372,8 @@ fn is_black(luma: u8, x: usize, y: usize, dither: Dither) -> bool {
 }
 
 #[cfg(test)]
+mod cover_tests;
+#[cfg(test)]
 mod tests {
     extern crate std;
 

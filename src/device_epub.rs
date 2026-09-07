@@ -30,6 +30,7 @@ pub struct DevicePublication {
     spine: [Option<DeviceSpineItem>; MAX_DEVICE_SPINE_ITEMS],
     spine_length: u8,
     cover: Option<FixedString<MAX_DEVICE_PATH_BYTES>>,
+    navigation: Option<FixedString<MAX_DEVICE_PATH_BYTES>>,
 }
 
 impl DevicePublication {
@@ -220,6 +221,40 @@ where
         self.read_path(item.path(), output, inflater)
     }
 
+    pub fn read_chapter_titles(
+        &self,
+        titles: &mut [FixedString<{ crate::navigation::CHAPTER_TITLE_BYTES }>;
+                 MAX_DEVICE_SPINE_ITEMS],
+        output: &mut [u8],
+        inflater: &mut InflateWorkspace,
+    ) -> Result<(), DeviceEpubError<R::Error>> {
+        titles.fill(FixedString::new());
+        let Some(path) = self.publication.navigation.as_ref() else {
+            return Ok(());
+        };
+        let maximum = output.len().min(64 * 1024);
+        let length = self.read_path(path.as_str(), &mut output[..maximum], inflater)?;
+        let result = crate::navigation::read_entries(&output[..length], |href, title| {
+            let Ok(resolved) = resolve_resource_path::<R::Error>(path.as_str(), href) else {
+                return;
+            };
+            if let Some(index) = self
+                .publication
+                .spine
+                .iter()
+                .position(|item| item.as_ref().is_some_and(|item| item.path == resolved))
+                && titles[index].is_empty()
+                && let Ok(title) = FixedString::try_from_str(title)
+            {
+                titles[index] = title;
+            }
+        });
+        if result.is_err() {
+            titles.fill(FixedString::new());
+        }
+        result.map_err(DeviceEpubError::Xml)
+    }
+
     pub fn read_cover(
         &self,
         output: &mut [u8],
@@ -279,6 +314,7 @@ fn parse_package<E>(
         spine: [None; MAX_DEVICE_SPINE_ITEMS],
         spine_length: 0,
         cover: None,
+        navigation: None,
     };
     parse_package_structure(encoded, scratch, &mut publication)?;
     resolve_manifest(package_path, encoded, scratch, &mut publication)?;
@@ -387,6 +423,13 @@ fn resolve_manifest<E>(
             .ok_or(DeviceEpubError::InvalidPackage)?;
         let properties = tag.attribute("properties")?.unwrap_or("");
         let path = resolve_resource_path(package_path, href)?;
+        if properties
+            .split_ascii_whitespace()
+            .any(|property| property == "nav")
+            || (publication.navigation.is_none() && media_type == "application/x-dtbncx+xml")
+        {
+            publication.navigation = Some(path);
+        }
         let cover_property = properties
             .split_ascii_whitespace()
             .any(|property| property == "cover-image");

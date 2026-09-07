@@ -3,6 +3,7 @@ import init, {
   WebInput,
   WebLibrary,
   renderer_version,
+  front_button_centers,
 } from "./generated/brewthink_web.js";
 import "./style.css";
 
@@ -25,6 +26,7 @@ type Screen =
   | "settings"
   | "reader"
   | "reader-drawer"
+  | "cover"
   | "image"
   | "sleep"
   | "error";
@@ -92,6 +94,16 @@ app.innerHTML = `
             <span id="placeholder-detail">Preparing the shared Rust application frame.</span>
           </div>
         </div>
+        <div class="front-controls" aria-label="Front buttons">
+          <button class="front-key" id="back-button" type="button" aria-label="Back" disabled>↶</button>
+          <button class="front-key" id="confirm-selection" type="button" aria-label="Confirm" disabled>✓</button>
+          <button class="front-key" type="button" data-input="left" aria-label="Move left" disabled>‹</button>
+          <button class="front-key" type="button" data-input="right" aria-label="Move right" disabled>›</button>
+        </div>
+        <div class="side-controls" aria-label="Side buttons">
+          <button class="side-key" type="button" data-input="up" aria-label="Move up" disabled>↑</button>
+          <button class="side-key" type="button" data-input="down" aria-label="Move down" disabled>↓</button>
+        </div>
         <div class="reader-footer" aria-hidden="true">
           <span>480 × 800</span>
           <span>Native pixels · 1-bit e-paper</span>
@@ -158,21 +170,9 @@ app.innerHTML = `
           <h3 id="input-heading">Device input</h3>
           <span>Arrows · Enter · Esc · P</span>
         </div>
-        <div class="device-controls">
-          <div class="direction-pad" aria-label="Application navigation">
-            <button class="key key-up" type="button" data-input="up" aria-label="Move up">↑</button>
-            <button class="key key-left" type="button" data-input="left" aria-label="Move left">←</button>
-            <span class="key-center" aria-hidden="true"></span>
-            <button class="key key-right" type="button" data-input="right" aria-label="Move right">→</button>
-            <button class="key key-down" type="button" data-input="down" aria-label="Move down">↓</button>
-          </div>
-          <button class="confirm-button" id="confirm-selection" type="button" disabled>
-            <span id="confirm-label">Confirm</span>
-            <small id="confirm-hint">Open selected book</small>
-          </button>
-        </div>
+        <p class="control-help">Use the two front rockers and the side buttons on the preview, or use the keyboard.</p>
+        <p class="control-help"><strong id="confirm-label">Confirm</strong><br><span id="confirm-hint">Open selected book</span></p>
         <div class="system-controls">
-          <button class="secondary-button" id="back-button" type="button" disabled>Back</button>
           <button class="secondary-button power-button" id="power-button" type="button" disabled>
             Sleep
           </button>
@@ -283,6 +283,14 @@ void initializeRenderer();
 async function initializeRenderer(): Promise<void> {
   try {
     await init();
+    const frontButtons = requireButtons(".front-key");
+    const centers = front_button_centers();
+    if (frontButtons.length !== centers.length) throw new Error("Front control geometry mismatch");
+    frontButtons.forEach((button, index) => {
+      const center = centers[index];
+      if (center === undefined) throw new Error("Missing front control position");
+      button.style.left = `${center}px`;
+    });
     runtimeStatus.classList.add("is-ready");
     runtimeLabel.textContent = `Rust/WASM ${renderer_version()}`;
     fileInput.disabled = false;
@@ -511,6 +519,16 @@ function renderReadyState(state: Extract<ViewState, { kind: "ready" }>): void {
       message.textContent = "Confirm selects this image. Back returns to Files.";
       canvas.setAttribute("aria-label", `Brewthink image viewer. ${state.title}.`);
       break;
+    case "cover":
+      previewHeading.textContent = "Book cover · 480 × 800";
+      selectionPosition.textContent = "Cover";
+      pageLabel.textContent = "Next";
+      viewPosition.textContent = "Start reading";
+      confirmLabel.textContent = "Read";
+      confirmHint.textContent = "Continue to the first page";
+      message.textContent = "Only the cover is shown. Confirm or Right starts reading; Back returns to the book list.";
+      canvas.setAttribute("aria-label", `${state.title}. Cover only. Confirm to start reading.`);
+      break;
     case "reader":
       previewHeading.textContent = "EPUB reader · 480 × 800";
       selectionPosition.textContent = `Chapter ${state.chapter + 1} / ${state.chapterCount}`;
@@ -605,6 +623,7 @@ function parseScreen(value: string): Screen {
     value === "settings" ||
     value === "reader" ||
     value === "reader-drawer" ||
+    value === "cover" ||
     value === "image" ||
     value === "sleep" ||
     value === "error"

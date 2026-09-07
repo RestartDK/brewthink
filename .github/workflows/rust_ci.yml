@@ -35,7 +35,7 @@ jobs:
           - command: clippy
             args: --lib --bin brewthink --features sd-write-diagnostic -- -D warnings
           - command: test
-            args: --lib --features device-reader --target x86_64-unknown-linux-gnu
+            args: --lib --features device-reader,epub --target x86_64-unknown-linux-gnu
           - command: test
             args: --features device-control --bin device-control --target x86_64-unknown-linux-gnu
           - command: clippy

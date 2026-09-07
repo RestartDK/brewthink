@@ -95,7 +95,7 @@ impl ReaderFace {
             )
             .draw(target)
             .map(|_| ()),
-            Self::Bitmap(font) => font.draw(text, position, target),
+            Self::Bitmap(font) => font.draw(text, position, BinaryColor::On, target),
         }
     }
 }
@@ -423,6 +423,7 @@ mod tests {
         let mut app = App::new(1);
         app.input(AppInput::Confirm);
         app.input(AppInput::Confirm);
+        app.input(AppInput::Confirm);
         assert_eq!(app.chapter_loaded(1, 2).unwrap(), AppEffect::Render);
         let lines = [
             ReaderLine::new("Chapter one", ReaderStyle::Heading),
@@ -469,6 +470,7 @@ mod tests {
     #[test]
     fn rejects_lines_that_exceed_the_bounded_body_region() {
         let mut app = App::new(1);
+        app.input(AppInput::Confirm);
         app.input(AppInput::Confirm);
         app.input(AppInput::Confirm);
         assert_eq!(app.chapter_loaded(1, 1).unwrap(), AppEffect::Render);

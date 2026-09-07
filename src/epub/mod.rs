@@ -239,6 +239,39 @@ impl<'a> EpubBook<'a> {
             .ok_or(EpubError::ResourceRead)
     }
 
+    pub fn chapter_titles(&mut self) -> Vec<Option<String>> {
+        let mut titles = std::vec![None; self.publication.spine.len()];
+        let Some(nav) = self.publication.navigation().cloned() else {
+            return titles;
+        };
+        let Ok(encoded) = self.read_resource(&nav) else {
+            return titles;
+        };
+        if encoded.len() > 64 * 1024 {
+            return titles;
+        }
+        let result = crate::navigation::read_entries(&encoded, |href, title| {
+            let Ok(href) = crate::bounded_xml::FixedString::<256>::from_decoded(href) else {
+                return;
+            };
+            let Ok(path) = resolve_resource_path(nav.path(), href.as_str()) else {
+                return;
+            };
+            if let Some(index) = self
+                .publication
+                .spine
+                .iter()
+                .position(|item| item.resource.path == path)
+            {
+                titles[index].get_or_insert_with(|| title.to_string());
+            }
+        });
+        if result.is_err() {
+            titles.fill(None);
+        }
+        titles
+    }
+
     pub fn read_cover(&mut self) -> Result<Option<Vec<u8>>, EpubError> {
         let Some(index) = self.publication.cover_index else {
             return Ok(None);
@@ -919,6 +952,8 @@ fn content_attribute_value(
 }
 
 #[cfg(test)]
+mod navigation_tests;
+#[cfg(test)]
 mod tests {
     use std::{
         io::{Cursor, Write},
@@ -929,11 +964,11 @@ mod tests {
 
     use super::{ContentStyle, EpubBook, EpubError};
 
-    const CONTAINER: &str = r#"<?xml version="1.0"?>
+    pub(super) const CONTAINER: &str = r#"<?xml version="1.0"?>
 <container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">
   <rootfiles><rootfile full-path="OPS/book.opf" media-type="application/oebps-package+xml"/></rootfiles>
 </container>"#;
-    const PACKAGE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+    pub(super) const PACKAGE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:title>Small &amp; Typed</dc:title>
@@ -948,7 +983,7 @@ mod tests {
   <spine><itemref idref="chapter"/></spine>
 </package>"#;
 
-    fn epub(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    pub(super) fn epub(entries: &[(&str, &[u8])]) -> Vec<u8> {
         let mut encoded = Cursor::new(Vec::new());
         {
             let mut writer = ZipWriter::new(&mut encoded);
