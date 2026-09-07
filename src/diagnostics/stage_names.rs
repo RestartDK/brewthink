@@ -8,6 +8,7 @@ pub const STORAGE_WRITE_TEST: &str = "storage-write-test";
 pub const INTEGRATED_DEVICE: &str = "integrated-device";
 pub const SLEEP_WAKE: &str = "sleep-wake";
 pub const READER_APP: &str = "reader-app";
+pub const GRAYSCALE_BENCH: &str = "grayscale-bench";
 pub const DISPLAY_RESET: &str = "display-reset";
 pub const DISPLAY_INITIALIZE: &str = "display-initialize";
 pub const DISPLAY_WRITE: &str = "display-write";
@@ -28,6 +29,7 @@ pub const ALL_STAGES: &[&str] = &[
     INTEGRATED_DEVICE,
     SLEEP_WAKE,
     READER_APP,
+    GRAYSCALE_BENCH,
     DISPLAY_RESET,
     DISPLAY_INITIALIZE,
     DISPLAY_WRITE,

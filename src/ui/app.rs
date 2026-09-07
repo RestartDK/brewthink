@@ -2,7 +2,7 @@ use crate::{
     app::{FilesState, HomeState, LibraryState, SettingsState},
     files::{FileItem, FilesRenderError, render_files},
     home::{HomeRenderError, render_home},
-    image::MonochromeImage,
+    image::PackedImage,
     library::{ShelfBook, ShelfRenderError, render_shelf},
     power::BatteryStatus,
     reader::{ReaderRenderError, ReaderView, render_reader, render_reader_error},
@@ -50,10 +50,7 @@ pub enum AppRenderError {
     Sleep(SleepRenderError),
 }
 
-pub fn render_app(
-    frame: AppFrame<'_>,
-    target: &mut MonochromeImage<'_>,
-) -> Result<(), AppRenderError> {
+pub fn render_app(frame: AppFrame<'_>, target: &mut PackedImage<'_>) -> Result<(), AppRenderError> {
     match frame {
         AppFrame::Home { state, battery } => {
             render_home(state, battery, target).map_err(AppRenderError::Home)

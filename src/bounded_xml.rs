@@ -4,22 +4,34 @@ pub enum XmlError {
     Malformed,
     InvalidEntity,
     OutputFull,
+    NestingTooDeep,
 }
+
+impl core::fmt::Display for XmlError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::InvalidUtf8 => "XML is not valid UTF-8",
+            Self::Malformed => "malformed XML",
+            Self::InvalidEntity => "invalid XML entity",
+            Self::OutputFull => "XML output exceeds capacity",
+            Self::NestingTooDeep => "XML nesting exceeds capacity",
+        })
+    }
+}
+
+impl core::error::Error for XmlError {}
+
+pub const MAX_XML_DEPTH: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct XmlTag<'a> {
     source: &'a str,
     name_end: usize,
-    empty: bool,
 }
 
 impl<'a> XmlTag<'a> {
     pub fn local_name(self) -> &'a str {
         local_name(&self.source[..self.name_end])
-    }
-
-    pub const fn is_empty(self) -> bool {
-        self.empty
     }
 
     pub fn attribute(self, requested: &str) -> Result<Option<&'a str>, XmlError> {
@@ -75,51 +87,123 @@ impl<'a> XmlTag<'a> {
 pub enum XmlEvent<'a> {
     Start(XmlTag<'a>),
     End(&'a str),
-    Text(&'a str),
+    Text(XmlText<'a>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum XmlText<'a> {
+    Encoded(&'a str),
+    Literal(&'a str),
+}
+
+impl Iterator for XmlText<'_> {
+    type Item = Result<char, XmlError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (remaining, encoded) = match self {
+            Self::Encoded(value) => (value, true),
+            Self::Literal(value) => (value, false),
+        };
+        let character = remaining.chars().next()?;
+        if encoded && character == '&' {
+            let Some(end) = remaining.find(';') else {
+                *remaining = "";
+                return Some(Err(XmlError::InvalidEntity));
+            };
+            let result = decode_entity(&remaining[1..end]);
+            *remaining = &remaining[end + 1..];
+            Some(result)
+        } else {
+            *remaining = &remaining[character.len_utf8()..];
+            Some(if is_xml_character(character) {
+                Ok(character)
+            } else {
+                Err(XmlError::Malformed)
+            })
+        }
+    }
+}
+
+impl core::iter::FusedIterator for XmlText<'_> {}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum DocumentPhase {
+    Prolog,
+    Root,
+    Epilog,
 }
 
 pub struct XmlReader<'a> {
     source: &'a str,
     cursor: usize,
+    open: [&'a str; MAX_XML_DEPTH],
+    depth: usize,
+    phase: DocumentPhase,
+    pending_end: Option<&'a str>,
 }
 
 impl<'a> XmlReader<'a> {
     pub fn new(encoded: &'a [u8]) -> Result<Self, XmlError> {
         let source = core::str::from_utf8(encoded).map_err(|_| XmlError::InvalidUtf8)?;
-        Ok(Self { source, cursor: 0 })
+        let source = source.strip_prefix('\u{feff}').unwrap_or(source);
+        if !source.chars().all(is_xml_character) {
+            return Err(XmlError::Malformed);
+        }
+        Ok(Self {
+            source,
+            cursor: 0,
+            open: [""; MAX_XML_DEPTH],
+            depth: 0,
+            phase: DocumentPhase::Prolog,
+            pending_end: None,
+        })
     }
 
     pub fn next_event(&mut self) -> Result<Option<XmlEvent<'a>>, XmlError> {
+        if let Some(name) = self.pending_end.take() {
+            return Ok(Some(XmlEvent::End(name)));
+        }
         loop {
             if self.cursor == self.source.len() {
-                return Ok(None);
+                return match self.phase {
+                    DocumentPhase::Epilog => Ok(None),
+                    DocumentPhase::Prolog | DocumentPhase::Root => Err(XmlError::Malformed),
+                };
             }
             let remaining = &self.source[self.cursor..];
             let Some(relative_tag) = remaining.find('<') else {
                 self.cursor = self.source.len();
-                return Ok((!remaining.is_empty()).then_some(XmlEvent::Text(remaining)));
+                return self.text(remaining).map(Some);
             };
             if relative_tag > 0 {
                 let start = self.cursor;
                 self.cursor += relative_tag;
-                return Ok(Some(XmlEvent::Text(&self.source[start..self.cursor])));
+                return self.text(&self.source[start..self.cursor]).map(Some);
             }
             if remaining.starts_with("<!--") {
                 self.skip_through("-->")?;
                 continue;
             }
             if remaining.starts_with("<![CDATA[") {
+                if self.depth == 0 {
+                    return Err(XmlError::Malformed);
+                }
                 let start = self.cursor + 9;
                 let tail = &self.source[start..];
                 let length = tail.find("]]>").ok_or(XmlError::Malformed)?;
                 self.cursor = start + length + 3;
-                return Ok(Some(XmlEvent::Text(&self.source[start..start + length])));
+                return Ok(Some(XmlEvent::Text(XmlText::Literal(
+                    &self.source[start..start + length],
+                ))));
             }
             if remaining.starts_with("<?") {
                 self.skip_through("?>")?;
                 continue;
             }
             if remaining.starts_with("<!") {
+                if !remaining.starts_with("<!DOCTYPE") || self.phase != DocumentPhase::Prolog {
+                    return Err(XmlError::Malformed);
+                }
                 self.skip_declaration()?;
                 continue;
             }
@@ -131,6 +215,14 @@ impl<'a> XmlReader<'a> {
                 let name = end_name.trim();
                 if name.is_empty() || name.bytes().any(|byte| byte.is_ascii_whitespace()) {
                     return Err(XmlError::Malformed);
+                }
+                let depth = self.depth.checked_sub(1).ok_or(XmlError::Malformed)?;
+                if self.open[depth] != name {
+                    return Err(XmlError::Malformed);
+                }
+                self.depth = depth;
+                if depth == 0 {
+                    self.phase = DocumentPhase::Epilog;
                 }
                 return Ok(Some(XmlEvent::End(local_name(name))));
             }
@@ -147,12 +239,38 @@ impl<'a> XmlReader<'a> {
             if name_end == 0 {
                 return Err(XmlError::Malformed);
             }
-            return Ok(Some(XmlEvent::Start(XmlTag {
-                source,
-                name_end,
-                empty,
-            })));
+            if self.depth == 0 {
+                if self.phase == DocumentPhase::Epilog {
+                    return Err(XmlError::Malformed);
+                }
+                self.phase = if empty {
+                    DocumentPhase::Epilog
+                } else {
+                    DocumentPhase::Root
+                };
+            }
+            if !empty {
+                if self.depth == MAX_XML_DEPTH {
+                    return Err(XmlError::NestingTooDeep);
+                }
+                self.open[self.depth] = &source[..name_end];
+                self.depth += 1;
+            } else {
+                self.pending_end = Some(local_name(&source[..name_end]));
+            }
+            return Ok(Some(XmlEvent::Start(XmlTag { source, name_end })));
         }
+    }
+
+    fn text(&self, value: &'a str) -> Result<XmlEvent<'a>, XmlError> {
+        if self.depth == 0
+            && !value
+                .chars()
+                .all(|character| matches!(character, ' ' | '\t' | '\r' | '\n'))
+        {
+            return Err(XmlError::Malformed);
+        }
+        Ok(XmlEvent::Text(XmlText::Encoded(value)))
     }
 
     fn skip_through(&mut self, delimiter: &str) -> Result<(), XmlError> {
@@ -192,6 +310,12 @@ pub struct FixedString<const CAPACITY: usize> {
 
 impl<const CAPACITY: usize> FixedString<CAPACITY> {
     pub const fn new() -> Self {
+        const {
+            assert!(
+                CAPACITY <= u16::MAX as usize,
+                "FixedString capacity must fit u16"
+            );
+        }
         Self {
             bytes: [0; CAPACITY],
             length: 0,
@@ -205,9 +329,7 @@ impl<const CAPACITY: usize> FixedString<CAPACITY> {
     }
 
     pub fn from_decoded(value: &str) -> Result<Self, XmlError> {
-        let mut output = Self::new();
-        decode_entities(value, |character| output.push(character))?;
-        Ok(output)
+        XmlText::Encoded(value).try_into()
     }
 
     pub fn push(&mut self, character: char) -> Result<(), XmlError> {
@@ -295,43 +417,56 @@ impl<const CAPACITY: usize> core::fmt::Write for FixedString<CAPACITY> {
     }
 }
 
-pub fn decode_entities(
-    value: &str,
-    mut output: impl FnMut(char) -> Result<(), XmlError>,
-) -> Result<(), XmlError> {
-    let mut remaining = value;
-    while let Some(entity_start) = remaining.find('&') {
-        for character in remaining[..entity_start].chars() {
-            output(character)?;
+impl<const CAPACITY: usize> TryFrom<XmlText<'_>> for FixedString<CAPACITY> {
+    type Error = XmlError;
+
+    fn try_from(text: XmlText<'_>) -> Result<Self, Self::Error> {
+        let mut output = Self::new();
+        for character in text {
+            output.push(character?)?;
         }
-        remaining = &remaining[entity_start + 1..];
-        let entity_end = remaining.find(';').ok_or(XmlError::InvalidEntity)?;
-        let entity = &remaining[..entity_end];
-        let character = match entity {
-            "amp" => '&',
-            "lt" => '<',
-            "gt" => '>',
-            "quot" => '"',
-            "apos" => '\'',
-            numeric if numeric.starts_with("#x") || numeric.starts_with("#X") => char::from_u32(
+        Ok(output)
+    }
+}
+
+fn decode_entity(entity: &str) -> Result<char, XmlError> {
+    let character = match entity {
+        "amp" => '&',
+        "lt" => '<',
+        "gt" => '>',
+        "quot" => '"',
+        "apos" => '\'',
+        numeric
+            if numeric.starts_with("#x")
+                && numeric[2..].bytes().all(|byte| byte.is_ascii_hexdigit()) =>
+        {
+            char::from_u32(
                 u32::from_str_radix(&numeric[2..], 16).map_err(|_| XmlError::InvalidEntity)?,
             )
-            .ok_or(XmlError::InvalidEntity)?,
-            numeric if numeric.starts_with('#') => char::from_u32(
+            .ok_or(XmlError::InvalidEntity)?
+        }
+        numeric
+            if numeric.starts_with('#')
+                && numeric[1..].bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            char::from_u32(
                 numeric[1..]
                     .parse::<u32>()
                     .map_err(|_| XmlError::InvalidEntity)?,
             )
-            .ok_or(XmlError::InvalidEntity)?,
-            _ => return Err(XmlError::InvalidEntity),
-        };
-        output(character)?;
-        remaining = &remaining[entity_end + 1..];
+            .ok_or(XmlError::InvalidEntity)?
+        }
+        _ => return Err(XmlError::InvalidEntity),
+    };
+    if is_xml_character(character) {
+        Ok(character)
+    } else {
+        Err(XmlError::InvalidEntity)
     }
-    for character in remaining.chars() {
-        output(character)?;
-    }
-    Ok(())
+}
+
+const fn is_xml_character(character: char) -> bool {
+    matches!(character, '\t' | '\r' | '\n' | '\u{20}'..='\u{d7ff}' | '\u{e000}'..='\u{fffd}' | '\u{10000}'..='\u{10ffff}')
 }
 
 fn local_name(name: &str) -> &str {
@@ -362,10 +497,13 @@ fn find_tag_end(value: &str) -> Option<usize> {
 }
 
 #[cfg(test)]
+mod regression_tests;
+
+#[cfg(test)]
 mod tests {
     extern crate std;
 
-    use super::{FixedString, XmlEvent, XmlReader};
+    use super::{FixedString, XmlEvent, XmlReader, XmlText};
 
     #[test]
     fn reads_namespaced_tags_attributes_entities_and_cdata() {
@@ -383,10 +521,7 @@ mod tests {
         let Some(XmlEvent::Text(text)) = reader.next_event().unwrap() else {
             panic!("title text expected");
         };
-        assert_eq!(
-            FixedString::<16>::from_decoded(text).unwrap().as_str(),
-            "A & B"
-        );
+        assert_eq!(FixedString::<16>::try_from(text).unwrap().as_str(), "A & B");
         assert!(matches!(
             reader.next_event().unwrap(),
             Some(XmlEvent::End("title"))
@@ -394,8 +529,11 @@ mod tests {
         let Some(XmlEvent::Start(item)) = reader.next_event().unwrap() else {
             panic!("item expected");
         };
-        assert!(item.is_empty());
         assert_eq!(item.attribute("href").unwrap(), Some("a>b"));
-        assert_eq!(reader.next_event().unwrap(), Some(XmlEvent::Text("tail")));
+        assert_eq!(reader.next_event().unwrap(), Some(XmlEvent::End("item")));
+        assert_eq!(
+            reader.next_event().unwrap(),
+            Some(XmlEvent::Text(XmlText::Literal("tail")))
+        );
     }
 }

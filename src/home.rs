@@ -3,7 +3,7 @@ use embedded_layout::View;
 
 use crate::{
     app::{HomeItem, HomeState},
-    image::{MonochromeImage, Size},
+    image::{PackedImage, Size},
     power::BatteryStatus,
     ui::{
         AppBar, CONTENT_LEFT, CommandBar, FRAME_HEIGHT, FRAME_WIDTH, FrameTarget, Label, MenuRow,
@@ -19,7 +19,7 @@ pub enum HomeRenderError {
 pub fn render_home(
     state: HomeState,
     battery: BatteryStatus,
-    target: &mut MonochromeImage<'_>,
+    target: &mut PackedImage<'_>,
 ) -> Result<(), HomeRenderError> {
     let expected =
         Size::new(FRAME_WIDTH, FRAME_HEIGHT).expect("home frame dimensions are non-zero");
@@ -68,7 +68,7 @@ mod tests {
     use super::render_home;
     use crate::{
         app::HomeState,
-        image::{MonochromeImage, Size},
+        image::{PackedImage, Size},
         input::UsbState,
         power::BatteryStatus,
     };
@@ -76,7 +76,7 @@ mod tests {
     #[test]
     fn renders_home_into_the_exact_x4_frame() {
         let mut bytes = std::vec![0xFF; 480 * 800 / 8];
-        let mut image = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        let mut image = PackedImage::monochrome(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
         render_home(
             HomeState::new(),
             BatteryStatus::from_percent(82, UsbState::Disconnected),

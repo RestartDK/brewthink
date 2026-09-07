@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
-import { mkdir, stat, utimes } from "node:fs/promises";
+import { mkdir, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const fixturePath = path.resolve("tests/fixtures/minimal.epub");
@@ -193,6 +193,61 @@ test("opens and selects images from Files", async ({ page }) => {
   await page.reload();
   await page.keyboard.press("p");
   await expect(page.locator("#selected-title")).toHaveText("AYA.JPG");
+});
+
+test("preserves every grayscale tone in images, covers, and sleep", async ({ page }) => {
+  const tones = 4;
+  const payload = "96,000 bytes · 4 tones";
+  const paletteSize = async (): Promise<number> => page.locator("#display").evaluate((element) => {
+    if (!(element instanceof HTMLCanvasElement)) throw new Error("Missing canvas");
+    const context = element.getContext("2d");
+    if (context === null) throw new Error("Missing canvas context");
+    const pixels = context.getImageData(0, 0, 480, 800).data;
+    const shades = new Set<number>();
+    for (let index = 0; index < pixels.length; index += 4) {
+      const red = pixels[index];
+      if (red === undefined) throw new Error("Truncated canvas pixel");
+      shades.add(red);
+    }
+    return shades.size;
+  });
+  const capture = async (name: string): Promise<void> => {
+    if (walkthroughDirectory === undefined) return;
+    await mkdir(walkthroughDirectory, { recursive: true });
+    await page.locator("#display").screenshot({ path: path.join(walkthroughDirectory, `${name}-ui.png`) });
+    const url = await page.locator("#display").evaluate((element) => {
+      if (!(element instanceof HTMLCanvasElement)) throw new Error("Missing canvas");
+      return element.toDataURL("image/png");
+    });
+    const encoded = url.split(",")[1];
+    if (encoded === undefined) throw new Error("Invalid canvas image");
+    await writeFile(path.join(walkthroughDirectory, `${name}.png`), Buffer.from(encoded, "base64"));
+  };
+  await page.goto("/");
+  await expect(page.locator("#frame-payload")).toHaveText(payload);
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  for (let index = 0; index < 5; index += 1) await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#preview-heading")).toHaveText("Image viewer · 480 × 800");
+  expect(await paletteSize()).toBe(tones);
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("p");
+  await expect(page.locator("#preview-heading")).toHaveText("Retained sleep screen · 480 × 800");
+  expect(await paletteSize()).toBe(tones);
+  await capture(`grayscale-image-${tones}`);
+  await page.keyboard.press("p");
+  await page.locator("#epub-file").setInputFiles(path.resolve("tests/fixtures/gray-cover.epub"));
+  await expect(page.locator("#file-summary")).toHaveText("gray-cover.epub");
+  await expect(page.locator("#preview-heading")).toHaveText("Home menu · 480 × 800");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#preview-heading")).toHaveText("Library shelf · 480 × 800");
+  expect(await paletteSize()).toBe(tones);
+  await capture(`grayscale-cover-${tones}`);
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("p");
+  await expect(page.locator("#preview-heading")).toHaveText("Retained sleep screen · 480 × 800");
+  expect(await paletteSize()).toBe(tones);
 });
 
 test("uses custom sleep away from reading and a cover inside the reader", async ({ page }) => {

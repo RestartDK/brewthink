@@ -8,7 +8,7 @@ use embedded_graphics::{
         MonoFont, MonoTextStyle,
         ascii::{FONT_4X6, FONT_6X9, FONT_6X12, FONT_7X13, FONT_7X14, FONT_9X18_BOLD, FONT_10X20},
     },
-    pixelcolor::BinaryColor,
+    pixelcolor::Gray8,
     prelude::DrawTarget,
     primitives::Rectangle,
     text::{Baseline, Text},
@@ -23,7 +23,7 @@ use crate::{
             NOTO_SERIF_16_BOLD, NOTO_SERIF_16_REGULAR,
         },
     },
-    image::{MonochromeImage, Size},
+    image::{PackedImage, Size},
     power::BatteryStatus,
     ui::{AppBar, CommandBar, FixedText, FrameTarget, Label, TextRole, ui},
 };
@@ -85,13 +85,13 @@ impl ReaderFace {
 
     fn draw<D>(self, text: &str, position: Point, target: &mut D) -> Result<(), D::Error>
     where
-        D: DrawTarget<Color = BinaryColor>,
+        D: DrawTarget<Color = Gray8>,
     {
         match self {
             Self::Monospace(font) => Text::with_baseline(
                 text,
                 position,
-                MonoTextStyle::new(font, BinaryColor::On),
+                MonoTextStyle::new(font, Gray8::new(0)),
                 Baseline::Top,
             )
             .draw(target)
@@ -187,7 +187,7 @@ impl ReaderTheme {
         target: &mut D,
     ) -> Result<(), D::Error>
     where
-        D: DrawTarget<Color = BinaryColor>,
+        D: DrawTarget<Color = Gray8>,
     {
         self.face(style).draw(text, position, target)
     }
@@ -262,7 +262,7 @@ pub enum ReaderRenderError {
 
 pub fn render_reader(
     view: ReaderView<'_>,
-    target: &mut MonochromeImage<'_>,
+    target: &mut PackedImage<'_>,
 ) -> Result<(), ReaderRenderError> {
     let expected =
         Size::new(FRAME_WIDTH, FRAME_HEIGHT).expect("reader frame dimensions are non-zero");
@@ -304,7 +304,7 @@ pub fn render_reader_error(
     book_title: &str,
     message: &str,
     battery: BatteryStatus,
-    target: &mut MonochromeImage<'_>,
+    target: &mut PackedImage<'_>,
 ) -> Result<(), ReaderRenderError> {
     let expected =
         Size::new(FRAME_WIDTH, FRAME_HEIGHT).expect("reader frame dimensions are non-zero");
@@ -361,7 +361,7 @@ impl View for ReaderContent<'_> {
 }
 
 impl Drawable for ReaderContent<'_> {
-    type Color = BinaryColor;
+    type Color = Gray8;
     type Output = ();
 
     fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
@@ -414,7 +414,7 @@ mod tests {
     };
     use crate::{
         app::{App, AppEffect, AppInput, AppView, ReaderPreferences},
-        image::{MonochromeImage, Size},
+        image::{PackedImage, Size},
     };
 
     #[test]
@@ -443,7 +443,7 @@ mod tests {
             ReaderLine::new("A quoted thought.", ReaderStyle::Quote),
         ];
         let mut bytes = vec![0xFF; 48_000];
-        let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        let mut frame = PackedImage::monochrome(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
 
         render_reader(
             ReaderView::new(
@@ -476,7 +476,7 @@ mod tests {
         let theme = super::ReaderTheme::from_preferences(app.reader_preferences());
         let lines = vec![line; (BODY_BOTTOM - BODY_TOP) / theme.line_height(line.style()) + 1];
         let mut bytes = vec![0xFF; 48_000];
-        let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        let mut frame = PackedImage::monochrome(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
 
         assert_eq!(
             render_reader(

@@ -1,6 +1,6 @@
 # Brewthink web simulator
 
-The simulator runs Brewthink's shared home, books, files, settings, reader, sleep state, EPUB package parser, cover decoder, and monochrome renderers in WebAssembly. The canvas is the exact 48,000-byte `480 × 800` frame shape used by the X4.
+The simulator runs Brewthink's shared home, books, files, settings, reader, sleep state, EPUB package parser, cover decoder, and grayscale renderers in WebAssembly. The canvas decodes the same 96,000-byte, four-shade `480 × 800` logical frame used by the X4 reader. Text and controls stay black and white. Simulated tones do not prove optical separation on the panel.
 
 ## Run locally
 
@@ -21,7 +21,7 @@ bun run build
 bun run test:e2e
 ```
 
-The browser tests cover Home, Books, Files, reader settings and reflow, the shared 2 × 2 shelf, directional navigation, synthetic EPUB metadata and cover parsing, sleep and resume, invalid input, narrow layouts, WCAG AA rules, and Rust-triggered WASM reloads.
+The browser tests cover Home, Books, Files, reader settings and reflow, the shared 2 × 2 shelf, directional navigation, synthetic EPUB metadata and cover parsing, sleep and resume, invalid input, narrow layouts, WCAG AA rules, and Rust-triggered WASM reloads. The grayscale test requires all four tones in image, cover, and sleep frames. `BREWTHINK_WALKTHROUGH_DIR` saves both browser screenshots and native-resolution canvas PNGs. `BREWTHINK_WEB_PORT` selects an isolated test port.
 
 A private acceptance EPUB can be supplied without adding it to the repository:
 
