@@ -135,7 +135,7 @@ test("reports invalid EPUB input without losing the simulator", async ({ page })
   await page.locator("#epub-file").setInputFiles(path.resolve("tests/fixtures/checker.ppm"));
 
   await expect(page.locator("#selected-title")).toHaveText("EPUB rejected");
-  await expect(page.locator("#message")).toContainText("InvalidZip");
+  await expect(page.locator("#message")).toContainText("MissingCentralDirectory");
   await expect(page.locator("#display-placeholder")).toBeVisible();
   await page.getByRole("button", { name: "Reset sample" }).click();
   await expect(page.locator("#selected-title")).toHaveText("Books");

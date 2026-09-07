@@ -19,7 +19,15 @@ This section supersedes the historical live-firmware state below. Source `main` 
 
 See [grayscale depth investigation](docs/grayscale-depth.md) for the pattern geometry, command protocol, evidence, and next measurement. The host work tab is closed; no monitor remains running.
 
-## Four-shade reader source integration
+## Bounded simulator source integration
+
+The simulator now imports books through the device's bounded EPUB, layout, navigation, and PNG/JPEG APIs. It preserves the newer grey UI and named reader drawer. Shelf covers retain the 128 KiB encoded budget; original-resolution opening/sleep covers use the separate 96 KiB budget. Host inspection tools remain separate. See [simulator parity](docs/simulator-parity.md).
+
+Local integration checks passed 139 default and 254 combined-feature library tests, 225 simulator-feature library tests, 12 CLI tests, 34 script tests, 10 host-tool tests, 20 native-oracle browser tests, 19 production UI tests, and one development-reload test. Six offline firmware builds passed. Linked reader stack remains 12,944 bytes required, including the 8,192-byte reserve, with 20,592 bytes available.
+
+This source work performed no physical device operations. The hardware override above remains the last recorded device state; none of these checks establishes optical reliability or refresh latency.
+
+## Historical four-shade reader source integration
 
 The PR adds four logical shades, 2 bits per pixel, across images, covers, previews, sleep, screenshots, and the simulator. There is no eight-tone reader profile. This source has not been flashed, and none of its checks operated the connected device.
 

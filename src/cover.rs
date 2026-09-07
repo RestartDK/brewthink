@@ -8,6 +8,10 @@ pub use crate::image_decoder::{JpegDecodeWorkspace, PngDecodeWorkspace};
 pub const COVER_WIDTH: usize = 176;
 pub const COVER_HEIGHT: usize = 264;
 pub const COVER_BYTES: usize = COVER_WIDTH * COVER_HEIGHT / 8 * READER_DEPTH.bits();
+pub const SHELF_COVER_WIDTH: usize = COVER_WIDTH / 2;
+pub const SHELF_COVER_HEIGHT: usize = COVER_HEIGHT / 2;
+pub const SHELF_COVER_BYTES: usize =
+    SHELF_COVER_WIDTH * SHELF_COVER_HEIGHT / 8 * READER_DEPTH.bits();
 pub const MAX_ENCODED_COVER_BYTES: u32 = 128 * 1024;
 
 pub type CoverDecodeWorkspace = PngDecodeWorkspace;
@@ -60,6 +64,34 @@ pub fn bitmap(bytes: &[u8; COVER_BYTES]) -> PackedBitmap<'_> {
         .expect("the packed cover buffer has the exact required length")
 }
 
+pub fn downsample_cover(source: &[u8; COVER_BYTES], output: &mut [u8]) {
+    let source = bitmap(source);
+    let size = Size::new(SHELF_COVER_WIDTH, SHELF_COVER_HEIGHT).expect("nonzero shelf cover size");
+    let mut target =
+        PackedImage::new(size, READER_DEPTH, output).expect("exact shelf cover storage");
+    for y in 0..SHELF_COVER_HEIGHT {
+        for x in 0..SHELF_COVER_WIDTH {
+            let source_x = x * 2;
+            let source_y = y * 2;
+            let sum = u16::from(source.luma(source_x, source_y))
+                + u16::from(source.luma(source_x + 1, source_y))
+                + u16::from(source.luma(source_x, source_y + 1))
+                + u16::from(source.luma(source_x + 1, source_y + 1));
+            target.set_luma(x, y, ((sum + 2) / 4) as u8);
+        }
+    }
+}
+
+pub fn shelf_bitmap(bytes: &[u8]) -> PackedBitmap<'_> {
+    PackedBitmap::new(
+        Size::new(SHELF_COVER_WIDTH, SHELF_COVER_HEIGHT)
+            .expect("the shelf cover dimensions are non-zero"),
+        READER_DEPTH,
+        bytes,
+    )
+    .expect("the shelf cover buffer matches its dimensions")
+}
+
 fn cover_size() -> Size {
     Size::new(COVER_WIDTH, COVER_HEIGHT).expect("cover dimensions are non-zero")
 }
@@ -93,6 +125,35 @@ mod tests {
             let count = self.0.len().saturating_sub(start).min(output.len());
             output[..count].copy_from_slice(&self.0[start..start + count]);
             Ok(count)
+        }
+    }
+
+    #[test]
+    fn shelf_downsampling_averages_all_four_pixels_including_ties() {
+        let levels = super::READER_DEPTH.levels();
+        for pattern in 0..usize::from(levels).pow(4) {
+            let mut source = [0xff; COVER_BYTES];
+            let mut image =
+                super::PackedImage::new(super::cover_size(), super::READER_DEPTH, &mut source)
+                    .unwrap();
+            let mut sum = 0;
+            for (index, (x, y)) in [(0, 0), (1, 0), (0, 1), (1, 1)].into_iter().enumerate() {
+                let level = ((pattern >> (index * super::READER_DEPTH.bits()))
+                    & usize::from(levels - 1)) as u8;
+                sum += level;
+                image.set_luma(x, y, level * (255 / (levels - 1)));
+            }
+            let mut output = [0; super::SHELF_COVER_BYTES];
+            super::downsample_cover(&source, &mut output);
+            let result = super::shelf_bitmap(&output);
+            assert_eq!(result.level(0, 0), (sum + 2) / 4, "pattern {pattern}");
+            for y in 0..super::SHELF_COVER_HEIGHT {
+                for x in 0..super::SHELF_COVER_WIDTH {
+                    if (x, y) != (0, 0) {
+                        assert_eq!(result.level(x, y), levels - 1);
+                    }
+                }
+            }
         }
     }
 

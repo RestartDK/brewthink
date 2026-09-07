@@ -29,8 +29,9 @@ use crate::{
     bounded_layout::{BoundedPage, MAX_PAGE_LINES, layout_xhtml_page_into},
     bounded_xml::FixedString,
     cover::{
-        COVER_BYTES, CoverDecodeWorkspace, JpegDecodeWorkspace, MAX_ENCODED_COVER_BYTES, bitmap,
-        decode_jpeg_cover, decode_png_cover, encoded_cover_fits,
+        COVER_BYTES, CoverDecodeWorkspace, JpegDecodeWorkspace, MAX_ENCODED_COVER_BYTES,
+        SHELF_COVER_BYTES, bitmap, decode_jpeg_cover, decode_png_cover, downsample_cover,
+        encoded_cover_fits, shelf_bitmap,
     },
     device_epub::{
         DeviceEpub, DevicePackageScratch, DevicePublication, MAX_DEVICE_PATH_BYTES,
@@ -78,9 +79,6 @@ const _: () = {
     assert!(core::mem::size_of::<CoverDecodeWorkspace>() <= IMAGE_DECODER_BYTES);
     assert!(core::mem::size_of::<JpegDecodeWorkspace>() <= IMAGE_DECODER_BYTES);
 };
-const SHELF_COVER_WIDTH: usize = 88;
-const SHELF_COVER_HEIGHT: usize = 132;
-const SHELF_COVER_BYTES: usize = SHELF_COVER_WIDTH * SHELF_COVER_HEIGHT / 8 * READER_DEPTH.bits();
 const _: () = assert!(
     MAX_ENCODED_COVER_BYTES as usize + (VISIBLE_COVER_SLOTS - 1) * SHELF_COVER_BYTES
         <= MAX_DEVICE_RESOURCE_BYTES
@@ -2181,34 +2179,6 @@ fn resume_checksum(record: ResumeRecord) -> u32 {
     .fold(0x811C_9DC5, |hash, value| {
         (hash ^ value).wrapping_mul(0x0100_0193)
     })
-}
-
-fn downsample_cover(source: &[u8; COVER_BYTES], output: &mut [u8]) {
-    let source = bitmap(source);
-    let size = Size::new(SHELF_COVER_WIDTH, SHELF_COVER_HEIGHT).expect("nonzero shelf cover size");
-    let mut target =
-        PackedImage::new(size, READER_DEPTH, output).expect("exact shelf cover storage");
-    for y in 0..SHELF_COVER_HEIGHT {
-        for x in 0..SHELF_COVER_WIDTH {
-            let source_x = x * 2;
-            let source_y = y * 2;
-            let sum = u16::from(source.luma(source_x, source_y))
-                + u16::from(source.luma(source_x + 1, source_y))
-                + u16::from(source.luma(source_x, source_y + 1))
-                + u16::from(source.luma(source_x + 1, source_y + 1));
-            target.set_luma(x, y, ((sum + 2) / 4) as u8);
-        }
-    }
-}
-
-fn shelf_bitmap(bytes: &[u8]) -> PackedBitmap<'_> {
-    PackedBitmap::new(
-        Size::new(SHELF_COVER_WIDTH, SHELF_COVER_HEIGHT)
-            .expect("the shelf cover dimensions are non-zero"),
-        READER_DEPTH,
-        bytes,
-    )
-    .expect("the shelf cover buffer matches its dimensions")
 }
 
 fn frame_size() -> Size {

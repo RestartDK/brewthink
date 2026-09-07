@@ -1,6 +1,6 @@
 # Brewthink web simulator
 
-The simulator runs Brewthink's shared home, books, files, settings, reader, sleep state, EPUB package parser, cover decoder, and grayscale renderers in WebAssembly. The canvas decodes the same 96,000-byte, four-shade `480 × 800` logical frame used by the X4 reader. Text and controls stay black and white. Simulated tones do not prove optical separation on the panel.
+The simulator runs Brewthink's shared home, books, files, settings, reader, sleep state, EPUB package parser, cover decoder, and grayscale renderers in WebAssembly. The canvas decodes the same 96,000-byte, four-shade `480 × 800` logical frame used by the X4 reader. Selections use the shared light-grey fill with black text and outlines. Native pixels are neutral 0, 85, 170, and 255. Simulated tones do not prove optical separation on the panel.
 
 ## Run locally
 
@@ -47,4 +47,4 @@ BREWTHINK_SCREENSHOT=/tmp/brewthink-shelf.png \
   bun run test:e2e --grep "parses an EPUB"
 ```
 
-The simulator's `std` ZIP and image decoders remain a host implementation, separate from the fixed-memory FAT/ZIP/XML/PNG/JPEG pipeline now used by X4 firmware. Both drive the same application state and framebuffer renderers. See [`../docs/epub-reader.md`](../docs/epub-reader.md).
+Imported books use the device's bounded ZIP/XML/layout and PNG/JPEG pipeline. Chapters are limited to 140 KiB and 64 spine items. Shelf covers accept up to 128 KiB; original-resolution opening/sleep covers accept up to 96 KiB of encoded data. Missing or invalid navigation uses numbered chapter names without rejecting readable text. The browser retains bounded sources and decoded covers in host memory rather than emulating SD reads or SRAM pressure. Run `bash scripts/check-simulator-parity.sh` from the repository root for native-oracle comparisons. See [reading parity and limits](../docs/simulator-parity.md).
