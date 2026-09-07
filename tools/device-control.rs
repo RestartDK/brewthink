@@ -7,20 +7,22 @@ use std::{
     env,
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
-    os::unix::fs::OpenOptionsExt,
+    os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
     path::{Path, PathBuf},
     process::ExitCode,
     thread,
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
+use brewthink::transfer::MAX_IMAGE_BYTES;
 use brewthink::{
-    image::{PackedImage, RenderOptions, ScaleMode, Size},
+    image::{PackedBitmap, PackedImage, PixelDepth, RenderOptions, ScaleMode, Size},
     image_decoder::{
         ImageFormat, JpegDecodeWorkspace, PngDecodeWorkspace, decode_jpeg, decode_png,
     },
     input::Button,
-    transfer::{ImageName, MAX_IMAGE_BYTES},
+    transfer::ImageName,
 };
 use image::{ExtendedColorType, ImageEncoder, codecs::jpeg::JpegEncoder, imageops::FilterType};
 
@@ -62,6 +64,7 @@ struct Arguments {
 
 #[derive(Debug, Eq, PartialEq)]
 struct ScreenHeader {
+    depth: PixelDepth,
     width: u32,
     height: u32,
     length: usize,
@@ -114,6 +117,18 @@ impl ControlStream {
 struct Connection {
     file: File,
     stream: ControlStream,
+    original_termios: Option<libc::termios>,
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        if let Some(original) = &self.original_termios {
+            // SAFETY: the connection still owns its open descriptor and the saved attributes.
+            unsafe {
+                libc::tcsetattr(self.file.as_raw_fd(), libc::TCSANOW, original);
+            }
+        }
+    }
 }
 
 impl Connection {
@@ -123,9 +138,28 @@ impl Connection {
             .read(true)
             .write(writable)
             .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY);
+        let file = options.open(path)?;
+        let mut original = std::mem::MaybeUninit::<libc::termios>::uninit();
+        // SAFETY: tcgetattr initializes the output on success; the descriptor is owned here.
+        if unsafe { libc::tcgetattr(file.as_raw_fd(), original.as_mut_ptr()) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: tcgetattr succeeded above.
+        let original = unsafe { original.assume_init() };
+        let mut raw = original;
+        // SAFETY: cfmakeraw and tcsetattr receive valid termios storage and the live descriptor.
+        unsafe {
+            libc::cfmakeraw(&mut raw);
+            raw.c_cc[libc::VMIN] = 1;
+            raw.c_cc[libc::VTIME] = 0;
+            if libc::tcsetattr(file.as_raw_fd(), libc::TCSANOW, &raw) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
         Ok(Self {
-            file: options.open(path)?,
+            file,
             stream: ControlStream::default(),
+            original_termios: Some(original),
         })
     }
 
@@ -216,24 +250,6 @@ fn run() -> io::Result<()> {
         return monitor(arguments.port.as_deref());
     }
 
-    let prepared_image = match &arguments.command {
-        Command::PutImage(input) => {
-            let prepared = prepare_image(input)?;
-            println!(
-                "host: prepared {} as {} bytes={}{}",
-                input.display(),
-                prepared.name.as_str(),
-                prepared.bytes.len(),
-                if prepared.transcoded {
-                    " transcoded=yes"
-                } else {
-                    ""
-                }
-            );
-            Some(prepared)
-        }
-        _ => None,
-    };
     let port = find_port(arguments.port.as_deref())?;
     let mut connection = Connection::open(&port, true)?;
     match arguments.command {
@@ -250,12 +266,19 @@ fn run() -> io::Result<()> {
             output,
         } => sd_export::export(&mut connection, start, count, &output, arguments.timeout),
         Command::Screen(output) => capture_screen(&mut connection, &output, arguments.timeout),
-        Command::PutImage(input) => upload_image(
-            &mut connection,
-            &input,
-            prepared_image.expect("put-image preparation ran before opening the port"),
-            arguments.timeout,
-        ),
+        Command::PutImage(input) => {
+            let limit = query_image_limit(&mut connection, arguments.timeout)?;
+            let prepared = prepare_image(&input, limit)?;
+            println!(
+                "host: prepared {} as {} bytes={} limit={} transcoded={}",
+                input.display(),
+                prepared.name.as_str(),
+                prepared.bytes.len(),
+                limit,
+                prepared.transcoded
+            );
+            upload_image(&mut connection, &input, prepared, arguments.timeout)
+        }
         Command::Monitor | Command::Help => unreachable!(),
     }
 }
@@ -424,7 +447,9 @@ fn capture_screen(connection: &mut Connection, output: &Path, timeout: Duration)
         }
     };
 
-    if (header.width, header.height, header.length) != (FRAME_WIDTH, FRAME_HEIGHT, FRAME_BYTES) {
+    if (header.width, header.height, header.length)
+        != (FRAME_WIDTH, FRAME_HEIGHT, FRAME_BYTES * header.depth.bits())
+    {
         return Err(invalid_data(format!(
             "unexpected frame shape {}x{}, {} bytes",
             header.width, header.height, header.length
@@ -458,7 +483,7 @@ fn capture_screen(connection: &mut Connection, output: &Path, timeout: Duration)
     }
     fs::write(
         output,
-        encode_frame_png(&frame, header.width, header.height)?,
+        encode_frame_png(&frame, header.width, header.height, header.depth)?,
     )?;
     println!(
         "host: wrote {} frame_crc32={actual_crc:08x}",
@@ -538,7 +563,34 @@ fn upload_image(
     Ok(())
 }
 
-fn prepare_image(input: &Path) -> io::Result<PreparedImage> {
+fn query_image_limit(connection: &mut Connection, timeout: Duration) -> io::Result<usize> {
+    let deadline = Instant::now() + timeout;
+    connection.drain()?;
+    connection.write_all(b"BREWCTL/1 status\n", deadline)?;
+    let mut limit = 96 * 1024;
+    loop {
+        let line = connection.read_line(deadline)?;
+        if line.starts_with(b"BREWCTL/1 IMAGE_PROFILE ") {
+            limit = parse_image_limit(&line)?;
+        }
+        if line.starts_with(b"BREWCTL/1 DONE command=status ") {
+            if !line.ends_with(b"status=ok") {
+                return Err(invalid_data("reader status failed"));
+            }
+            return Ok(limit);
+        }
+    }
+}
+
+fn parse_image_limit(line: &[u8]) -> io::Result<usize> {
+    let limit = parse_control_field(line, "max_image_bytes")?;
+    if !(1..=96 * 1024).contains(&limit) {
+        return Err(invalid_data("unsupported reader image limit"));
+    }
+    Ok(limit)
+}
+
+fn prepare_image(input: &Path, max_bytes: usize) -> io::Result<PreparedImage> {
     let source = fs::read(input)?;
     if source.is_empty() {
         return Err(invalid_input("image is empty"));
@@ -546,7 +598,7 @@ fn prepare_image(input: &Path) -> io::Result<PreparedImage> {
     let source_format =
         ImageFormat::detect(&source).ok_or_else(|| invalid_input("image must be a JPEG or PNG"))?;
     let source_name = device_image_name(input, source_format)?;
-    if source.len() <= MAX_IMAGE_BYTES && validate_device_image(source_format, &source).is_ok() {
+    if source.len() <= max_bytes && validate_device_image(source_format, &source).is_ok() {
         return Ok(PreparedImage {
             name: source_name,
             bytes: source,
@@ -554,10 +606,10 @@ fn prepare_image(input: &Path) -> io::Result<PreparedImage> {
         });
     }
 
-    transcode_image(input, &source)
+    transcode_image(input, &source, max_bytes)
 }
 
-fn transcode_image(input: &Path, source: &[u8]) -> io::Result<PreparedImage> {
+fn transcode_image(input: &Path, source: &[u8], max_bytes: usize) -> io::Result<PreparedImage> {
     let decoded = image::load_from_memory(source)
         .map_err(|error| invalid_input(format!("image could not be decoded: {error}")))?;
     let resized = decoded
@@ -576,8 +628,7 @@ fn transcode_image(input: &Path, source: &[u8]) -> io::Result<PreparedImage> {
         JpegEncoder::new_with_quality(&mut encoded, quality)
             .encode(&rgb, FRAME_WIDTH, FRAME_HEIGHT, ExtendedColorType::Rgb8)
             .map_err(|error| invalid_data(format!("JPEG conversion failed: {error}")))?;
-        if encoded.len() <= MAX_IMAGE_BYTES
-            && validate_device_image(ImageFormat::Jpeg, &encoded).is_ok()
+        if encoded.len() <= max_bytes && validate_device_image(ImageFormat::Jpeg, &encoded).is_ok()
         {
             return Ok(PreparedImage {
                 name,
@@ -684,6 +735,8 @@ fn parse_screen_header(line: &[u8]) -> io::Result<ScreenHeader> {
     let mut height = None;
     let mut length = None;
     let mut crc32 = None;
+    let mut depth = PixelDepth::Monochrome;
+    let mut encoding = None;
 
     for field in fields.split_whitespace() {
         let Some((name, value)) = field.split_once('=') else {
@@ -693,6 +746,11 @@ fn parse_screen_header(line: &[u8]) -> io::Result<ScreenHeader> {
             "width" => width = Some(parse_decimal(value, "width")?),
             "height" => height = Some(parse_decimal(value, "height")?),
             "bytes" => length = Some(parse_decimal(value, "bytes")?),
+            "bpp" => {
+                depth = PixelDepth::from_bits(parse_decimal(value, "bpp")?)
+                    .ok_or_else(|| invalid_data("unsupported screen pixel depth"))?
+            }
+            "encoding" => encoding = Some(value),
             "crc32" => {
                 crc32 = Some(
                     u32::from_str_radix(value, 16)
@@ -703,7 +761,13 @@ fn parse_screen_header(line: &[u8]) -> io::Result<ScreenHeader> {
         }
     }
 
+    if encoding.is_some_and(|value| value != "planar")
+        || (depth != PixelDepth::Monochrome && encoding != Some("planar"))
+    {
+        return Err(invalid_data("unsupported or missing screen encoding"));
+    }
     Ok(ScreenHeader {
+        depth,
         width: width.ok_or_else(|| invalid_data("screen width is missing"))?,
         height: height.ok_or_else(|| invalid_data("screen height is missing"))?,
         length: length.ok_or_else(|| invalid_data("screen byte length is missing"))?,
@@ -720,16 +784,20 @@ where
         .map_err(|_| invalid_data(format!("invalid screen {name}")))
 }
 
-fn encode_frame_png(frame: &[u8], width: u32, height: u32) -> io::Result<Vec<u8>> {
-    let row_bytes = width as usize / 8;
-    if !width.is_multiple_of(8) || frame.len() != row_bytes * height as usize {
-        return Err(invalid_data("frame dimensions do not match packed bytes"));
-    }
-
+fn encode_frame_png(
+    frame: &[u8],
+    width: u32,
+    height: u32,
+    depth: PixelDepth,
+) -> io::Result<Vec<u8>> {
+    let size = Size::new(width as usize, height as usize)
+        .map_err(|_| invalid_data("invalid frame dimensions"))?;
+    let bitmap = PackedBitmap::new(size, depth, frame)
+        .map_err(|_| invalid_data("frame dimensions do not match packed bytes"))?;
     let mut pixels = Vec::with_capacity(width as usize * height as usize);
-    for byte in frame {
-        for bit in (0..8).rev() {
-            pixels.push(if byte & (1 << bit) == 0 { 0 } else { 255 });
+    for y in 0..size.height() {
+        for x in 0..size.width() {
+            pixels.push(bitmap.luma(x, y));
         }
     }
     let mut png = Vec::new();
@@ -816,7 +884,7 @@ mod tests {
         ScreenHeader, device_image_name, encode_frame_png, parse_arguments, parse_screen_header,
         transcode_image, validate_device_image,
     };
-    use brewthink::{image_decoder::ImageFormat, input::Button};
+    use brewthink::{image::PixelDepth, image_decoder::ImageFormat, input::Button};
 
     #[test]
     fn parses_cli_commands() {
@@ -885,12 +953,53 @@ mod tests {
             )
             .unwrap(),
             ScreenHeader {
+                depth: PixelDepth::Monochrome,
                 width: FRAME_WIDTH,
                 height: FRAME_HEIGHT,
                 length: FRAME_BYTES,
                 crc32: 0xe4e7_3d7c,
             }
         );
+    }
+
+    #[test]
+    fn screenshots_decode_all_gray_planes_and_reject_unknown_formats() {
+        use brewthink::image::{PackedImage, Size};
+        for depth in [PixelDepth::Four, PixelDepth::Eight] {
+            let bpp = depth.bits();
+            let header = format!(
+                "BREWCTL/1 SCREEN width=480 height=800 bytes={} crc32=12345678 bpp={bpp} encoding=planar",
+                FRAME_BYTES * bpp
+            );
+            assert_eq!(parse_screen_header(header.as_bytes()).unwrap().depth, depth);
+            let size = Size::new(8, 1).unwrap();
+            let mut bytes = vec![0; bpp];
+            let mut image = PackedImage::new(size, depth, &mut bytes).unwrap();
+            let expected: Vec<_> = (0..8)
+                .map(|x| {
+                    ((x % usize::from(depth.levels())) * 255 / usize::from(depth.levels() - 1))
+                        as u8
+                })
+                .collect();
+            for (x, &luma) in expected.iter().enumerate() {
+                image.set_luma(x, 0, luma);
+            }
+            let png = encode_frame_png(&bytes, 8, 1, depth).unwrap();
+            assert_eq!(
+                image::load_from_memory(&png).unwrap().to_luma8().as_raw(),
+                &expected
+            );
+        }
+        for suffix in [
+            "bpp=4 encoding=planar",
+            "bpp=2",
+            "bpp=3 encoding=interleaved",
+        ] {
+            let header = format!(
+                "BREWCTL/1 SCREEN width=480 height=800 bytes=96000 crc32=12345678 {suffix}"
+            );
+            assert!(parse_screen_header(header.as_bytes()).is_err());
+        }
     }
 
     #[test]
@@ -934,10 +1043,23 @@ mod tests {
     }
 
     #[test]
+    fn validates_device_image_limits_before_conversion() {
+        for limit in [56 * 1024, 96 * 1024] {
+            let line = format!("BREWCTL/1 IMAGE_PROFILE tones=8 max_image_bytes={limit}");
+            assert_eq!(super::parse_image_limit(line.as_bytes()).unwrap(), limit);
+        }
+        for value in ["0", "98305", "-1", "garbage"] {
+            let line = format!("BREWCTL/1 IMAGE_PROFILE max_image_bytes={value}");
+            assert!(super::parse_image_limit(line.as_bytes()).is_err());
+        }
+    }
+
+    #[test]
     fn transcodes_sources_into_bounded_baseline_jpegs() {
         let prepared = transcode_image(
             std::path::Path::new("sample.png"),
             include_bytes!("../web/tests/fixtures/transparent.png"),
+            super::MAX_IMAGE_BYTES,
         )
         .unwrap();
         assert_eq!(prepared.name.as_str(), "SAMPLE.JPG");
@@ -949,7 +1071,8 @@ mod tests {
     #[test]
     fn encodes_packed_pixels_as_png() {
         let frame = vec![0xaa; FRAME_BYTES];
-        let encoded = encode_frame_png(&frame, FRAME_WIDTH, FRAME_HEIGHT).unwrap();
+        let encoded =
+            encode_frame_png(&frame, FRAME_WIDTH, FRAME_HEIGHT, PixelDepth::Monochrome).unwrap();
         let decoded = image::ImageReader::new(Cursor::new(encoded))
             .with_guessed_format()
             .unwrap()

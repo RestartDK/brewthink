@@ -29,18 +29,19 @@ use crate::{
     bounded_layout::{BoundedPage, MAX_PAGE_LINES, layout_xhtml_page_into},
     bounded_xml::FixedString,
     cover::{
-        COVER_BYTES, CoverDecodeWorkspace, JpegDecodeWorkspace, bitmap, decode_jpeg_cover,
-        decode_png_cover, encoded_cover_fits,
+        COVER_BYTES, CoverDecodeWorkspace, JpegDecodeWorkspace, MAX_ENCODED_COVER_BYTES, bitmap,
+        decode_jpeg_cover, decode_png_cover, encoded_cover_fits,
     },
     device_epub::{
-        DeviceEpub, DevicePackageScratch, MAX_DEVICE_PATH_BYTES, MAX_DEVICE_RESOURCE_BYTES,
+        DeviceEpub, DevicePackageScratch, DevicePublication, MAX_DEVICE_PATH_BYTES,
+        MAX_DEVICE_RESOURCE_BYTES,
     },
     display::{
-        framebuffer::{FRAME_BYTES, Rotation},
+        framebuffer::{FRAME_BYTES as MONO_FRAME_BYTES, Rotation},
         ssd1677::{BufferedDisplay, RefreshPolicy, RefreshPolicyMode, Ssd1677, X4DriveProfile},
     },
     files::{FileItem, FileKind},
-    image::{PackedBitmap, PackedImage, RenderOptions, ScaleMode, Size},
+    image::{Dither, PackedBitmap, PackedImage, READER_DEPTH, RenderOptions, ScaleMode, Size},
     image_decoder::{ImageFormat, decode_jpeg, decode_png},
     image_viewer::render_image_viewer,
     input::{
@@ -52,7 +53,9 @@ use crate::{
     reader::{ReaderLine, ReaderStyle, ReaderView},
     settings::CustomImagePreview,
     sleep::SleepView,
-    storage::{BookFile, FatStorage, ImageFile, MAX_DEVICE_IMAGE_BYTES, ReadOnlySdCard},
+    storage::{
+        BookCatalog, BookFile, FatStorage, ImageFile, MAX_DEVICE_IMAGE_BYTES, ReadOnlySdCard,
+    },
     transfer::{FileTransfer, ImageName, UploadRequest},
     ui::{AppFrame, render_app},
     x4::{X4FatBlockDevice, X4InputHardware, X4StorageHardware, decode_buttons},
@@ -65,6 +68,7 @@ const MAX_DEVICE_FILES: usize = MAX_DEVICE_BOOKS + MAX_DEVICE_IMAGES;
 const MAX_CACHED_SPINE_PATHS: usize = 64;
 const MAX_CACHED_SPINE_PATH_BYTES: usize = 2 * 1024;
 const VISIBLE_COVER_SLOTS: usize = 4;
+const FRAME_BYTES: usize = MONO_FRAME_BYTES * READER_DEPTH.bits();
 const UPLOAD_CHUNK_BYTES: usize = 4 * 1024;
 const UPLOAD_IDLE_POLLS: usize = 1_500;
 const IMAGE_DECODER_BYTES: usize = MAX_DEVICE_RESOURCE_BYTES - MAX_DEVICE_IMAGE_BYTES;
@@ -76,7 +80,16 @@ const _: () = {
 };
 const SHELF_COVER_WIDTH: usize = 88;
 const SHELF_COVER_HEIGHT: usize = 132;
-const SHELF_COVER_BYTES: usize = SHELF_COVER_WIDTH * SHELF_COVER_HEIGHT / 8;
+const SHELF_COVER_BYTES: usize = SHELF_COVER_WIDTH * SHELF_COVER_HEIGHT / 8 * READER_DEPTH.bits();
+const _: () = assert!(
+    MAX_ENCODED_COVER_BYTES as usize + (VISIBLE_COVER_SLOTS - 1) * SHELF_COVER_BYTES
+        <= MAX_DEVICE_RESOURCE_BYTES
+);
+const CONTENT_BYTES: usize = if core::mem::size_of::<BoundedPage>() > COVER_BYTES {
+    core::mem::size_of::<BoundedPage>()
+} else {
+    COVER_BYTES
+};
 const X4_DRIVE_PROFILE: &str = match option_env!("BREWTHINK_X4_DRIVE_PROFILE") {
     Some(profile) => profile,
     None => "stock-parity",
@@ -274,50 +287,88 @@ struct DeviceCatalogs<'a> {
     images: &'a DeviceImages,
 }
 
-#[repr(C, align(8))]
 struct FrameCodecWorkspace {
-    bytes: [u8; FRAME_BYTES],
+    storage: crate::scratch::Scratch<FRAME_BYTES>,
+}
+
+struct EpubWorkspace {
+    inflate: InflateWorkspace,
+    publication: DevicePublication,
+}
+
+impl EpubWorkspace {
+    unsafe fn initialize(storage: *mut Self) {
+        // SAFETY: each initializer writes its field in the aligned enclosing allocation.
+        unsafe {
+            InflateWorkspace::initialize_in_place(core::ptr::addr_of_mut!((*storage).inflate));
+            DevicePublication::initialize_in_place(core::ptr::addr_of_mut!((*storage).publication));
+        }
+    }
 }
 
 impl FrameCodecWorkspace {
     const fn new() -> Self {
         Self {
-            bytes: [0; FRAME_BYTES],
+            storage: crate::scratch::Scratch::new(),
         }
     }
 
     fn frame(&mut self) -> &mut [u8; FRAME_BYTES] {
-        &mut self.bytes
+        self.storage.bytes()
     }
 
     fn prepare_inflate(&mut self) -> &mut InflateWorkspace {
-        const {
-            assert!(core::mem::size_of::<InflateWorkspace>() <= FRAME_BYTES);
-            assert!(
-                core::mem::align_of::<InflateWorkspace>()
-                    <= core::mem::align_of::<FrameCodecWorkspace>()
-            );
-            assert!(!core::mem::needs_drop::<InflateWorkspace>());
-        }
-        let workspace = self.bytes.as_mut_ptr().cast::<InflateWorkspace>();
-        // SAFETY: the storage is aligned, large enough, and exclusively borrowed. The
-        // initializer establishes a valid InflateWorkspace before the reference is created.
+        // SAFETY: the inflater initializer establishes a valid Raw-format workspace.
         unsafe {
-            InflateWorkspace::initialize_in_place(workspace);
-            &mut *workspace
+            self.storage
+                .initialize(InflateWorkspace::initialize_in_place)
         }
     }
 
+    fn prepare_epub(&mut self) -> (&mut InflateWorkspace, &mut DevicePublication) {
+        // SAFETY: both fields are initialized before the enclosing value is exposed.
+        let workspace = unsafe { self.storage.initialize(EpubWorkspace::initialize) };
+        (&mut workspace.inflate, &mut workspace.publication)
+    }
+
     fn with_png<R>(&mut self, function: impl FnOnce(&mut CoverDecodeWorkspace) -> R) -> R {
-        let workspace = CoverDecodeWorkspace::in_buffer(&mut self.bytes)
+        let workspace = CoverDecodeWorkspace::in_buffer(self.storage.bytes())
             .expect("the frame allocation fits the PNG workspace");
         function(workspace)
     }
 
     fn with_jpeg<R>(&mut self, function: impl FnOnce(&mut JpegDecodeWorkspace) -> R) -> R {
-        let workspace = JpegDecodeWorkspace::in_buffer(&mut self.bytes)
+        let workspace = JpegDecodeWorkspace::in_buffer(self.storage.bytes())
             .expect("the frame allocation fits the JPEG workspace");
         function(workspace)
+    }
+}
+
+struct ContentWorkspace {
+    storage: crate::scratch::Scratch<CONTENT_BYTES>,
+}
+
+impl ContentWorkspace {
+    const fn new() -> Self {
+        Self {
+            storage: crate::scratch::Scratch::new(),
+        }
+    }
+
+    fn prepare_catalog(&mut self) -> &mut BookCatalog<MAX_DEVICE_BOOKS> {
+        // SAFETY: the catalog initializer writes all entries and counters in place.
+        unsafe { self.storage.initialize(BookCatalog::initialize_in_place) }
+    }
+
+    fn prepare_page(&mut self) -> &mut BoundedPage {
+        // SAFETY: the page initializer writes every field in place.
+        unsafe { self.storage.initialize(BoundedPage::initialize_in_place) }
+    }
+
+    fn cover(&mut self) -> &mut [u8; COVER_BYTES] {
+        (&mut self.storage.bytes()[..COVER_BYTES])
+            .try_into()
+            .expect("content storage fits the cover")
     }
 }
 
@@ -325,10 +376,8 @@ struct Workspaces {
     zip: &'static mut ZipValidationScratch,
     package: &'static mut DevicePackageScratch,
     frame_codec: &'static mut FrameCodecWorkspace,
-    page: &'static mut BoundedPage,
+    content: &'static mut ContentWorkspace,
     resource: &'static mut [u8; MAX_DEVICE_RESOURCE_BYTES],
-    cover: &'static mut [u8; COVER_BYTES],
-    shelf_covers: &'static mut [[u8; SHELF_COVER_BYTES]; VISIBLE_COVER_SLOTS],
 }
 
 #[derive(Clone, Copy)]
@@ -369,7 +418,7 @@ const IMAGE_KIND: u32 = 6;
 static mut RETAINED_RESUME: [u32; 8] = [0; 8];
 
 #[cfg(brewthink_previous_frame_storage = "host_ram")]
-static DISPLAYED_FRAME: StaticCell<[u8; FRAME_BYTES]> = StaticCell::new();
+static DISPLAYED_FRAME: StaticCell<[u8; MONO_FRAME_BYTES]> = StaticCell::new();
 
 const INPUT_EVENT_CAPACITY: usize = 32;
 static INPUT_EVENTS: Channel<CriticalSectionRawMutex, ButtonEvent, INPUT_EVENT_CAPACITY> =
@@ -443,12 +492,10 @@ pub async fn reader_app_task(
         ConstStaticCell::new(DevicePackageScratch::new());
     static FRAME_CODEC: ConstStaticCell<FrameCodecWorkspace> =
         ConstStaticCell::new(FrameCodecWorkspace::new());
-    static PAGE: ConstStaticCell<BoundedPage> = ConstStaticCell::new(BoundedPage::new());
+    static CONTENT: ConstStaticCell<ContentWorkspace> =
+        ConstStaticCell::new(ContentWorkspace::new());
     static RESOURCE: ConstStaticCell<[u8; MAX_DEVICE_RESOURCE_BYTES]> =
         ConstStaticCell::new([0; MAX_DEVICE_RESOURCE_BYTES]);
-    static COVER: ConstStaticCell<[u8; COVER_BYTES]> = ConstStaticCell::new([0xFF; COVER_BYTES]);
-    static SHELF_COVERS: ConstStaticCell<[[u8; SHELF_COVER_BYTES]; VISIBLE_COVER_SLOTS]> =
-        ConstStaticCell::new([[0xFF; SHELF_COVER_BYTES]; VISIBLE_COVER_SLOTS]);
     static UPLOAD_BUFFER: ConstStaticCell<[u8; UPLOAD_CHUNK_BYTES]> =
         ConstStaticCell::new([0; UPLOAD_CHUNK_BYTES]);
 
@@ -470,10 +517,8 @@ pub async fn reader_app_task(
         zip: ZIP.take(),
         package: PACKAGE.take(),
         frame_codec: FRAME_CODEC.take(),
-        page: PAGE.take(),
+        content: CONTENT.take(),
         resource: RESOURCE.take(),
-        cover: COVER.take(),
-        shelf_covers: SHELF_COVERS.take(),
     };
     info!("reader startup: workspace initialization done");
     let library = LIBRARY.take();
@@ -906,6 +951,14 @@ impl<'a> UsbControlRuntime<'a> {
 }
 
 fn write_control_status(app: &App) {
+    esp_println::println!(
+        "BREWCTL/1 IMAGE_PROFILE tones={} max_image_bytes={} max_cover_bytes={} max_resource_bytes={} experimental={}",
+        READER_DEPTH.levels(),
+        MAX_DEVICE_IMAGE_BYTES,
+        MAX_ENCODED_COVER_BYTES,
+        MAX_DEVICE_RESOURCE_BYTES,
+        cfg!(feature = "experimental-gray8"),
+    );
     match app.view() {
         AppView::Home(state) => {
             esp_println::println!(
@@ -1002,9 +1055,10 @@ fn write_control_battery_status(battery: BatteryStatus) {
 fn write_control_screen(frame: &[u8; FRAME_BYTES]) {
     let crc32 = crc32fast::hash(frame);
     esp_println::println!(
-        "BREWCTL/1 SCREEN width=480 height=800 bytes={} crc32={:08x}",
+        "BREWCTL/1 SCREEN width=480 height=800 bytes={} crc32={:08x} bpp={} encoding=planar",
         frame.len(),
-        crc32
+        crc32,
+        READER_DEPTH.bits(),
     );
     esp_println::Printer::write_bytes(frame);
     esp_println::Printer::write_bytes(b"\n");
@@ -1016,7 +1070,8 @@ fn load_library(
     workspaces: &mut Workspaces,
 ) -> Result<(), ()> {
     info!("reader startup: book directory scan start");
-    let catalog = store.scan::<MAX_DEVICE_BOOKS>().map_err(|_| ())?;
+    let catalog = workspaces.content.prepare_catalog();
+    store.scan_into(catalog).map_err(|_| ())?;
     info!(
         "reader startup: book directory scan done entries={}",
         catalog.len()
@@ -1027,7 +1082,7 @@ fn load_library(
             catalog_index,
             file.size()
         );
-        let inflate = workspaces.frame_codec.prepare_inflate();
+        let (inflate, publication) = workspaces.frame_codec.prepare_epub();
         let reader = match store.open_reader(file) {
             Ok(reader) => reader,
             Err(_) => continue,
@@ -1039,6 +1094,7 @@ fn load_library(
             workspaces.package,
             inflate,
             workspaces.resource,
+            publication,
         ) {
             Ok(book) => book,
             Err(_) => continue,
@@ -1101,7 +1157,7 @@ fn initialize_panel(
             #[cfg(brewthink_previous_frame_storage = "host_ram")]
             let display = BufferedDisplay::with_host_ram(
                 controller,
-                DISPLAYED_FRAME.init_with(|| [0xFF; FRAME_BYTES]),
+                DISPLAYED_FRAME.init_with(|| [0xFF; MONO_FRAME_BYTES]),
                 Rotation::Degrees270,
             );
             #[cfg(brewthink_previous_frame_storage = "controller_ram")]
@@ -1141,14 +1197,15 @@ fn run_effect(
                 let next = match load_chapter(book, spine_index, library, store, workspaces) {
                     Ok(chapter) => {
                         *loaded = Some(chapter);
+                        let page = workspaces.content.prepare_page();
                         match layout_xhtml_page_into(
                             &workspaces.resource[..chapter.length],
                             0,
                             app.reader_preferences(),
-                            workspaces.page,
+                            page,
                         ) {
                             Ok(()) => app
-                                .chapter_loaded(chapter.spine_count, workspaces.page.page_count())
+                                .chapter_loaded(chapter.spine_count, page.page_count())
                                 .map_err(|_| "reader application state rejected chapter")?,
                             Err(_) => app
                                 .chapter_failed()
@@ -1215,7 +1272,7 @@ fn run_effect(
                         location,
                         library,
                         xhtml,
-                        workspaces.page,
+                        workspaces.content.prepare_page(),
                         workspaces.frame_codec.frame(),
                     )?;
                     refresh(store, panel, workspaces.frame_codec.frame())?;
@@ -1269,7 +1326,7 @@ fn load_chapter(
     workspaces: &mut Workspaces,
 ) -> Result<LoadedChapter, ()> {
     let file = library.file(selected).ok_or(())?;
-    let inflate = workspaces.frame_codec.prepare_inflate();
+    let (inflate, publication) = workspaces.frame_codec.prepare_epub();
     let reader = store.open_reader(file).map_err(|_| ())?;
     let (spine_count, length) = if let Some(path) = library.spine_path(selected, spine_index) {
         let archive = StreamingZip::open(reader, workspaces.zip).map_err(|_| ())?;
@@ -1288,6 +1345,7 @@ fn load_chapter(
             workspaces.package,
             inflate,
             workspaces.resource,
+            publication,
         )
         .map_err(|_| ())?;
         let spine_count = book.publication().spine_len();
@@ -1345,10 +1403,14 @@ fn decode_book_cover(
         return Ok(false);
     }
     let length = archive
-        .read_entry(entry, workspaces.resource, inflate)
+        .read_entry(
+            entry,
+            &mut workspaces.resource[..MAX_ENCODED_COVER_BYTES as usize],
+            inflate,
+        )
         .map_err(|_| "reader cover read failed")?;
     let encoded = &workspaces.resource[..length];
-    let output = &mut *workspaces.cover;
+    let output = &mut *workspaces.content.cover();
     let decoded = if encoded.starts_with(b"\x89PNG\r\n\x1a\n") {
         esp_println::println!(
             "BREWCTL/1 LOG stage=cover state=decode-start book={} format=png bytes={}",
@@ -1391,7 +1453,7 @@ fn decode_image_preview(
         )
         .map_err(|_| ())?;
     let encoded = &workspaces.resource[..loaded.length()];
-    let output = &mut *workspaces.cover;
+    let output = &mut *workspaces.content.cover();
     let decoded = match loaded.format() {
         ImageFormat::Jpeg => workspaces
             .frame_codec
@@ -1416,11 +1478,11 @@ fn decode_image_frame(
         .map_err(|_| "reader image read failed")?;
     let encoded = &encoded_buffer[..loaded.length()];
     let frame = workspaces.frame_codec.frame();
-    let mut target = PackedImage::monochrome(frame_size(), frame)
+    let mut target = PackedImage::new(frame_size(), READER_DEPTH, frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
     let options = RenderOptions {
         scale,
-        ..RenderOptions::default()
+        dither: Dither::None,
     };
     match loaded.format() {
         ImageFormat::Jpeg => decode_jpeg(
@@ -1443,7 +1505,7 @@ fn decode_image_frame(
 }
 
 fn render_home_frame(app: &App, frame: &mut [u8; FRAME_BYTES]) -> Result<(), &'static str> {
-    let mut image = PackedImage::monochrome(frame_size(), frame)
+    let mut image = PackedImage::new(frame_size(), READER_DEPTH, frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
     render_app(
         AppFrame::Home {
@@ -1483,7 +1545,7 @@ fn render_files_frame(
         };
         *file = FileItem::new(image.name().as_str(), image.size(), kind);
     }
-    let mut image = PackedImage::monochrome(frame_size(), frame)
+    let mut image = PackedImage::new(frame_size(), READER_DEPTH, frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
     render_app(
         AppFrame::Files {
@@ -1515,13 +1577,13 @@ fn render_settings_frame(
         Some(file) => match decode_image_preview(file, store, workspaces) {
             Ok(()) => CustomImagePreview::Ready {
                 name: file.name().as_str(),
-                bitmap: bitmap(workspaces.cover),
+                bitmap: bitmap(workspaces.content.cover()),
             },
             Err(()) => CustomImagePreview::Invalid,
         },
         None => CustomImagePreview::Missing,
     };
-    let mut image = PackedImage::monochrome(frame_size(), workspaces.frame_codec.frame())
+    let mut image = PackedImage::new(frame_size(), READER_DEPTH, workspaces.frame_codec.frame())
         .map_err(|_| "reader frame buffer has the wrong size")?;
     render_app(
         AppFrame::Settings {
@@ -1545,8 +1607,9 @@ fn render_image_frame(
         .file(image)
         .ok_or("image selection is out of bounds")?;
     if decode_image_frame(file, ScaleMode::Contain, store, workspaces).is_err() {
-        let mut target = PackedImage::monochrome(frame_size(), workspaces.frame_codec.frame())
-            .map_err(|_| "reader frame buffer has the wrong size")?;
+        let mut target =
+            PackedImage::new(frame_size(), READER_DEPTH, workspaces.frame_codec.frame())
+                .map_err(|_| "reader frame buffer has the wrong size")?;
         return render_app(
             AppFrame::Error {
                 book_title: file.name().as_str(),
@@ -1557,7 +1620,7 @@ fn render_image_frame(
         )
         .map_err(|_| "reader image error render failed");
     }
-    let mut target = PackedImage::monochrome(frame_size(), workspaces.frame_codec.frame())
+    let mut target = PackedImage::new(frame_size(), READER_DEPTH, workspaces.frame_codec.frame())
         .map_err(|_| "reader frame buffer has the wrong size")?;
     render_image_viewer(
         file.name().as_str(),
@@ -1576,6 +1639,7 @@ fn render_library(
 ) -> Result<(), &'static str> {
     let visible = app.library().visible_range();
     let selected = app.library().selected().map(BookId::index);
+    let selected_slot = selected.map_or(0, |index| index - visible.start);
     let mut decoded = [false; VISIBLE_COVER_SLOTS];
     for (slot, index) in visible.clone().enumerate() {
         if Some(index) == selected {
@@ -1584,15 +1648,20 @@ fn render_library(
         decoded[slot] =
             decode_book_cover(BookId::new(index), library, store, workspaces).unwrap_or(false);
         if decoded[slot] {
-            downsample_cover(workspaces.cover, &mut workspaces.shelf_covers[slot]);
+            let cache_slot = slot - usize::from(selected_slot < slot);
+            let offset = MAX_ENCODED_COVER_BYTES as usize + cache_slot * SHELF_COVER_BYTES;
+            downsample_cover(
+                workspaces.content.cover(),
+                &mut workspaces.resource[offset..offset + SHELF_COVER_BYTES],
+            );
         }
     }
     if let Some(index) = selected.filter(|index| visible.contains(index)) {
         decoded[index - visible.start] =
             decode_book_cover(BookId::new(index), library, store, workspaces).unwrap_or(false);
     }
-    let covers = &*workspaces.shelf_covers;
-    let full_cover = &*workspaces.cover;
+    let covers = &workspaces.resource[MAX_ENCODED_COVER_BYTES as usize..];
+    let full_cover = &*workspaces.content.cover();
     let mut books = [ShelfBook::new("", "", None); MAX_DEVICE_BOOKS];
     for (index, book) in books[..library.length].iter_mut().enumerate() {
         let cover = visible
@@ -1603,7 +1672,9 @@ fn render_library(
                 if Some(index) == selected {
                     bitmap(full_cover)
                 } else {
-                    shelf_bitmap(&covers[slot])
+                    let cache_slot = slot - usize::from(selected_slot < slot);
+                    let offset = cache_slot * SHELF_COVER_BYTES;
+                    shelf_bitmap(&covers[offset..offset + SHELF_COVER_BYTES])
                 }
             });
         *book = ShelfBook::new(
@@ -1612,7 +1683,7 @@ fn render_library(
             cover,
         );
     }
-    let mut image = PackedImage::monochrome(frame_size(), workspaces.frame_codec.frame())
+    let mut image = PackedImage::new(frame_size(), READER_DEPTH, workspaces.frame_codec.frame())
         .map_err(|_| "reader frame buffer has the wrong size")?;
     render_app(
         AppFrame::Library {
@@ -1649,7 +1720,7 @@ fn render_page(
         app.reader_preferences(),
         app.battery(),
     );
-    let mut image = PackedImage::monochrome(frame_size(), frame)
+    let mut image = PackedImage::new(frame_size(), READER_DEPTH, frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
     render_app(AppFrame::Reader(view), &mut image).map_err(|_| "reader page render failed")
 }
@@ -1712,14 +1783,14 @@ fn render_sleep_frame(
                     continue;
                 }
                 let mut image =
-                    PackedImage::monochrome(frame_size(), workspaces.frame_codec.frame())
+                    PackedImage::new(frame_size(), READER_DEPTH, workspaces.frame_codec.frame())
                         .map_err(|_| "reader frame buffer has the wrong size")?;
                 return render_app(
                     AppFrame::Sleep(SleepView::book_cover(
                         library.title(book),
                         library.creator(book),
                         status.as_str(),
-                        bitmap(workspaces.cover),
+                        bitmap(workspaces.content.cover()),
                         app.battery(),
                     )),
                     &mut image,
@@ -1728,7 +1799,7 @@ fn render_sleep_frame(
             }
             SleepScreenSource::BuiltIn => {
                 let mut image =
-                    PackedImage::monochrome(frame_size(), workspaces.frame_codec.frame())
+                    PackedImage::new(frame_size(), READER_DEPTH, workspaces.frame_codec.frame())
                         .map_err(|_| "reader frame buffer has the wrong size")?;
                 return render_app(
                     AppFrame::Sleep(SleepView::built_in(status.as_str(), app.battery())),
@@ -1747,7 +1818,7 @@ fn render_error(
     library: &DeviceLibrary,
     frame: &mut [u8; FRAME_BYTES],
 ) -> Result<(), &'static str> {
-    let mut image = PackedImage::monochrome(frame_size(), frame)
+    let mut image = PackedImage::new(frame_size(), READER_DEPTH, frame)
         .map_err(|_| "reader frame buffer has the wrong size")?;
     render_app(
         AppFrame::Error {
@@ -1766,14 +1837,17 @@ fn refresh(
     bytes: &[u8; FRAME_BYTES],
 ) -> Result<(), &'static str> {
     let mode = panel.refresh_policy.requested_mode();
+    let image = PackedBitmap::new(frame_size(), READER_DEPTH, bytes)
+        .map_err(|_| "reader frame shape is invalid")?;
+    let frequency = esp_hal::time::Rate::from_mhz(if image.is_monochrome() { 40 } else { 20 });
     let applied = store.with_device(|device| {
         device.with_hardware(|hardware| {
             let mut bus = hardware
-                .display_bus()
+                .display_bus_at(frequency)
                 .map_err(|_| "reader display session failed")?;
             panel
                 .display
-                .refresh(&mut bus, bytes, mode)
+                .refresh_image(&mut bus, &mut Delay::new(), image, mode)
                 .map_err(|_| "reader display refresh failed")
         })
     })?;
@@ -1987,29 +2061,29 @@ fn resume_checksum(record: ResumeRecord) -> u32 {
     })
 }
 
-fn downsample_cover(source: &[u8; COVER_BYTES], output: &mut [u8; SHELF_COVER_BYTES]) {
+fn downsample_cover(source: &[u8; COVER_BYTES], output: &mut [u8]) {
     let source = bitmap(source);
-    output.fill(0xFF);
+    let size = Size::new(SHELF_COVER_WIDTH, SHELF_COVER_HEIGHT).expect("nonzero shelf cover size");
+    let mut target =
+        PackedImage::new(size, READER_DEPTH, output).expect("exact shelf cover storage");
     for y in 0..SHELF_COVER_HEIGHT {
         for x in 0..SHELF_COVER_WIDTH {
             let source_x = x * 2;
             let source_y = y * 2;
-            let black = usize::from(source.pixel_is_black(source_x, source_y))
-                + usize::from(source.pixel_is_black(source_x + 1, source_y))
-                + usize::from(source.pixel_is_black(source_x, source_y + 1))
-                + usize::from(source.pixel_is_black(source_x + 1, source_y + 1));
-            if black >= 2 {
-                let pixel = y * SHELF_COVER_WIDTH + x;
-                output[pixel / 8] &= !(0x80 >> (pixel % 8));
-            }
+            let sum = u16::from(source.luma(source_x, source_y))
+                + u16::from(source.luma(source_x + 1, source_y))
+                + u16::from(source.luma(source_x, source_y + 1))
+                + u16::from(source.luma(source_x + 1, source_y + 1));
+            target.set_luma(x, y, ((sum + 2) / 4) as u8);
         }
     }
 }
 
-fn shelf_bitmap(bytes: &[u8; SHELF_COVER_BYTES]) -> PackedBitmap<'_> {
-    PackedBitmap::monochrome(
+fn shelf_bitmap(bytes: &[u8]) -> PackedBitmap<'_> {
+    PackedBitmap::new(
         Size::new(SHELF_COVER_WIDTH, SHELF_COVER_HEIGHT)
             .expect("the shelf cover dimensions are non-zero"),
+        READER_DEPTH,
         bytes,
     )
     .expect("the shelf cover buffer matches its dimensions")

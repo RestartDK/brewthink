@@ -1,5 +1,5 @@
 use crate::{
-    image::{PackedBitmap, PackedImage, RenderOptions, ScaleMode, Size},
+    image::{Dither, PackedBitmap, PackedImage, READER_DEPTH, RenderOptions, ScaleMode, Size},
     image_decoder::{ImageDecodeError, decode_jpeg, decode_png},
 };
 
@@ -7,8 +7,12 @@ pub use crate::image_decoder::{JpegDecodeWorkspace, PngDecodeWorkspace};
 
 pub const COVER_WIDTH: usize = 176;
 pub const COVER_HEIGHT: usize = 264;
-pub const COVER_BYTES: usize = COVER_WIDTH * COVER_HEIGHT / 8;
-pub const MAX_ENCODED_COVER_BYTES: u32 = 128 * 1024;
+pub const COVER_BYTES: usize = COVER_WIDTH * COVER_HEIGHT / 8 * READER_DEPTH.bits();
+pub const MAX_ENCODED_COVER_BYTES: u32 = if cfg!(feature = "experimental-gray8") {
+    80 * 1024
+} else {
+    128 * 1024
+};
 
 pub type CoverDecodeWorkspace = PngDecodeWorkspace;
 pub type CoverDecodeError = ImageDecodeError;
@@ -22,14 +26,14 @@ pub fn decode_png_cover(
     output: &mut [u8; COVER_BYTES],
     workspace: &mut CoverDecodeWorkspace,
 ) -> Result<(), CoverDecodeError> {
-    let mut target = PackedImage::monochrome(cover_size(), output)
+    let mut target = PackedImage::new(cover_size(), READER_DEPTH, output)
         .expect("the packed cover buffer has the exact required length");
     decode_png(
         encoded,
         &mut target,
         RenderOptions {
             scale: ScaleMode::Cover,
-            ..RenderOptions::default()
+            dither: Dither::None,
         },
         workspace,
     )?;
@@ -41,14 +45,14 @@ pub fn decode_jpeg_cover(
     output: &mut [u8; COVER_BYTES],
     workspace: &mut JpegDecodeWorkspace,
 ) -> Result<(), CoverDecodeError> {
-    let mut target = PackedImage::monochrome(cover_size(), output)
+    let mut target = PackedImage::new(cover_size(), READER_DEPTH, output)
         .expect("the packed cover buffer has the exact required length");
     decode_jpeg(
         encoded,
         &mut target,
         RenderOptions {
             scale: ScaleMode::Cover,
-            ..RenderOptions::default()
+            dither: Dither::None,
         },
         workspace,
     )?;
@@ -56,7 +60,7 @@ pub fn decode_jpeg_cover(
 }
 
 pub fn bitmap(bytes: &[u8; COVER_BYTES]) -> PackedBitmap<'_> {
-    PackedBitmap::monochrome(cover_size(), bytes)
+    PackedBitmap::new(cover_size(), READER_DEPTH, bytes)
         .expect("the packed cover buffer has the exact required length")
 }
 
@@ -98,9 +102,18 @@ mod tests {
 
     #[test]
     fn bounds_encoded_cover_work() {
-        assert!(encoded_cover_fits(128 * 1024, 128 * 1024));
-        assert!(!encoded_cover_fits(128 * 1024 + 1, 1));
-        assert!(!encoded_cover_fits(1, 128 * 1024 + 1));
+        let limit = super::MAX_ENCODED_COVER_BYTES;
+        assert_eq!(
+            limit,
+            if cfg!(feature = "experimental-gray8") {
+                80 * 1024
+            } else {
+                128 * 1024
+            }
+        );
+        assert!(encoded_cover_fits(limit, limit));
+        assert!(!encoded_cover_fits(limit + 1, 1));
+        assert!(!encoded_cover_fits(1, limit + 1));
     }
 
     #[test]
@@ -151,12 +164,14 @@ mod tests {
         let mut package_scratch = Box::new(DevicePackageScratch::new());
         let mut inflater = Box::new(InflateWorkspace::new());
         let mut resource = Box::new([0; MAX_DEVICE_RESOURCE_BYTES]);
+        let mut publication = Box::new(crate::device_epub::DevicePublication::new());
         let book = DeviceEpub::open(
             SliceFile(encoded),
             &mut zip_scratch,
             &mut package_scratch,
             &mut inflater,
             &mut resource,
+            &mut publication,
         )
         .unwrap();
         let length = book

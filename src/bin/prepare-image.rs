@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use brewthink::image::{Dither, PackedImage, RenderOptions, RgbImage, ScaleMode, Size};
+use brewthink::image::{Dither, PackedImage, PixelDepth, RenderOptions, RgbImage, ScaleMode, Size};
 use image::ImageReader;
 
 struct Arguments {
@@ -14,6 +14,7 @@ struct Arguments {
     frame: PathBuf,
     preview: PathBuf,
     size: Size,
+    depth: PixelDepth,
     options: RenderOptions,
 }
 
@@ -30,10 +31,17 @@ impl Arguments {
             "cover" => ScaleMode::Cover,
             value => return Err(format!("unsupported scale {value:?}").into()),
         };
-        let dither = match required_utf8(&mut arguments, "DITHER")?.as_str() {
-            "ordered" => Dither::Ordered4x4,
-            "threshold" => Dither::Threshold(128),
-            value => return Err(format!("unsupported dither {value:?}").into()),
+        let (depth, dither) = match required_utf8(&mut arguments, "QUANTIZER")?.as_str() {
+            "ordered" => (PixelDepth::Monochrome, Dither::Ordered4x4),
+            "threshold" => (PixelDepth::Monochrome, Dither::Threshold(128)),
+            "gray4" => (PixelDepth::Four, Dither::None),
+            "gray8" => (PixelDepth::Eight, Dither::None),
+            value => {
+                return Err(format!(
+                    "unsupported quantizer {value:?}; use ordered, threshold, gray4, or gray8"
+                )
+                .into());
+            }
         };
         if let Some(argument) = arguments.next() {
             return Err(format!("unexpected argument {argument:?}").into());
@@ -44,6 +52,7 @@ impl Arguments {
             frame,
             preview,
             size: Size::new(width, height).map_err(image_error)?,
+            depth,
             options: RenderOptions { scale, dither },
         })
     }
@@ -61,16 +70,45 @@ fn run() -> Result<(), Box<dyn Error>> {
     let decoded = ImageReader::open(&arguments.input)?
         .with_guessed_format()?
         .decode()?;
-    let rgb = decoded.into_rgb8();
+    let rgba = decoded.into_rgba8();
     let source_size =
-        Size::new(rgb.width() as usize, rgb.height() as usize).map_err(image_error)?;
-    let source = RgbImage::new(source_size, rgb.as_raw()).map_err(image_error)?;
-    let mut frame = vec![0xFF; arguments.size.width() * arguments.size.height() / 8];
-    let mut target = PackedImage::monochrome(arguments.size, &mut frame).map_err(image_error)?;
+        Size::new(rgba.width() as usize, rgba.height() as usize).map_err(image_error)?;
+    let mut rgb = Vec::with_capacity(rgba.len() / 4 * 3);
+    for pixel in rgba.pixels() {
+        let alpha = u16::from(pixel[3]);
+        for &channel in &pixel.0[..3] {
+            rgb.push(((u16::from(channel) * alpha + 255 * (255 - alpha) + 127) / 255) as u8);
+        }
+    }
+    let source = RgbImage::new(source_size, &rgb).map_err(image_error)?;
+    let mut frame = vec![
+        0xFF;
+        arguments
+            .depth
+            .byte_len(arguments.size)
+            .map_err(image_error)?
+    ];
+    let mut target =
+        PackedImage::new(arguments.size, arguments.depth, &mut frame).map_err(image_error)?;
     let report = brewthink::image::render(&source, &mut target, arguments.options);
 
     write_file(&arguments.frame, target.as_bytes())?;
-    write_pbm(&arguments.preview, target.size(), target.as_bytes())?;
+    if arguments.depth == PixelDepth::Monochrome {
+        write_pbm(&arguments.preview, target.size(), target.as_bytes())?;
+    } else {
+        let mut preview = format!(
+            "P5\n{} {}\n255\n",
+            target.size().width(),
+            target.size().height()
+        )
+        .into_bytes();
+        for y in 0..target.size().height() {
+            for x in 0..target.size().width() {
+                preview.push(target.luma(x, y));
+            }
+        }
+        write_file(&arguments.preview, &preview)?;
+    }
 
     println!(
         "image {}x{} -> {}x{} content {}x{}",
@@ -82,7 +120,11 @@ fn run() -> Result<(), Box<dyn Error>> {
         report.scaled.height(),
     );
     println!("packed frame: {}", arguments.frame.display());
-    println!("PBM preview: {}", arguments.preview.display());
+    println!(
+        "{}-tone preview: {}",
+        arguments.depth.levels(),
+        arguments.preview.display()
+    );
     Ok(())
 }
 

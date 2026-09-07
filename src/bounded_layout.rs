@@ -51,6 +51,21 @@ impl BoundedPage {
         }
     }
 
+    #[cfg(any(target_arch = "riscv32", test))]
+    pub(crate) unsafe fn initialize_in_place(page: *mut Self) {
+        // SAFETY: the caller provides writable aligned storage; every field is initialized.
+        unsafe {
+            let lines = core::ptr::addr_of_mut!((*page).lines).cast::<Option<BoundedReaderLine>>();
+            for index in 0..MAX_PAGE_LINES {
+                lines.add(index).write(None);
+            }
+            core::ptr::addr_of_mut!((*page).line_count).write(0);
+            core::ptr::addr_of_mut!((*page).page_index).write(0);
+            core::ptr::addr_of_mut!((*page).page_count).write(0);
+            core::ptr::addr_of_mut!((*page).chapter_title).write(FixedString::new());
+        }
+    }
+
     fn reset(&mut self, requested_page: usize) {
         for line in &mut self.lines {
             *line = None;
