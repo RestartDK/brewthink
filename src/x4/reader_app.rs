@@ -56,7 +56,7 @@ use crate::{
     storage::{
         BookCatalog, BookFile, FatStorage, ImageFile, MAX_DEVICE_IMAGE_BYTES, ReadOnlySdCard,
     },
-    transfer::{FileTransfer, ImageName, UploadRequest},
+    transfer::{FileTransfer, UploadRequest},
     ui::{AppFrame, render_app},
     x4::{X4FatBlockDevice, X4InputHardware, X4StorageHardware, decode_buttons},
     zip_stream::{InflateWorkspace, StreamingZip, ZipValidationScratch},
@@ -269,7 +269,17 @@ impl DeviceImages {
         self.files.get(image.index()).and_then(Option::as_ref)
     }
 
-    fn selected(&self, name: Option<ImageName>) -> Option<ImageId> {
+    fn selected(&self, store: &DeviceStore) -> Option<ImageId> {
+        let name = match store.app_data().read_selected_image() {
+            Ok(name) => name,
+            Err(error) => {
+                info!(
+                    "reader image selection unavailable: {}",
+                    defmt::Display2Format(&error)
+                );
+                None
+            }
+        };
         name.and_then(|name| {
             self.files[..self.length]
                 .iter()
@@ -556,13 +566,18 @@ pub async fn reader_app_task(
         },
         preferences: AppPreferences::default(),
     });
-    let preferences = store
-        .app_data()
-        .read_preferences()
-        .ok()
-        .flatten()
-        .unwrap_or(retained.preferences);
-    let selected_image = images.selected(store.app_data().read_selected_image());
+    let preferences = match store.app_data().read_preferences() {
+        Ok(Some(preferences)) => preferences,
+        Ok(None) => retained.preferences,
+        Err(error) => {
+            info!(
+                "reader preferences unavailable: {}",
+                defmt::Display2Format(&error)
+            );
+            retained.preferences
+        }
+    };
+    let selected_image = images.selected(store);
     let (mut app, first_effect) = App::from_resume_with_catalog(
         library.length,
         images.length,
@@ -642,7 +657,7 @@ pub async fn reader_app_task(
                 .run_input(InputSource::Usb, button),
                 ControlEvent::ImagesChanged => {
                     load_images(store, images);
-                    let selected = images.selected(store.app_data().read_selected_image());
+                    let selected = images.selected(store);
                     let effect = app.replace_image_catalog(images.length, selected);
                     run_effect(
                         effect,
@@ -1063,7 +1078,12 @@ fn load_library(
 ) -> Result<(), ()> {
     info!("reader startup: book directory scan start");
     let catalog = workspaces.content.prepare_catalog();
-    store.scan_into(catalog).map_err(|_| ())?;
+    store.scan_into(catalog).map_err(|error| {
+        info!(
+            "reader book catalog unavailable: {}",
+            defmt::Display2Format(&error)
+        );
+    })?;
     info!(
         "reader startup: book directory scan done entries={}",
         catalog.len()
@@ -1128,8 +1148,15 @@ fn load_library(
 
 fn load_images(store: &DeviceStore, images: &mut DeviceImages) {
     *images = DeviceImages::empty();
-    let Ok(catalog) = store.app_data().scan_images::<MAX_DEVICE_IMAGES>() else {
-        return;
+    let catalog = match store.app_data().scan_images::<MAX_DEVICE_IMAGES>() {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            info!(
+                "reader image catalog unavailable: {}",
+                defmt::Display2Format(&error)
+            );
+            return;
+        }
     };
     for image in catalog.images() {
         images.files[images.length] = Some(image);
