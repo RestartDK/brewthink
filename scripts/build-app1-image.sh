@@ -22,9 +22,9 @@ cd "$ROOT_DIR"
 
 echo "Building release ELF for $CHIP..."
 if [[ -n "${BREWTHINK_CARGO_FEATURES:-}" ]]; then
-  cargo build --release --bin brewthink --features "$BREWTHINK_CARGO_FEATURES"
+  cargo build --locked --release --bin brewthink --features "$BREWTHINK_CARGO_FEATURES"
 else
-  cargo build --release --bin brewthink
+  cargo build --locked --release --bin brewthink
 fi
 
 if [[ ! -f "$ELF" ]]; then

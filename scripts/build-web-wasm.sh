@@ -26,7 +26,7 @@ command -v wasm-bindgen >/dev/null || {
 
 cd "$ROOT_DIR"
 
-RUSTFLAGS="${RUSTFLAGS:-} -C panic=abort" cargo build \
+RUSTFLAGS="${RUSTFLAGS:-} -C panic=abort" cargo build --locked \
   --config 'unstable.build-std=["std","panic_abort"]' \
   --target wasm32-unknown-unknown \
   --features web-sim \

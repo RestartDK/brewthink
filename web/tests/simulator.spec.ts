@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import { readFile, stat, utimes } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { captureFrame } from "./capture-frame";
 
@@ -15,6 +15,13 @@ async function continueFromCover(page: Page): Promise<void> {
   await expect(page.locator("#preview-heading")).toHaveText("Book cover · 480 × 800");
   await page.keyboard.press("Enter");
 }
+
+test("serves production assets without the Vite development client", async ({ page }) => {
+  await page.goto("/");
+  const modules = page.locator('script[type="module"][src]');
+  await expect(modules).toHaveCount(1);
+  await expect(modules).toHaveAttribute("src", /^\/assets\/.+\.js$/);
+});
 
 test("runs the complete library, reader, sleep, wake, and resume loop", async ({
   page,
@@ -200,6 +207,7 @@ test("opens and selects images from Files", async ({ page }) => {
   await expect(page.locator("#selected-creator")).toHaveText("Selected for sleep");
 
   await page.reload();
+  await expect(page.locator("#frame-payload")).toHaveText("96,000 bytes · 4 tones");
   await page.keyboard.press("p");
   await expect(page.locator("#selected-title")).toHaveText("AYA.JPG");
 });
@@ -294,10 +302,7 @@ test("keeps the reader simulator usable at a narrow viewport", async ({ page }) 
 test("uses one muted gray focus outline across browser controls", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
-  const focusToken = await page.locator(":root").evaluate((element) =>
-    getComputedStyle(element).getPropertyValue("--focus").trim(),
-  );
-  expect(focusToken).toBe("oklch(0.42 0.008 78)");
+  const focusColor = "oklch(0.42 0.008 78)";
 
   await page.keyboard.press("Tab");
   for (const selector of [
@@ -318,7 +323,7 @@ test("uses one muted gray focus outline across browser controls", async ({ page 
         width: style.outlineWidth,
       };
     });
-    expect(outline).toEqual({ color: focusToken, style: "solid", width: "3px" });
+    expect(outline).toEqual({ color: focusColor, style: "solid", width: "3px" });
   }
 
   await page.locator("#epub-file").focus();
@@ -330,7 +335,7 @@ test("uses one muted gray focus outline across browser controls", async ({ page 
       width: style.outlineWidth,
     };
   });
-  expect(dropOutline).toEqual({ color: focusToken, style: "solid", width: "3px" });
+  expect(dropOutline).toEqual({ color: focusColor, style: "solid", width: "3px" });
 });
 
 test("captures the app-shell visual walkthrough", async ({ page }) => {
@@ -449,34 +454,4 @@ test("exports exact native pixels independently of viewport and browser scaling"
     expect(saved.readUInt32BE(16)).toBe(480);
     expect(saved.readUInt32BE(20)).toBe(800);
   }
-});
-
-test("rebuilds WASM and reloads after a Rust change", async ({ page }) => {
-  const consoleErrors: string[] = [];
-  page.on("console", (entry) => {
-    if (entry.type() === "error") {
-      consoleErrors.push(entry.text());
-    }
-  });
-
-  await page.goto("/");
-  await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
-  await page.evaluate(() => sessionStorage.setItem("wasm-reload-probe", "preserved"));
-  const initialTimeOrigin = await page.evaluate(() => performance.timeOrigin);
-  const rustSource = path.resolve("../src/bin/web-sim.rs");
-  const sourceMetadata = await stat(rustSource);
-  const changedTime = new Date(Math.max(Date.now(), sourceMetadata.mtimeMs + 1_000));
-
-  await utimes(rustSource, sourceMetadata.atime, changedTime);
-  await page.waitForFunction(
-    (previousTimeOrigin) => performance.timeOrigin !== previousTimeOrigin,
-    initialTimeOrigin,
-    { timeout: 30_000 },
-  );
-
-  await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
-  expect(await page.evaluate(() => sessionStorage.getItem("wasm-reload-probe"))).toBe(
-    "preserved",
-  );
-  expect(consoleErrors).toEqual([]);
 });

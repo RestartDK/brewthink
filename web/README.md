@@ -32,9 +32,12 @@ python3 ../scripts/render-ui-fixtures.py
 ```bash
 bun run build
 bun run test:e2e
+bun run test:e2e:dev
 ```
 
-The browser tests cover Home, Books, Files, reader settings and reflow, the shared 2 × 2 shelf, rounded drawers, physical hint alignment, named navigation, whole-book endpoints, cover-only opening, optional-cover failures, sleep and resume, invalid input, narrow layouts, muted focus styles, WCAG AA rules, and Rust-triggered WASM reloads. The grayscale test requires exact neutral values 0, 85, 170, and 255 in image, cover, and sleep frames. A synthetic 480 × 800 cover verifies every pixel to catch thumbnail enlargement or chrome overlays. The native decoder checks the same fixture. `BREWTHINK_WALKTHROUGH_DIR` saves native-resolution canvas PNGs and a browser-shell screenshot. `BREWTHINK_WEB_PORT` selects an isolated test port. Regenerate the navigation and cover fixtures with `python3 scripts/generate-navigation-fixture.py` from the repository root.
+`test:e2e` starts a production preview of the assets from `bun run build` on port 4173. It refuses to reuse an existing server. Tests cover Home, Books, Files, reader settings and reflow, the shared 2 × 2 shelf, rounded drawers, physical hint alignment, named navigation, whole-book endpoints, cover-only opening, optional-cover failures, sleep and resume, invalid input, narrow layouts, muted focus styles, and WCAG AA rules. The grayscale test requires exact neutral values 0, 85, 170, and 255 in image, cover, and sleep frames. A synthetic 480 × 800 cover verifies every pixel to catch thumbnail enlargement or chrome overlays. The native decoder checks the same fixture. Regenerate the navigation and cover fixtures with `python3 scripts/generate-navigation-fixture.py` from the repository root.
+
+`test:e2e:dev` starts a separate development server on port 4174 and checks Rust-triggered WASM reloads. Both commands stop their servers when the tests finish. `BREWTHINK_WEB_PORT` selects an isolated test port. `BREWTHINK_WALKTHROUGH_DIR` saves native-resolution canvas PNGs and a browser-shell screenshot.
 
 A private acceptance EPUB can be supplied without adding it to the repository:
 
