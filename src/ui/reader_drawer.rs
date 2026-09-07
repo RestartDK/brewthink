@@ -3,13 +3,13 @@ use core::fmt::Write;
 use embedded_graphics::{
     Drawable,
     geometry::{Point, Size},
-    pixelcolor::BinaryColor,
+    pixelcolor::Gray8,
     prelude::{DrawTarget, Primitive},
     primitives::{Circle, PrimitiveStyle, Rectangle},
 };
 
 use super::{
-    AppBar, CommandBar, DrawerSurface, FixedText, Icon, Label, Selection, TextRole,
+    AppBar, CHROME_PAPER, CommandBar, DrawerSurface, FixedText, Icon, Label, Selection, TextRole,
     components::draw_selection, text_width,
 };
 use crate::{
@@ -25,10 +25,10 @@ pub fn draw_reader_drawer<D>(
     battery: BatteryStatus,
 ) -> Result<(), D::Error>
 where
-    D: DrawTarget<Color = BinaryColor>,
+    D: DrawTarget<Color = Gray8>,
 {
     Rectangle::new(Point::zero(), Size::new(480, 58))
-        .into_styled(PrimitiveStyle::with_fill(BinaryColor::Off))
+        .into_styled(PrimitiveStyle::with_fill(CHROME_PAPER))
         .draw(target)?;
     AppBar::new("Reading", battery).draw(target)?;
     DrawerSurface::new(304).draw(target)?;

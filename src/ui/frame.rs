@@ -3,18 +3,18 @@ use core::{convert::Infallible, fmt::Write};
 use embedded_graphics::{
     Pixel,
     geometry::{OriginDimensions, Size as GraphicsSize},
-    pixelcolor::BinaryColor,
+    pixelcolor::{Gray8, GrayColor},
     prelude::DrawTarget,
 };
 
-use crate::image::MonochromeImage;
+use crate::image::PackedImage;
 
 pub struct FrameTarget<'target, 'bytes> {
-    image: &'target mut MonochromeImage<'bytes>,
+    image: &'target mut PackedImage<'bytes>,
 }
 
 impl<'target, 'bytes> FrameTarget<'target, 'bytes> {
-    pub fn new(image: &'target mut MonochromeImage<'bytes>) -> Self {
+    pub fn new(image: &'target mut PackedImage<'bytes>) -> Self {
         Self { image }
     }
 }
@@ -29,7 +29,7 @@ impl OriginDimensions for FrameTarget<'_, '_> {
 }
 
 impl DrawTarget for FrameTarget<'_, '_> {
-    type Color = BinaryColor;
+    type Color = Gray8;
     type Error = Infallible;
 
     fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
@@ -43,7 +43,7 @@ impl DrawTarget for FrameTarget<'_, '_> {
                 && x < width
                 && y < height
             {
-                self.image.set_pixel(x, y, color == BinaryColor::On);
+                self.image.set_luma(x, y, color.luma());
             }
         }
         Ok(())

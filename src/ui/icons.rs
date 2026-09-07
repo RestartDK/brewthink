@@ -1,7 +1,7 @@
 use embedded_graphics::{
     Drawable,
     geometry::{Point, Size},
-    pixelcolor::BinaryColor,
+    pixelcolor::Gray8,
     prelude::{DrawTarget, Primitive},
     primitives::{Circle, Line, PrimitiveStyle, Rectangle},
 };
@@ -42,9 +42,9 @@ impl Icon {
         Self::WifiOff,
     ];
 
-    pub fn draw<D>(self, target: &mut D, at: Point, color: BinaryColor) -> Result<(), D::Error>
+    pub fn draw<D>(self, target: &mut D, at: Point, color: Gray8) -> Result<(), D::Error>
     where
-        D: DrawTarget<Color = BinaryColor>,
+        D: DrawTarget<Color = Gray8>,
     {
         let stroke = PrimitiveStyle::with_stroke(color, 2);
         let paths: &[&[(i32, i32)]] = match self {
@@ -162,29 +162,31 @@ impl Icon {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
     use crate::{
-        image::{MonochromeImage, Size as ImageSize},
-        ui::FrameTarget,
+        image::{PackedImage, READER_DEPTH, Size as ImageSize},
+        ui::{CHROME_INK, FrameTarget},
     };
+    use embedded_graphics::pixelcolor::GrayColor;
 
     #[test]
-    fn every_icon_fits_its_grid_and_inverts_with_selection() {
+    fn every_icon_fits_its_grid_and_uses_the_requested_tone() {
         for icon in Icon::ALL {
-            let mut ink = [0xff; 512];
-            let mut paper = [0; 512];
             let size = ImageSize::new(64, 64).unwrap();
-            let mut image = MonochromeImage::new(size, &mut ink).unwrap();
+            let mut bytes = std::vec![0xff; READER_DEPTH.byte_len(size).unwrap()];
+            let mut image = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
             icon.draw(
                 &mut FrameTarget::new(&mut image),
                 Point::new(20, 20),
-                BinaryColor::On,
+                CHROME_INK,
             )
             .unwrap();
             let mut count = 0;
             for y in 0..64 {
                 for x in 0..64 {
-                    if image.pixel_is_black(x, y) {
+                    if image.luma(x, y) == CHROME_INK.luma() {
                         assert!(
                             (20..44).contains(&x) && (20..44).contains(&y),
                             "{icon:?} escaped its grid at {x}, {y}"
@@ -194,14 +196,6 @@ mod tests {
                 }
             }
             assert!(count > 8, "{icon:?} is empty");
-            let mut inverse = MonochromeImage::new(size, &mut paper).unwrap();
-            icon.draw(
-                &mut FrameTarget::new(&mut inverse),
-                Point::new(20, 20),
-                BinaryColor::Off,
-            )
-            .unwrap();
-            assert!(ink.into_iter().zip(paper).all(|(a, b)| a == !b));
         }
     }
 }

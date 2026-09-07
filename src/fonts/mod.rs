@@ -1,4 +1,4 @@
-use embedded_graphics::{Pixel, geometry::Point, pixelcolor::BinaryColor, prelude::DrawTarget};
+use embedded_graphics::{Pixel, geometry::Point, pixelcolor::Gray8, prelude::DrawTarget};
 
 #[derive(Clone, Copy)]
 pub(crate) struct BitmapGlyph {
@@ -71,11 +71,11 @@ impl BitmapFont {
         self,
         text: &str,
         position: Point,
-        color: BinaryColor,
+        color: Gray8,
         target: &mut D,
     ) -> Result<(), D::Error>
     where
-        D: DrawTarget<Color = BinaryColor>,
+        D: DrawTarget<Color = Gray8>,
     {
         let mut cursor_x = position.x;
         for character in text.chars() {

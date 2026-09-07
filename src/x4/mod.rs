@@ -4,6 +4,10 @@ pub mod shared_spi;
 
 #[cfg(target_arch = "riscv32")]
 mod board;
+#[cfg(all(target_arch = "riscv32", feature = "grayscale-bench"))]
+mod grayscale_bench;
+#[cfg(all(target_arch = "riscv32", feature = "grayscale-bench"))]
+pub use grayscale_bench::grayscale_bench_task;
 #[cfg(all(target_arch = "riscv32", feature = "device-reader"))]
 mod reader_app;
 #[cfg(target_arch = "riscv32")]

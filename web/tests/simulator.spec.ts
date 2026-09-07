@@ -1,8 +1,8 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import { readFile, stat, utimes } from "node:fs/promises";
-import { captureFrame } from "./capture-frame";
 import path from "node:path";
+import { captureFrame } from "./capture-frame";
 
 const fixturePath = path.resolve("tests/fixtures/minimal.epub");
 const noCoverFixturePath = path.resolve("tests/fixtures/no-cover.epub");
@@ -204,6 +204,53 @@ test("opens and selects images from Files", async ({ page }) => {
   await expect(page.locator("#selected-title")).toHaveText("AYA.JPG");
 });
 
+test("preserves every grayscale tone in images, covers, and sleep", async ({ page }) => {
+  const tones = 4;
+  const payload = "96,000 bytes · 4 tones";
+  const palette = async (): Promise<number[]> => page.locator("#display").evaluate((element) => {
+    if (!(element instanceof HTMLCanvasElement)) throw new Error("Missing canvas");
+    const context = element.getContext("2d");
+    if (context === null) throw new Error("Missing canvas context");
+    const pixels = context.getImageData(0, 0, 480, 800).data;
+    const shades = new Set<number>();
+    for (let index = 0; index < pixels.length; index += 4) {
+      const red = pixels[index];
+      if (red === undefined) throw new Error("Truncated canvas pixel");
+      shades.add(red);
+    }
+    return [...shades].sort((left, right) => left - right);
+  });
+  const capture = async (name: string): Promise<void> => {
+    if (walkthroughDirectory === undefined) return;
+    await captureFrame(page, path.join(walkthroughDirectory, `${name}.png`));
+  };
+  await page.goto("/");
+  await expect(page.locator("#frame-payload")).toHaveText(payload);
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  for (let index = 0; index < 5; index += 1) await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#preview-heading")).toHaveText("Image viewer · 480 × 800");
+  expect(await palette()).toEqual([0, 85, 170, 255]);
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("p");
+  await expect(page.locator("#preview-heading")).toHaveText("Retained sleep screen · 480 × 800");
+  expect(await palette()).toEqual([0, 85, 170, 255]);
+  await capture(`grayscale-image-${tones}`);
+  await page.keyboard.press("p");
+  await page.locator("#epub-file").setInputFiles(path.resolve("tests/fixtures/gray-cover.epub"));
+  await expect(page.locator("#file-summary")).toHaveText("gray-cover.epub");
+  await expect(page.locator("#preview-heading")).toHaveText("Home menu · 480 × 800");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#preview-heading")).toHaveText("Library shelf · 480 × 800");
+  expect(await palette()).toEqual([0, 85, 170, 255]);
+  await capture(`grayscale-cover-${tones}`);
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("p");
+  await expect(page.locator("#preview-heading")).toHaveText("Retained sleep screen · 480 × 800");
+  expect(await palette()).toEqual([0, 85, 170, 255]);
+});
+
 test("uses custom sleep away from reading and a cover inside the reader", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
@@ -244,6 +291,48 @@ test("keeps the reader simulator usable at a narrow viewport", async ({ page }) 
   expect(dimensions.content).toBeLessThanOrEqual(dimensions.viewport);
 });
 
+test("uses one muted gray focus outline across browser controls", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
+  const focusToken = await page.locator(":root").evaluate((element) =>
+    getComputedStyle(element).getPropertyValue("--focus").trim(),
+  );
+  expect(focusToken).toBe("oklch(0.42 0.008 78)");
+
+  await page.keyboard.press("Tab");
+  for (const selector of [
+    ".skip-link",
+    ".device-viewport",
+    "#save-frame",
+    ".front-key:not(:disabled)",
+    ".side-key:not(:disabled)",
+    "#power-button",
+  ]) {
+    const control = page.locator(selector).first();
+    await control.focus();
+    const outline = await control.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        color: style.outlineColor,
+        style: style.outlineStyle,
+        width: style.outlineWidth,
+      };
+    });
+    expect(outline).toEqual({ color: focusToken, style: "solid", width: "3px" });
+  }
+
+  await page.locator("#epub-file").focus();
+  const dropOutline = await page.locator(".drop-zone").evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      color: style.outlineColor,
+      style: style.outlineStyle,
+      width: style.outlineWidth,
+    };
+  });
+  expect(dropOutline).toEqual({ color: focusToken, style: "solid", width: "3px" });
+});
+
 test("captures the app-shell visual walkthrough", async ({ page }) => {
   test.skip(walkthroughDirectory === undefined, "BREWTHINK_WALKTHROUGH_DIR is not set");
   if (walkthroughDirectory === undefined) {
@@ -251,6 +340,10 @@ test("captures the app-shell visual walkthrough", async ({ page }) => {
   }
   await page.goto("/");
   await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
+  await page.screenshot({
+    path: path.join(walkthroughDirectory, "00-simulator.png"),
+    fullPage: true,
+  });
   await captureFrame(page, path.join(walkthroughDirectory, "01-home.png"));
 
   await page.keyboard.press("Enter");

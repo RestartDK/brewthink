@@ -1,7 +1,7 @@
 use embedded_graphics::{
     Drawable, Pixel,
     geometry::{Point, Size as GraphicsSize},
-    pixelcolor::BinaryColor,
+    pixelcolor::Gray8,
     prelude::{DrawTarget, Primitive},
     primitives::{PrimitiveStyle, Rectangle, RoundedRectangle},
 };
@@ -13,7 +13,7 @@ use embedded_layout::{
 
 use crate::{
     app::{SettingsItem, SettingsState, SleepScreenMode},
-    image::{MonochromeBitmap, MonochromeImage, Size},
+    image::{PackedBitmap, PackedImage, Size},
     power::BatteryStatus,
     reader::{ReaderStyle, ReaderTheme},
     ui::{
@@ -28,7 +28,7 @@ pub enum CustomImagePreview<'a> {
     Invalid,
     Ready {
         name: &'a str,
-        bitmap: MonochromeBitmap<'a>,
+        bitmap: PackedBitmap<'a>,
     },
 }
 
@@ -51,7 +51,7 @@ pub fn render_settings(
     state: SettingsState,
     battery: BatteryStatus,
     custom_image: CustomImagePreview<'_>,
-    target: &mut MonochromeImage<'_>,
+    target: &mut PackedImage<'_>,
 ) -> Result<(), SettingsRenderError> {
     let expected =
         Size::new(FRAME_WIDTH, FRAME_HEIGHT).expect("settings frame dimensions are non-zero");
@@ -126,7 +126,7 @@ impl View for SettingsPreview<'_> {
 }
 
 impl Drawable for SettingsPreview<'_> {
-    type Color = BinaryColor;
+    type Color = Gray8;
     type Output = ();
 
     fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
@@ -154,7 +154,7 @@ impl Drawable for SettingsPreview<'_> {
             ),
             crate::ui::PANEL_CORNERS,
         )
-        .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+        .into_styled(PrimitiveStyle::with_stroke(Gray8::new(0), 1))
         .draw(target)?;
 
         if sleep_preview && mode != SleepScreenMode::BookCover {
@@ -166,14 +166,10 @@ impl Drawable for SettingsPreview<'_> {
                     (0..128).map(move |x| {
                         Pixel(
                             self.top_left + Point::new(18 + x as i32, 40 + y as i32),
-                            if preview.pixel_is_black(
+                            Gray8::new(preview.luma(
                                 x * preview.size().width() / 128,
                                 y * preview.size().height() / 192,
-                            ) {
-                                BinaryColor::On
-                            } else {
-                                BinaryColor::Off
-                            },
+                            )),
                         )
                     })
                 }))?;
@@ -181,7 +177,7 @@ impl Drawable for SettingsPreview<'_> {
                 crate::ui::Icon::Image.draw(
                     target,
                     self.top_left + Point::new(70, 124),
-                    BinaryColor::On,
+                    crate::ui::CHROME_INK,
                 )?;
             }
             let message = match self.custom_image {
@@ -254,12 +250,15 @@ impl Drawable for SettingsPreview<'_> {
 mod tests {
     extern crate std;
 
+    use embedded_graphics::pixelcolor::GrayColor;
+
     use super::{CustomImagePreview, render_settings};
     use crate::{
         app::{AppPreferences, SettingsItem, SettingsState},
-        image::{MonochromeImage, Size},
+        image::{PackedImage, READER_DEPTH, Size},
         input::UsbState,
         power::BatteryStatus,
+        ui::SELECTION_BACKGROUND,
     };
 
     #[test]
@@ -273,9 +272,9 @@ mod tests {
                             .unwrap();
                     let preferences =
                         AppPreferences::new(reader, crate::app::SleepScreenMode::Automatic);
-                    let mut bytes = std::vec![0xff; 48_000];
-                    let mut frame =
-                        MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+                    let size = Size::new(480, 800).unwrap();
+                    let mut bytes = std::vec![0xff; READER_DEPTH.byte_len(size).unwrap()];
+                    let mut frame = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
                     render_settings(
                         SettingsState::new(preferences),
                         BatteryStatus::from_percent(82, UsbState::Disconnected),
@@ -299,18 +298,39 @@ mod tests {
     }
 
     #[test]
-    fn renders_every_settings_row_and_missing_image_state() {
-        let mut bytes = std::vec![0xFF; 480 * 800 / 8];
-        let mut image = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
-        render_settings(
-            SettingsState::with_state(SettingsItem::SleepScreen, AppPreferences::default()),
-            BatteryStatus::from_percent(82, UsbState::Disconnected),
-            CustomImagePreview::Missing,
-            &mut image,
-        )
-        .unwrap();
-        assert!(!image.pixel_is_black(18, 58));
-        assert!(image.pixel_is_black(24, 274));
-        assert!(!image.pixel_is_black(24, 106));
+    fn every_settings_row_uses_gray_selection_with_black_foreground_and_outline() {
+        let tops = [92, 148, 204, 260, 326];
+        let heights = [46, 46, 46, 46, 64];
+        let foreground = [(41, 110), (40, 179), (49, 219), (51, 273), (42, 361)];
+        let size = Size::new(480, 800).unwrap();
+        let battery = BatteryStatus::from_percent(82, UsbState::Disconnected);
+
+        for (index, item) in SettingsItem::ALL.into_iter().enumerate() {
+            let mut bytes = std::vec![0xFF; READER_DEPTH.byte_len(size).unwrap()];
+            let mut image = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
+            render_settings(
+                SettingsState::with_state(item, AppPreferences::default()),
+                battery,
+                CustomImagePreview::Missing,
+                &mut image,
+            )
+            .unwrap();
+
+            assert_eq!(
+                image.luma(450, tops[index] + heights[index] / 2),
+                SELECTION_BACKGROUND.luma(),
+                "settings row {index} lost its selection fill"
+            );
+            assert_eq!(
+                image.luma(240, tops[index]),
+                0,
+                "settings row {index} lost its outline"
+            );
+            assert_eq!(
+                image.luma(foreground[index].0, foreground[index].1),
+                0,
+                "settings row {index} lost its black icon"
+            );
+        }
     }
 }

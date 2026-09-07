@@ -2,7 +2,7 @@
 
 ## Device scene
 
-A reader uses Brewthink one-handed on a slow 480 × 800 monochrome e-paper display. Controls must remain obvious without animation, color, touch, or frequent refreshes.
+A reader uses Brewthink one-handed on a slow 480 × 800 e-paper display. Images and selected controls use four logical shades. Text and icons remain black. Controls must remain obvious without animation, color, touch, or frequent refreshes.
 
 ## Frame
 
@@ -21,7 +21,9 @@ Reading pages, opening covers, and book-cover sleep frames have no application b
 
 ## Selection
 
-Home, Files, Settings, and the reader drawer use borderless rows. A selected row has a black fill, white text and icons, and the shared 12-pixel `ROW_CORNERS` size. Unselected rows have no enclosure. The cover shelf retains outlines around the selected book.
+Home, Files, Settings, and the reader drawer use borderless idle rows. A selected row uses the shared `SELECTION_BACKGROUND` token at `Gray8(170)`, black text and icons, a two-pixel black outline, and the shared 12-pixel `ROW_CORNERS` size. The fill and outline make selection visible without relying on tone alone. The cover shelf retains outlines around the selected book.
+
+The intermediate selection fill uses the existing fixed grayscale refresh path. It gives focus a quiet solid gray instead of binary speckles, but menu selection changes no longer qualify for the faster binary differential path. This source integration does not measure refresh latency on hardware.
 
 `Icon` in `src/ui/icons.rs` owns the 24 × 24 icon grid and two-pixel strokes. Icons inherit the row foreground color. Books, folders, images, typography, sleep, chapters, and navigation share this set. The smaller battery glyph keeps its bounded capacity and USB-power treatment.
 
@@ -42,7 +44,7 @@ Reading content occupies y = 24 through 775. Both paginators enforce the shared 
 
 ## Surfaces and reader drawer
 
-`DrawerSurface` is a bottom sheet, not a horizontal divider. It has an eight-pixel outer inset, shared 28-pixel `PANEL_CORNERS`, and a two-pixel outline. The page behind it is faded with a white checker pattern: the framebuffer remains strictly one-bit. There is no drag handle. The X4 has no touch input, so the sheet uses physical-button hints without swipe or drag affordances. Settings preview panels share `PANEL_CORNERS`; selected rows share `ROW_CORNERS`. Book images retain their original rectangular edges.
+`DrawerSurface` is a bottom sheet, not a horizontal divider. It has an eight-pixel outer inset, shared 28-pixel `PANEL_CORNERS`, and a two-pixel outline. The page behind it keeps the white checker fade. There is no drag handle. The X4 has no touch input, so the sheet uses physical-button hints without swipe or drag affordances. Settings preview panels share `PANEL_CORNERS`; selected rows share `ROW_CORNERS`. Book images retain their original rectangular edges.
 
 Confirm opens `AppView::ReaderDrawer` without turning the page. Its rows are Book position, Chapter, Font, Text size, and Line spacing. Side Up and Down choose rows. Front Left and Right change values. Confirm jumps to the active navigation target or applies typography. Back discards the draft. No chapter loads occur while adjusting a value.
 
@@ -78,10 +80,25 @@ Shared components own recurring visual rules: `AppBar`, `CommandBar`, `DrawerSur
 
 Semantic `TextRole` values resolve application typography centrally. Reader typography continues to resolve through `ReaderTheme` and never changes application chrome.
 
-Home, Books, Files, Settings, Reader, all five drawer selections, Image, Error, and Sleep renders are pinned as PBM fixtures with exact 48,000-byte pixel payloads. Coverage includes empty catalogs, populated shelf pages, every settings selection, filename clipping, and sleep-image previews. PBM uses the opposite bit polarity from the device framebuffer. A component or layout change must preserve those frames unless the visual change is deliberate and the fixtures are reviewed.
+Home, Books, Files, Settings, Reader, all five drawer selections, Image, Error, and Sleep render through the 96,000-byte four-shade frame. PBM fixtures pin pure-black geometry after that real render. Actual-depth tests assert the selection fill, outline, and foreground tones, while native PNG captures preserve all four logical shades. Coverage includes empty catalogs, populated shelf pages, every settings selection, filename clipping, and sleep-image previews. A component or layout change must preserve those contracts unless the visual change is deliberate and the fixtures are reviewed.
 
 ## Simulator
 
-The browser shell remains a restrained developer tool around the exact packed X4 frame. Its warm neutral palette and system typography do not replace or reinterpret the device UI. The canvas always displays the same 48,000-byte frame consumed by the SSD1677 backend. Its backing bitmap and CSS dimensions are both 480 × 800. Narrow viewports scroll the preview instead of shrinking it. The canvas uses black and white pixels; the warm palette belongs to the browser shell.
+The browser shell remains a restrained developer tool around the exact packed X4 frame. Its warm neutral palette and system typography do not replace or reinterpret the device UI. The canvas decodes the same 96,000-byte, two-plane logical frame used by the X4 reader. The native canvas uses neutral logical values 0, 85, 170, and 255. Warm colors stay in the surrounding browser shell. These values represent intended tones, not calibrated panel reflectance.
 
-Save frame PNG and the Playwright capture helper export the canvas bitmap without CSS resampling. UI iteration uses the hot-reloading web simulator, not device flashes. `scripts/render-ui-fixtures.py` converts pinned PBM fixtures to native-size PNGs for inspection.
+The canvas backing bitmap and CSS dimensions are both 480 × 800. Narrow viewports scroll the preview instead of shrinking it. Save frame PNG and the Playwright capture helper export the canvas bitmap without CSS resampling and reject colors outside the four logical values. UI iteration uses the hot-reloading web simulator, not device flashes. `scripts/render-ui-fixtures.py` converts pinned PBM geometry fixtures to native-size PNGs for inspection.
+
+## Native captures
+
+The committed device captures use native 480 × 800 pixels:
+
+- [Home](docs/images/reader-ui/home.png)
+- [Cover shelf](docs/images/reader-ui/shelf.png)
+- [Files](docs/images/reader-ui/files.png)
+- [Settings](docs/images/reader-ui/settings.png)
+- [Opening cover](docs/images/reader-ui/cover.png)
+- [Reader](docs/images/reader-ui/reader.png)
+- [Reader drawer](docs/images/reader-ui/drawer.png)
+- [Sleep cover](docs/images/reader-ui/sleep.png)
+
+The [browser shell capture](docs/images/reader-ui/simulator.png) checks the simulator layout around the native canvas.

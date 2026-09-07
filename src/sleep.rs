@@ -1,15 +1,15 @@
-use embedded_graphics::{Drawable, geometry::Point, pixelcolor::BinaryColor};
+use embedded_graphics::{Drawable, geometry::Point};
 
 use crate::{
-    image::{MonochromeBitmap, MonochromeImage, Size},
+    image::{PackedBitmap, PackedImage, Size},
     power::BatteryStatus,
-    ui::{AppBar, FrameTarget, Icon, Label, TextRole, ui},
+    ui::{AppBar, CHROME_INK, FrameTarget, Icon, Label, TextRole, ui},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SleepView<'a> {
-    Custom(MonochromeBitmap<'a>),
-    BookCover(MonochromeBitmap<'a>),
+    Custom(PackedBitmap<'a>),
+    BookCover(PackedBitmap<'a>),
     BuiltIn {
         status: &'a str,
         battery: BatteryStatus,
@@ -17,12 +17,14 @@ pub enum SleepView<'a> {
 }
 
 impl<'a> SleepView<'a> {
-    pub const fn custom(image: MonochromeBitmap<'a>) -> Self {
+    pub const fn custom(image: PackedBitmap<'a>) -> Self {
         Self::Custom(image)
     }
-    pub const fn book_cover(cover: MonochromeBitmap<'a>) -> Self {
+
+    pub const fn book_cover(cover: PackedBitmap<'a>) -> Self {
         Self::BookCover(cover)
     }
+
     pub const fn built_in(status: &'a str, battery: BatteryStatus) -> Self {
         Self::BuiltIn { status, battery }
     }
@@ -37,7 +39,7 @@ pub enum SleepRenderError {
 
 pub fn render_sleep(
     view: SleepView<'_>,
-    target: &mut MonochromeImage<'_>,
+    target: &mut PackedImage<'_>,
 ) -> Result<(), SleepRenderError> {
     let frame_size = Size::new(480, 800).unwrap();
     if target.size() != frame_size {
@@ -45,41 +47,19 @@ pub fn render_sleep(
             actual: target.size(),
         });
     }
+
     match view {
-        SleepView::Custom(image) | SleepView::BookCover(image) if image.size() == frame_size => {
-            for y in 0..800 {
-                for x in 0..480 {
-                    target.set_pixel(x, y, image.pixel_is_black(x, y));
-                }
-            }
-        }
-        SleepView::Custom(image) => {
-            return Err(SleepRenderError::ImageSizeMismatch {
-                actual: image.size(),
-            });
-        }
-        SleepView::BookCover(cover) => {
-            if cover.size() != Size::new(176, 264).unwrap() {
-                return Err(SleepRenderError::CoverSizeMismatch {
-                    actual: cover.size(),
-                });
-            }
-            target.clear_white();
-            for y in 0..720 {
-                for x in 0..480 {
-                    target.set_pixel(
-                        x,
-                        40 + y,
-                        cover.pixel_is_black(x * 176 / 480, y * 264 / 720),
-                    );
-                }
-            }
-        }
+        SleepView::Custom(image) => copy_frame(image, target, |actual| {
+            SleepRenderError::ImageSizeMismatch { actual }
+        })?,
+        SleepView::BookCover(image) => copy_frame(image, target, |actual| {
+            SleepRenderError::CoverSizeMismatch { actual }
+        })?,
         SleepView::BuiltIn { status, battery } => {
             target.clear_white();
             let mut display = FrameTarget::new(target);
             Icon::Moon
-                .draw(&mut display, Point::new(228, 320), BinaryColor::On)
+                .draw(&mut display, Point::new(228, 320), CHROME_INK)
                 .ok();
             ui!(
                 AppBar::new("Sleep", battery),
@@ -94,53 +74,108 @@ pub fn render_sleep(
     Ok(())
 }
 
+fn copy_frame(
+    source: PackedBitmap<'_>,
+    target: &mut PackedImage<'_>,
+    wrong_size: impl FnOnce(Size) -> SleepRenderError,
+) -> Result<(), SleepRenderError> {
+    if source.size() != target.size() {
+        return Err(wrong_size(source.size()));
+    }
+    for y in 0..target.size().height() {
+        for x in 0..target.size().width() {
+            target.set_luma(x, y, source.luma(x, y));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
+
     use super::{SleepRenderError, SleepView, render_sleep};
     use crate::{
-        image::{MonochromeBitmap, MonochromeImage, Size},
+        image::{PackedBitmap, PackedImage, READER_DEPTH, Size},
         power::BatteryStatus,
     };
-    use std::vec;
+    use std::{vec, vec::Vec};
 
-    #[test]
-    fn cover_frame_contains_only_the_scaled_cover_and_white_margins() {
-        let cover_bytes = vec![0xAA; 176 * 264 / 8];
-        let cover = MonochromeBitmap::new(Size::new(176, 264).unwrap(), &cover_bytes).unwrap();
-        let mut bytes = vec![0xFF; 48_000];
-        let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
-        render_sleep(SleepView::book_cover(cover), &mut frame).unwrap();
+    fn four_tone_frame() -> Vec<u8> {
+        let size = Size::new(480, 800).unwrap();
+        let mut bytes = vec![0xff; READER_DEPTH.byte_len(size).unwrap()];
+        let mut frame = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
         for y in 0..800 {
             for x in 0..480 {
-                let expected = (40..760).contains(&y)
-                    && cover.pixel_is_black(x * 176 / 480, (y - 40) * 264 / 720);
-                assert_eq!(frame.pixel_is_black(x, y), expected, "pixel {x}, {y}");
+                frame.set_luma(x, y, [0, 85, 170, 255][x / 120]);
             }
+        }
+        bytes
+    }
+
+    #[test]
+    fn cover_frame_preserves_every_source_tone_without_chrome() {
+        let size = Size::new(480, 800).unwrap();
+        let source_bytes = four_tone_frame();
+        let source = PackedBitmap::new(size, READER_DEPTH, &source_bytes).unwrap();
+        let mut bytes = vec![0; READER_DEPTH.byte_len(size).unwrap()];
+        let mut frame = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
+
+        render_sleep(SleepView::book_cover(source), &mut frame).unwrap();
+
+        for x in [0, 119, 120, 239, 240, 359, 360, 479] {
+            assert_eq!(frame.luma(x, 400), [0, 85, 170, 255][x / 120]);
         }
     }
 
     #[test]
+    fn custom_frame_preserves_every_source_tone() {
+        let size = Size::new(480, 800).unwrap();
+        let source_bytes = four_tone_frame();
+        let source = PackedBitmap::new(size, READER_DEPTH, &source_bytes).unwrap();
+        let mut bytes = vec![0; READER_DEPTH.byte_len(size).unwrap()];
+        let mut frame = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
+
+        render_sleep(SleepView::custom(source), &mut frame).unwrap();
+
+        assert_eq!(
+            [30, 150, 270, 390].map(|x| frame.luma(x, 400)),
+            [0, 85, 170, 255]
+        );
+    }
+
+    #[test]
     fn renders_builtin_fallback() {
-        let mut bytes = vec![0xFF; 48_000];
-        let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        let size = Size::new(480, 800).unwrap();
+        let mut bytes = vec![0xff; READER_DEPTH.byte_len(size).unwrap()];
+        let mut frame = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
+
         render_sleep(
             SleepView::built_in("Position saved", BatteryStatus::default()),
             &mut frame,
         )
         .unwrap();
-        assert!(bytes.iter().any(|byte| *byte != 0xFF));
+
+        assert!(bytes.iter().any(|byte| *byte != 0xff));
     }
 
     #[test]
-    fn custom_image_requires_an_exact_frame() {
-        let image_bytes = vec![0xAA; 176 * 264 / 8];
-        let image = MonochromeBitmap::new(Size::new(176, 264).unwrap(), &image_bytes).unwrap();
-        let mut bytes = vec![0xFF; 48_000];
-        let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+    fn image_views_require_an_exact_frame() {
+        let image_bytes = vec![0xaa; 176 * 264 / 8];
+        let image = PackedBitmap::monochrome(Size::new(176, 264).unwrap(), &image_bytes).unwrap();
+        let size = Size::new(480, 800).unwrap();
+        let mut bytes = vec![0xff; READER_DEPTH.byte_len(size).unwrap()];
+        let mut frame = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
+
         assert_eq!(
             render_sleep(SleepView::custom(image), &mut frame),
             Err(SleepRenderError::ImageSizeMismatch {
+                actual: Size::new(176, 264).unwrap()
+            })
+        );
+        assert_eq!(
+            render_sleep(SleepView::book_cover(image), &mut frame),
+            Err(SleepRenderError::CoverSizeMismatch {
                 actual: Size::new(176, 264).unwrap()
             })
         );

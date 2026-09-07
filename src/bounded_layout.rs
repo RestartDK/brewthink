@@ -1,6 +1,6 @@
 use crate::{
     app::ReaderPreferences,
-    bounded_xml::{FixedString, XmlError, XmlEvent, XmlReader, decode_entities},
+    bounded_xml::{FixedString, XmlError, XmlEvent, XmlReader, XmlText},
     reader::{ReaderStyle, ReaderTheme},
 };
 
@@ -51,6 +51,21 @@ impl BoundedPage {
         }
     }
 
+    #[cfg(any(target_arch = "riscv32", test))]
+    pub(crate) unsafe fn initialize_in_place(page: *mut Self) {
+        // SAFETY: the caller provides writable aligned storage; every field is initialized.
+        unsafe {
+            let lines = core::ptr::addr_of_mut!((*page).lines).cast::<Option<BoundedReaderLine>>();
+            for index in 0..MAX_PAGE_LINES {
+                lines.add(index).write(None);
+            }
+            core::ptr::addr_of_mut!((*page).line_count).write(0);
+            core::ptr::addr_of_mut!((*page).page_index).write(0);
+            core::ptr::addr_of_mut!((*page).page_count).write(0);
+            core::ptr::addr_of_mut!((*page).chapter_title).write(FixedString::new());
+        }
+    }
+
     fn reset(&mut self, requested_page: usize) {
         for line in &mut self.lines {
             *line = None;
@@ -83,6 +98,25 @@ pub enum LayoutError {
     Xml(XmlError),
     PageOutOfBounds,
     TooManyLines,
+}
+
+impl core::fmt::Display for LayoutError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Xml(error) => write!(f, "{error}"),
+            Self::PageOutOfBounds => f.write_str("reader page is out of bounds"),
+            Self::TooManyLines => f.write_str("reader page exceeds line capacity"),
+        }
+    }
+}
+
+impl core::error::Error for LayoutError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::Xml(error) => Some(error),
+            Self::PageOutOfBounds | Self::TooManyLines => None,
+        }
+    }
 }
 
 impl From<XmlError> for LayoutError {
@@ -121,9 +155,7 @@ pub fn layout_xhtml_page_into(
             XmlEvent::Start(tag) => {
                 let name = tag.local_name();
                 if hidden_depth > 0 {
-                    if !tag.is_empty() {
-                        hidden_depth += 1;
-                    }
+                    hidden_depth += 1;
                     continue;
                 }
                 if name == "body" {
@@ -134,9 +166,7 @@ pub fn layout_xhtml_page_into(
                     continue;
                 }
                 if matches!(name, "script" | "style") {
-                    if !tag.is_empty() {
-                        hidden_depth = 1;
-                    }
+                    hidden_depth = 1;
                     continue;
                 }
                 match name {
@@ -170,7 +200,7 @@ pub fn layout_xhtml_page_into(
                     _ => {}
                 }
             }
-            XmlEvent::Text(text) if in_body && hidden_depth == 0 => sink.write_encoded(text)?,
+            XmlEvent::Text(text) if in_body && hidden_depth == 0 => sink.write_text(text)?,
             XmlEvent::End(name) => {
                 if hidden_depth > 0 {
                     hidden_depth -= 1;
@@ -235,6 +265,9 @@ struct PageSink<'a> {
     page: &'a mut BoundedPage,
     current: FixedString<MAX_READER_LINE_BYTES>,
     current_width: usize,
+    word: FixedString<MAX_READER_LINE_BYTES>,
+    word_width: usize,
+    previous_cr: bool,
     style: ReaderStyle,
     pending_space: bool,
     emitted_any: bool,
@@ -255,6 +288,9 @@ impl<'a> PageSink<'a> {
             page,
             current: FixedString::new(),
             current_width: 0,
+            word: FixedString::new(),
+            word_width: 0,
+            previous_cr: false,
             style: ReaderStyle::Body,
             pending_space: false,
             emitted_any: false,
@@ -265,6 +301,7 @@ impl<'a> PageSink<'a> {
         self.line_break(false)?;
         self.style = style;
         self.pending_space = false;
+        self.previous_cr = false;
         Ok(())
     }
 
@@ -275,11 +312,18 @@ impl<'a> PageSink<'a> {
         }
         self.style = ReaderStyle::Body;
         self.pending_space = false;
+        self.previous_cr = false;
         Ok(())
     }
 
     fn write_encoded(&mut self, value: &str) -> Result<(), LayoutError> {
-        decode_entities(value, |character| self.write_character(character))?;
+        self.write_text(XmlText::Encoded(value))
+    }
+
+    fn write_text(&mut self, text: XmlText<'_>) -> Result<(), LayoutError> {
+        for character in text {
+            self.write_character(character?)?;
+        }
         Ok(())
     }
 
@@ -290,36 +334,96 @@ impl<'a> PageSink<'a> {
         Ok(())
     }
 
-    fn write_character(&mut self, character: char) -> Result<(), XmlError> {
-        if character.is_whitespace() {
+    fn write_character(&mut self, character: char) -> Result<(), LayoutError> {
+        if self.style == ReaderStyle::Preformatted {
+            return self.write_preformatted(character);
+        }
+        if matches!(character, ' ' | '\t' | '\r' | '\n') {
+            self.flush_word()?;
             self.pending_space = !self.current.is_empty();
             return Ok(());
         }
-        let line_width = self.theme.line_width(self.style);
-        let character_width = self.theme.character_width(self.style, character);
+        let width = self.theme.character_width(self.style, character);
+        if !self.word.is_empty()
+            && (self.word_width + width > self.theme.line_width(self.style)
+                || self.word.as_str().len() + character.len_utf8() > MAX_READER_LINE_BYTES)
+        {
+            self.flush_word()?;
+        }
+        self.word.push(character)?;
+        self.word_width += width;
+        Ok(())
+    }
+
+    fn flush_word(&mut self) -> Result<(), LayoutError> {
+        if self.word.is_empty() {
+            return Ok(());
+        }
+        let word = core::mem::take(&mut self.word);
+        let width = core::mem::replace(&mut self.word_width, 0);
+        let space = usize::from(self.pending_space && !self.current.is_empty());
+        if !self.current.is_empty()
+            && (self.current_width + space * self.theme.character_width(self.style, ' ') + width
+                > self.theme.line_width(self.style)
+                || self.current.as_str().len() + space + word.as_str().len()
+                    > MAX_READER_LINE_BYTES)
+        {
+            self.emit_current(false)?;
+        }
         if self.pending_space && !self.current.is_empty() {
-            let space_width = self.theme.character_width(self.style, ' ');
-            if self.current_width + space_width + character_width > line_width {
-                self.line_break(false).map_err(layout_to_xml)?;
-            } else {
-                self.current.push(' ')?;
-                self.current_width += space_width;
-            }
+            self.current.push(' ')?;
+            self.current_width += self.theme.character_width(self.style, ' ');
         }
         self.pending_space = false;
-        if !self.current.is_empty() && self.current_width + character_width > line_width {
-            self.line_break(false).map_err(layout_to_xml)?;
+        self.current.push_str(word.as_str())?;
+        self.current_width += width;
+        Ok(())
+    }
+
+    fn write_preformatted(&mut self, character: char) -> Result<(), LayoutError> {
+        if self.previous_cr && character == '\n' {
+            self.previous_cr = false;
+            return Ok(());
+        }
+        self.previous_cr = character == '\r';
+        match character {
+            '\r' | '\n' => {
+                self.line_break(true)?;
+            }
+            '\t' => {
+                let spaces = 4 - self.current.as_str().chars().count() % 4;
+                for _ in 0..spaces {
+                    self.push_preformatted(' ')?;
+                }
+            }
+            character => self.push_preformatted(character)?,
+        }
+        Ok(())
+    }
+
+    fn push_preformatted(&mut self, character: char) -> Result<(), LayoutError> {
+        let width = self.theme.character_width(self.style, character);
+        if !self.current.is_empty()
+            && (self.current_width + width > self.theme.line_width(self.style)
+                || self.current.as_str().len() + character.len_utf8() > MAX_READER_LINE_BYTES)
+        {
+            self.emit_current(false)?;
         }
         self.current.push(character)?;
-        self.current_width += character_width;
+        self.current_width += width;
         Ok(())
     }
 
     fn line_is_empty(&self) -> bool {
-        self.current.is_empty()
+        self.current.is_empty() && self.word.is_empty()
     }
 
     fn line_break(&mut self, force_empty: bool) -> Result<bool, LayoutError> {
+        self.flush_word()?;
+        self.emit_current(force_empty)
+    }
+
+    fn emit_current(&mut self, force_empty: bool) -> Result<bool, LayoutError> {
         self.pending_space = false;
         if self.current.is_empty() && !force_empty {
             return Ok(false);
@@ -397,12 +501,8 @@ fn copy_fixed<const CAPACITY: usize>(value: &str) -> Result<FixedString<CAPACITY
     Ok(output)
 }
 
-fn layout_to_xml(error: LayoutError) -> XmlError {
-    match error {
-        LayoutError::Xml(error) => error,
-        LayoutError::PageOutOfBounds | LayoutError::TooManyLines => XmlError::OutputFull,
-    }
-}
+#[cfg(test)]
+mod regression_tests;
 
 #[cfg(test)]
 mod tests {

@@ -1,3 +1,5 @@
+use embedded_graphics::pixelcolor::Gray8;
+
 use crate::fonts::{
     BitmapFont,
     noto_sans::{
@@ -18,6 +20,11 @@ pub const ROW_CORNERS: embedded_graphics::geometry::Size =
 pub const PANEL_CORNERS: embedded_graphics::geometry::Size =
     embedded_graphics::geometry::Size::new(28, 28);
 pub const FRONT_BUTTON_CENTERS: [i32; 4] = [100, 192, 300, 392];
+pub const CHROME_INK: Gray8 = Gray8::new(0);
+pub const CHROME_PAPER: Gray8 = Gray8::new(255);
+pub const SELECTION_BACKGROUND: Gray8 = Gray8::new(170);
+pub const SELECTION_FOREGROUND: Gray8 = CHROME_INK;
+pub const SELECTION_OUTLINE: Gray8 = CHROME_INK;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TextRole {

@@ -77,16 +77,18 @@ fn assert_device_title(encoded: &[u8], expected: &str) {
     let mut package = Box::new(DevicePackageScratch::new());
     let mut inflater = Box::new(InflateWorkspace::new());
     let mut buffer = Box::new([0; MAX_DEVICE_RESOURCE_BYTES]);
+    let mut publication = Box::new(DevicePublication::new());
     let book = DeviceEpub::open(
         Bytes(encoded),
         &mut zip,
         &mut package,
         &mut inflater,
         &mut buffer,
+        &mut publication,
     )
     .unwrap();
     let mut titles = [FixedString::new(); MAX_DEVICE_SPINE_ITEMS];
-    book.read_chapter_titles(&mut titles, buffer.as_mut(), &mut inflater)
-        .ok();
+    let result = book.read_chapter_titles(&mut titles, buffer.as_mut(), &mut inflater);
+    assert!(result.is_ok() || expected.is_empty());
     assert_eq!(titles[0].as_str(), expected);
 }

@@ -8,7 +8,7 @@ use crate::{
         ReaderPreferences, SettingsItem, SettingsState, SleepScreenMode,
     },
     files::{FileItem, FileKind},
-    image::{MonochromeBitmap, MonochromeImage, Size},
+    image::{PackedBitmap, PackedImage, READER_DEPTH, Size},
     input::UsbState,
     library::ShelfBook,
     power::BatteryStatus,
@@ -20,7 +20,8 @@ use crate::{
 
 const WIDTH: usize = 480;
 const HEIGHT: usize = 800;
-const FRAME_BYTES: usize = WIDTH * HEIGHT / 8;
+const MONO_FRAME_BYTES: usize = WIDTH * HEIGHT / 8;
+const FRAME_BYTES: usize = MONO_FRAME_BYTES * READER_DEPTH.bits();
 const PBM_HEADER: &[u8] = b"P4\n480 800\n";
 
 #[test]
@@ -145,7 +146,7 @@ fn storage_and_sleep_frames_match_the_pinned_contract() {
             |target| {
                 for y in 0..HEIGHT {
                     for x in 0..WIDTH {
-                        target.set_pixel(x, y, (x + y) % 2 == 0);
+                        target.set_luma(x, y, if (x + y) % 2 == 0 { 0 } else { 255 });
                     }
                 }
                 crate::image_viewer::render_image_viewer("cover.jpg", selected, battery, target)
@@ -181,7 +182,7 @@ fn storage_and_sleep_frames_match_the_pinned_contract() {
         .unwrap();
     });
     let cover_bytes = [0xAA; 176 * 264 / 8];
-    let cover = MonochromeBitmap::new(Size::new(176, 264).unwrap(), &cover_bytes).unwrap();
+    let cover = PackedBitmap::monochrome(Size::new(176, 264).unwrap(), &cover_bytes).unwrap();
     for (name, mode, custom_image) in [
         (
             "settings-sleep-auto",
@@ -223,11 +224,15 @@ fn storage_and_sleep_frames_match_the_pinned_contract() {
         });
     }
     assert_frame("sleep-cover", |target| {
-        render_app(AppFrame::Sleep(SleepView::book_cover(cover)), target).unwrap();
+        let bytes = std::vec![0xaa; FRAME_BYTES];
+        let bitmap =
+            PackedBitmap::new(Size::new(WIDTH, HEIGHT).unwrap(), READER_DEPTH, &bytes).unwrap();
+        render_app(AppFrame::Sleep(SleepView::book_cover(bitmap)), target).unwrap();
     });
     assert_frame("sleep-custom", |target| {
-        let bytes = std::vec![0xAA; FRAME_BYTES];
-        let bitmap = MonochromeBitmap::new(Size::new(WIDTH, HEIGHT).unwrap(), &bytes).unwrap();
+        let bytes = std::vec![0xaa; FRAME_BYTES];
+        let bitmap =
+            PackedBitmap::new(Size::new(WIDTH, HEIGHT).unwrap(), READER_DEPTH, &bytes).unwrap();
         render_app(AppFrame::Sleep(SleepView::custom(bitmap)), target).unwrap();
     });
 }
@@ -237,8 +242,8 @@ fn populated_shelf_and_settings_rows_match_the_pinned_contract() {
     let battery = BatteryStatus::from_percent(82, UsbState::Disconnected);
     let half_bytes = [0xAA; 88 * 132 / 8];
     let full_bytes = [0x33; 176 * 264 / 8];
-    let half = MonochromeBitmap::new(Size::new(88, 132).unwrap(), &half_bytes).unwrap();
-    let full = MonochromeBitmap::new(Size::new(176, 264).unwrap(), &full_bytes).unwrap();
+    let half = PackedBitmap::monochrome(Size::new(88, 132).unwrap(), &half_bytes).unwrap();
+    let full = PackedBitmap::monochrome(Size::new(176, 264).unwrap(), &full_bytes).unwrap();
     let covers = [Some(half), None, Some(half), Some(full), Some(full)];
     let books = covers.map(|cover| ShelfBook::new("A Book", "An Author", cover));
     for selected in [3, 4] {
@@ -306,14 +311,25 @@ fn reader_drawer_rows_match_the_pinned_contract() {
     }
 }
 
-fn assert_frame(name: &str, render: impl FnOnce(&mut MonochromeImage<'_>)) {
+fn assert_frame(name: &str, render: impl FnOnce(&mut PackedImage<'_>)) {
+    let size = Size::new(WIDTH, HEIGHT).unwrap();
     let mut bytes = std::vec![0xFF; FRAME_BYTES];
-    let mut image = MonochromeImage::new(Size::new(WIDTH, HEIGHT).unwrap(), &mut bytes).unwrap();
+    let mut image = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
     render(&mut image);
 
-    let mut encoded = std::vec::Vec::with_capacity(PBM_HEADER.len() + FRAME_BYTES);
+    let mut encoded = std::vec::Vec::with_capacity(PBM_HEADER.len() + MONO_FRAME_BYTES);
     encoded.extend_from_slice(PBM_HEADER);
-    encoded.extend(bytes.iter().map(|byte| !byte));
+    for y in 0..HEIGHT {
+        for byte_x in 0..WIDTH / 8 {
+            let mut byte = 0;
+            for bit in 0..8 {
+                if image.luma(byte_x * 8 + bit, y) == 0 {
+                    byte |= 0x80 >> bit;
+                }
+            }
+            encoded.push(byte);
+        }
+    }
 
     let path = fixture_path(name);
     if std::env::var_os("BLESS_UI_FRAMES").is_some() {

@@ -9,7 +9,7 @@ use embedded_layout::{
 
 use crate::{
     app::FilesState,
-    image::{MonochromeImage, Size},
+    image::{PackedImage, Size},
     power::BatteryStatus,
     ui::{
         AppBar, CONTENT_LEFT, CommandBar, FRAME_HEIGHT, FRAME_WIDTH, FileRow, FixedText,
@@ -69,7 +69,7 @@ pub fn render_files(
     state: FilesState,
     files: &[FileItem<'_>],
     battery: BatteryStatus,
-    target: &mut MonochromeImage<'_>,
+    target: &mut PackedImage<'_>,
 ) -> Result<(), FilesRenderError> {
     let expected =
         Size::new(FRAME_WIDTH, FRAME_HEIGHT).expect("files frame dimensions are non-zero");
@@ -143,30 +143,55 @@ pub fn render_files(
 mod tests {
     extern crate std;
 
+    use embedded_graphics::pixelcolor::GrayColor;
+
     use super::{FileItem, FileKind, render_files};
     use crate::{
         app::FilesState,
-        image::{MonochromeImage, Size},
+        image::{PackedImage, READER_DEPTH, Size},
         input::UsbState,
         power::BatteryStatus,
+        ui::SELECTION_BACKGROUND,
     };
 
     #[test]
-    fn renders_selected_files_with_sizes() {
-        let mut bytes = std::vec![0xFF; 480 * 800 / 8];
-        let mut image = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
-        render_files(
-            FilesState::new(2),
-            &[
-                FileItem::new("alice.epub", 12_000, FileKind::Epub),
-                FileItem::new("cover.jpg", 24_000, FileKind::Jpeg),
-            ],
-            BatteryStatus::from_percent(42, UsbState::Disconnected),
-            &mut image,
-        )
-        .unwrap();
-        assert!(image.pixel_is_black(24, 100));
-        assert!(!image.pixel_is_black(18, 86));
-        assert!(!image.pixel_is_black(24, 176));
+    fn every_file_row_uses_gray_selection_with_black_foreground_and_outline() {
+        let files = [
+            FileItem::new("alice.epub", 12_000, FileKind::Epub),
+            FileItem::new("cover.jpg", 24_000, FileKind::Jpeg),
+            FileItem::new("diagram.png", 36_000, FileKind::Png),
+        ];
+        let tops = [86, 162, 238];
+        let foreground = [(46, 110), (36, 184), (36, 260)];
+        let size = Size::new(480, 800).unwrap();
+        let battery = BatteryStatus::from_percent(42, UsbState::Disconnected);
+
+        for index in 0..files.len() {
+            let mut bytes = std::vec![0xFF; READER_DEPTH.byte_len(size).unwrap()];
+            let mut image = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
+            render_files(
+                FilesState::with_selected(files.len(), index).unwrap(),
+                &files,
+                battery,
+                &mut image,
+            )
+            .unwrap();
+
+            assert_eq!(
+                image.luma(450, tops[index] + 31),
+                SELECTION_BACKGROUND.luma(),
+                "file row {index} lost its selection fill"
+            );
+            assert_eq!(
+                image.luma(240, tops[index]),
+                0,
+                "file row {index} lost its outline"
+            );
+            assert_eq!(
+                image.luma(foreground[index].0, foreground[index].1),
+                0,
+                "file row {index} lost its black icon"
+            );
+        }
     }
 }

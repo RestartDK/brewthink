@@ -37,6 +37,10 @@ jobs:
           - command: test
             args: --lib --features device-reader,epub --target x86_64-unknown-linux-gnu
           - command: test
+            args: --lib --features device-reader,grayscale-bench --target x86_64-unknown-linux-gnu
+          - command: clippy
+            args: --lib --bin brewthink --features grayscale-bench -- -D warnings
+          - command: test
             args: --features device-control --bin device-control --target x86_64-unknown-linux-gnu
           - command: clippy
             args: --lib --bin brewthink --features device-reader -- -D warnings
@@ -57,6 +61,22 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: Run command
         run: cargo ${{ matrix.action.command }} ${{ matrix.action.args }}
+
+  host-protocol:
+    name: Host protocol and image tools
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rust-src, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --target x86_64-unknown-linux-gnu --features device-control,host-image-tools --bin device-control --bin prepare-image
+      - run: python3 -m unittest discover -s tools -p 'test_*.py' -v
+        env:
+          DEVICE_CONTROL_BIN: target/x86_64-unknown-linux-gnu/debug/device-control
+          PREPARE_IMAGE_BIN: target/x86_64-unknown-linux-gnu/debug/prepare-image
+      - run: cargo clippy --target x86_64-unknown-linux-gnu --features device-control,host-image-tools --bin device-control --bin prepare-image -- -D warnings
 
   reader-stack:
     name: Reader stack budget

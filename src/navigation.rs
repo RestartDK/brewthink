@@ -1,4 +1,4 @@
-use crate::bounded_xml::{FixedString, XmlError, XmlEvent, XmlReader, decode_entities};
+use crate::bounded_xml::{FixedString, XmlError, XmlEvent, XmlReader};
 
 pub const CHAPTER_TITLE_BYTES: usize = 64;
 
@@ -21,7 +21,6 @@ pub fn read_entries(encoded: &[u8], mut entry: impl FnMut(&str, &str)) -> Result
                 }
                 let name = tag.local_name();
                 if scope.is_none()
-                    && !tag.is_empty()
                     && (name == "navMap"
                         || (name == "nav"
                             && tag
@@ -34,7 +33,7 @@ pub fn read_entries(encoded: &[u8], mut entry: impl FnMut(&str, &str)) -> Result
                     ncx = name == "navMap";
                 }
                 if scope.is_some() {
-                    if !ncx && name == "a" && !tag.is_empty() {
+                    if !ncx && name == "a" {
                         href = FixedString::try_from_str(tag.attribute("href")?.unwrap_or(""))?;
                         title.clear();
                         truncated = false;
@@ -43,7 +42,7 @@ pub fn read_entries(encoded: &[u8], mut entry: impl FnMut(&str, &str)) -> Result
                     } else if ncx && name == "navPoint" {
                         title.clear();
                         truncated = false;
-                    } else if ncx && name == "text" && !tag.is_empty() {
+                    } else if ncx && name == "text" {
                         text = Some(level);
                     } else if ncx && name == "content" {
                         let src =
@@ -54,17 +53,15 @@ pub fn read_entries(encoded: &[u8], mut entry: impl FnMut(&str, &str)) -> Result
                         }
                     }
                 }
-                if !tag.is_empty() {
-                    depth = level;
-                }
+                depth = level;
             }
             XmlEvent::Text(value) if text.is_some() => {
-                decode_entities(value, |character| {
+                for character in value {
+                    let character = character?;
                     if !truncated && title.push(character).is_err() {
                         truncated = true;
                     }
-                    Ok(())
-                })?;
+                }
             }
             XmlEvent::End(name) => {
                 if depth == 0 {

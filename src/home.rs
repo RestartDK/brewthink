@@ -3,7 +3,7 @@ use embedded_layout::View;
 
 use crate::{
     app::{HomeItem, HomeState},
-    image::{MonochromeImage, Size},
+    image::{PackedImage, Size},
     power::BatteryStatus,
     ui::{
         AppBar, CONTENT_LEFT, CommandBar, FRAME_HEIGHT, FRAME_WIDTH, FrameTarget, Icon, MenuRow,
@@ -19,7 +19,7 @@ pub enum HomeRenderError {
 pub fn render_home(
     state: HomeState,
     battery: BatteryStatus,
-    target: &mut MonochromeImage<'_>,
+    target: &mut PackedImage<'_>,
 ) -> Result<(), HomeRenderError> {
     let expected =
         Size::new(FRAME_WIDTH, FRAME_HEIGHT).expect("home frame dimensions are non-zero");
@@ -64,26 +64,44 @@ fn menu_row(item: HomeItem, selected: HomeItem) -> MenuRow<'static> {
 mod tests {
     extern crate std;
 
+    use embedded_graphics::pixelcolor::GrayColor;
+
     use super::render_home;
     use crate::{
-        app::HomeState,
-        image::{MonochromeImage, Size},
+        app::{HomeItem, HomeState},
+        image::{PackedImage, READER_DEPTH, Size},
         input::UsbState,
         power::BatteryStatus,
+        ui::SELECTION_BACKGROUND,
     };
 
     #[test]
-    fn renders_home_into_the_exact_x4_frame() {
-        let mut bytes = std::vec![0xFF; 480 * 800 / 8];
-        let mut image = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
-        render_home(
-            HomeState::new(),
-            BatteryStatus::from_percent(82, UsbState::Disconnected),
-            &mut image,
-        )
-        .unwrap();
-        assert!(!image.pixel_is_black(18, 58));
-        assert!(image.pixel_is_black(24, 120));
-        assert!(!image.pixel_is_black(24, 200));
+    fn every_home_row_uses_gray_selection_with_black_foreground_and_outline() {
+        let size = Size::new(480, 800).unwrap();
+        let battery = BatteryStatus::from_percent(82, UsbState::Disconnected);
+        let tops = [106, 186, 266];
+        let foreground = [(50, 137), (40, 231), (40, 298)];
+
+        for (index, item) in HomeItem::ALL.into_iter().enumerate() {
+            let mut bytes = std::vec![0xFF; READER_DEPTH.byte_len(size).unwrap()];
+            let mut image = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
+            render_home(HomeState::with_selected(item), battery, &mut image).unwrap();
+
+            assert_eq!(
+                image.luma(450, tops[index] + 38),
+                SELECTION_BACKGROUND.luma(),
+                "home row {index} lost its selection fill"
+            );
+            assert_eq!(
+                image.luma(240, tops[index]),
+                0,
+                "home row {index} lost its outline"
+            );
+            assert_eq!(
+                image.luma(foreground[index].0, foreground[index].1),
+                0,
+                "home row {index} lost its black icon"
+            );
+        }
     }
 }

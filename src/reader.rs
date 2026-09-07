@@ -6,7 +6,7 @@ use embedded_graphics::{
         MonoFont, MonoTextStyle,
         ascii::{FONT_4X6, FONT_6X9, FONT_6X12, FONT_7X13, FONT_7X14, FONT_9X18_BOLD, FONT_10X20},
     },
-    pixelcolor::BinaryColor,
+    pixelcolor::Gray8,
     prelude::DrawTarget,
     primitives::Rectangle,
     text::{Baseline, Text},
@@ -21,7 +21,7 @@ use crate::{
             NOTO_SERIF_16_BOLD, NOTO_SERIF_16_REGULAR,
         },
     },
-    image::{MonochromeImage, Size},
+    image::{PackedImage, Size},
     power::BatteryStatus,
     ui::{AppBar, CommandBar, FrameTarget, Label, TextRole, draw_reader_drawer, ui},
 };
@@ -84,18 +84,18 @@ impl ReaderFace {
 
     fn draw<D>(self, text: &str, position: Point, target: &mut D) -> Result<(), D::Error>
     where
-        D: DrawTarget<Color = BinaryColor>,
+        D: DrawTarget<Color = Gray8>,
     {
         match self {
             Self::Monospace(font) => Text::with_baseline(
                 text,
                 position,
-                MonoTextStyle::new(font, BinaryColor::On),
+                MonoTextStyle::new(font, Gray8::new(0)),
                 Baseline::Top,
             )
             .draw(target)
             .map(|_| ()),
-            Self::Bitmap(font) => font.draw(text, position, BinaryColor::On, target),
+            Self::Bitmap(font) => font.draw(text, position, Gray8::new(0), target),
         }
     }
 }
@@ -186,7 +186,7 @@ impl ReaderTheme {
         target: &mut D,
     ) -> Result<(), D::Error>
     where
-        D: DrawTarget<Color = BinaryColor>,
+        D: DrawTarget<Color = Gray8>,
     {
         self.face(style).draw(text, position, target)
     }
@@ -265,7 +265,7 @@ pub enum ReaderRenderError {
 
 pub fn render_reader(
     view: ReaderView<'_>,
-    target: &mut MonochromeImage<'_>,
+    target: &mut PackedImage<'_>,
 ) -> Result<(), ReaderRenderError> {
     let expected =
         Size::new(FRAME_WIDTH, FRAME_HEIGHT).expect("reader frame dimensions are non-zero");
@@ -311,7 +311,7 @@ pub fn render_reader_error(
     book_title: &str,
     message: &str,
     battery: BatteryStatus,
-    target: &mut MonochromeImage<'_>,
+    target: &mut PackedImage<'_>,
 ) -> Result<(), ReaderRenderError> {
     let expected =
         Size::new(FRAME_WIDTH, FRAME_HEIGHT).expect("reader frame dimensions are non-zero");
@@ -368,7 +368,7 @@ impl View for ReaderContent<'_> {
 }
 
 impl Drawable for ReaderContent<'_> {
-    type Color = BinaryColor;
+    type Color = Gray8;
     type Output = ();
 
     fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
@@ -405,7 +405,7 @@ mod tests {
     };
     use crate::{
         app::{App, AppEffect, AppInput, ReaderPreferences},
-        image::{MonochromeImage, Size},
+        image::{PackedImage, READER_DEPTH, Size},
     };
 
     #[test]
@@ -430,8 +430,9 @@ mod tests {
             ReaderLine::new("Readable words survive reflow.", ReaderStyle::Body),
             ReaderLine::new("A quoted thought.", ReaderStyle::Quote),
         ];
-        let mut bytes = vec![0xFF; 48_000];
-        let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        let size = Size::new(480, 800).unwrap();
+        let mut bytes = vec![0xFF; READER_DEPTH.byte_len(size).unwrap()];
+        let mut frame = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
 
         render_reader(
             ReaderView::new(
@@ -446,13 +447,14 @@ mod tests {
         .unwrap();
 
         assert!(bytes.iter().any(|byte| *byte != 0xFF));
-        assert_eq!(bytes.len(), 48_000);
+        assert_eq!(bytes.len(), 96_000);
     }
 
     #[test]
     fn reading_chrome_is_absent_without_the_drawer() {
-        let mut bytes = vec![0; 48_000];
-        let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        let size = Size::new(480, 800).unwrap();
+        let mut bytes = vec![0; READER_DEPTH.byte_len(size).unwrap()];
+        let mut frame = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
         render_reader(
             ReaderView::new(
                 "A title that must stay hidden",
@@ -477,8 +479,9 @@ mod tests {
         let line = ReaderLine::new("line", ReaderStyle::Body);
         let theme = super::ReaderTheme::from_preferences(app.reader_preferences());
         let lines = vec![line; (BODY_BOTTOM - BODY_TOP) / theme.line_height(line.style()) + 1];
-        let mut bytes = vec![0xFF; 48_000];
-        let mut frame = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        let size = Size::new(480, 800).unwrap();
+        let mut bytes = vec![0xFF; READER_DEPTH.byte_len(size).unwrap()];
+        let mut frame = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
 
         assert_eq!(
             render_reader(

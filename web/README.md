@@ -1,6 +1,6 @@
 # Brewthink web simulator
 
-The simulator runs Brewthink's shared home, books, files, settings, reader, sleep state, EPUB package parser, cover decoder, and monochrome renderers in WebAssembly. The canvas is the exact 48,000-byte `480 × 800` frame shape used by the X4.
+The simulator runs Brewthink's shared home, books, files, settings, reader, sleep state, EPUB package parser, cover decoder, and grayscale renderers in WebAssembly. The canvas decodes the same 96,000-byte, four-shade `480 × 800` logical frame used by the X4 reader. Text and controls stay black and white. Simulated tones do not prove optical separation on the panel.
 
 ## Run locally
 
@@ -20,7 +20,7 @@ Use **Save frame PNG** to export the exact 480 × 800 canvas bitmap. The preview
 
 For UI iteration, keep `bun run dev` running and use its Rust hot reload. Do not use the physical device as the iteration loop. Do not judge bitmap text from CSS-scaled element screenshots.
 
-The Playwright walkthrough uses `tests/capture-frame.ts` to validate opaque black-and-white pixels and export them without resizing.
+The Playwright walkthrough uses `tests/capture-frame.ts` to accept only neutral logical values 0, 85, 170, and 255 and export them without resizing.
 
 ```bash
 BREWTHINK_WALKTHROUGH_DIR=../artifacts/ui-walkthrough bun run test:e2e
@@ -34,7 +34,7 @@ bun run build
 bun run test:e2e
 ```
 
-The browser tests cover Home, Books, Files, reader settings and reflow, rounded drawers, physical hint alignment, named navigation, whole-book endpoints, cover-only opening, optional-cover failures, sleep and resume, invalid input, narrow layouts, WCAG AA rules, and Rust-triggered WASM reloads. A synthetic 480 × 800 cover verifies every pixel to catch thumbnail enlargement or chrome overlays. The native decoder checks the same fixture. Regenerate the navigation/cover fixtures with `python3 scripts/generate-navigation-fixture.py` from the repository root.
+The browser tests cover Home, Books, Files, reader settings and reflow, the shared 2 × 2 shelf, rounded drawers, physical hint alignment, named navigation, whole-book endpoints, cover-only opening, optional-cover failures, sleep and resume, invalid input, narrow layouts, muted focus styles, WCAG AA rules, and Rust-triggered WASM reloads. The grayscale test requires exact neutral values 0, 85, 170, and 255 in image, cover, and sleep frames. A synthetic 480 × 800 cover verifies every pixel to catch thumbnail enlargement or chrome overlays. The native decoder checks the same fixture. `BREWTHINK_WALKTHROUGH_DIR` saves native-resolution canvas PNGs and a browser-shell screenshot. `BREWTHINK_WEB_PORT` selects an isolated test port. Regenerate the navigation and cover fixtures with `python3 scripts/generate-navigation-fixture.py` from the repository root.
 
 A private acceptance EPUB can be supplied without adding it to the repository:
 
