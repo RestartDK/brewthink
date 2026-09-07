@@ -8,7 +8,7 @@ use crate::{
         ReaderPreferences, SettingsItem, SettingsState, SleepScreenMode,
     },
     files::{FileItem, FileKind},
-    image::{PackedBitmap, PackedImage, Size},
+    image::{PackedBitmap, PackedImage, READER_DEPTH, Size},
     input::UsbState,
     library::ShelfBook,
     power::BatteryStatus,
@@ -20,7 +20,8 @@ use crate::{
 
 const WIDTH: usize = 480;
 const HEIGHT: usize = 800;
-const FRAME_BYTES: usize = WIDTH * HEIGHT / 8;
+const MONO_FRAME_BYTES: usize = WIDTH * HEIGHT / 8;
+const FRAME_BYTES: usize = MONO_FRAME_BYTES * READER_DEPTH.bits();
 const PBM_HEADER: &[u8] = b"P4\n480 800\n";
 
 #[test]
@@ -85,7 +86,6 @@ fn application_frames_match_the_pinned_contract() {
         .unwrap();
     });
 
-    let location = reader_location();
     let lines = [
         ReaderLine::new("A Declarative Reader", ReaderStyle::Heading),
         ReaderLine::new("The body follows the heading.", ReaderStyle::Body),
@@ -97,7 +97,6 @@ fn application_frames_match_the_pinned_contract() {
                 "The First Book",
                 "Chapter One",
                 &lines,
-                location,
                 ReaderPreferences::default(),
                 battery,
             )),
@@ -120,7 +119,7 @@ fn application_frames_match_the_pinned_contract() {
 
     assert_frame("sleep", |target| {
         render_app(
-            AppFrame::Sleep(SleepView::built_in("HOME POSITION SAVED", battery)),
+            AppFrame::Sleep(SleepView::built_in("Position saved", battery)),
             target,
         )
         .unwrap();
@@ -225,22 +224,16 @@ fn storage_and_sleep_frames_match_the_pinned_contract() {
         });
     }
     assert_frame("sleep-cover", |target| {
-        render_app(
-            AppFrame::Sleep(SleepView::book_cover(
-                "The First Book",
-                "Author One",
-                "POSITION SAVED",
-                cover,
-                battery,
-            )),
-            target,
-        )
-        .unwrap();
+        let bytes = std::vec![0xaa; FRAME_BYTES];
+        let bitmap =
+            PackedBitmap::new(Size::new(WIDTH, HEIGHT).unwrap(), READER_DEPTH, &bytes).unwrap();
+        render_app(AppFrame::Sleep(SleepView::book_cover(bitmap)), target).unwrap();
     });
     assert_frame("sleep-custom", |target| {
-        let bytes = std::vec![0xAA; FRAME_BYTES];
-        let bitmap = PackedBitmap::monochrome(Size::new(WIDTH, HEIGHT).unwrap(), &bytes).unwrap();
-        render_app(AppFrame::Sleep(SleepView::custom(bitmap, battery)), target).unwrap();
+        let bytes = std::vec![0xaa; FRAME_BYTES];
+        let bitmap =
+            PackedBitmap::new(Size::new(WIDTH, HEIGHT).unwrap(), READER_DEPTH, &bytes).unwrap();
+        render_app(AppFrame::Sleep(SleepView::custom(bitmap)), target).unwrap();
     });
 }
 
@@ -282,28 +275,61 @@ fn populated_shelf_and_settings_rows_match_the_pinned_contract() {
     }
 }
 
-fn reader_location() -> crate::app::ReadingLocation {
+#[test]
+fn reader_drawer_rows_match_the_pinned_contract() {
     let mut app = App::new(1);
+    assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
     assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
     assert!(matches!(
         app.input(AppInput::Confirm),
         AppEffect::LoadChapter { .. }
     ));
     assert_eq!(app.chapter_loaded(2, 3).unwrap(), AppEffect::Render);
-    let AppView::Reader(session) = app.view() else {
-        panic!("chapter load did not produce a reader view");
-    };
-    session.location()
+    app.input(AppInput::Confirm);
+    let lines = [ReaderLine::new("The page stays behind.", ReaderStyle::Body)];
+    for row in 0..crate::app::ReaderControl::ALL.len() {
+        let AppView::ReaderDrawer(drawer) = app.view() else {
+            panic!("drawer expected")
+        };
+        assert_frame(&std::format!("reader-drawer-{row}"), |target| {
+            render_app(
+                AppFrame::Reader(
+                    ReaderView::new(
+                        "The First Book",
+                        "Chapter one",
+                        &lines,
+                        app.reader_preferences(),
+                        app.battery(),
+                    )
+                    .with_drawer(drawer),
+                ),
+                target,
+            )
+            .unwrap();
+        });
+        app.input(AppInput::Move(crate::app::Direction::Down));
+    }
 }
 
 fn assert_frame(name: &str, render: impl FnOnce(&mut PackedImage<'_>)) {
+    let size = Size::new(WIDTH, HEIGHT).unwrap();
     let mut bytes = std::vec![0xFF; FRAME_BYTES];
-    let mut image = PackedImage::monochrome(Size::new(WIDTH, HEIGHT).unwrap(), &mut bytes).unwrap();
+    let mut image = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
     render(&mut image);
 
-    let mut encoded = std::vec::Vec::with_capacity(PBM_HEADER.len() + FRAME_BYTES);
+    let mut encoded = std::vec::Vec::with_capacity(PBM_HEADER.len() + MONO_FRAME_BYTES);
     encoded.extend_from_slice(PBM_HEADER);
-    encoded.extend(bytes.iter().map(|byte| !byte));
+    for y in 0..HEIGHT {
+        for byte_x in 0..WIDTH / 8 {
+            let mut byte = 0;
+            for bit in 0..8 {
+                if image.luma(byte_x * 8 + bit, y) == 0 {
+                    byte |= 0x80 >> bit;
+                }
+            }
+            encoded.push(byte);
+        }
+    }
 
     let path = fixture_path(name);
     if std::env::var_os("BLESS_UI_FRAMES").is_some() {

@@ -286,7 +286,19 @@ impl WebLibrary {
                     SettingsItem::ALL.len(),
                 )
             }
+            AppView::BookCover { book, .. } => {
+                let book = &self.books[book.index()];
+                let cover = book
+                    .cover
+                    .as_ref()
+                    .ok_or_else(|| JsValue::from_str("cover is unavailable"))?;
+                render_app(AppFrame::Cover(cover.frame.bitmap()), &mut frame).map_err(js_error)?;
+                FrameMetadata::book("cover", book)
+            }
             AppView::Reader(session) => self.render_reader(session.location(), &mut frame)?,
+            AppView::ReaderDrawer(drawer) => {
+                self.render_reader(drawer.session().location(), &mut frame)?
+            }
             AppView::Image(image) => self.render_image(image, &mut frame)?,
             AppView::Sleeping { resume } => self.render_sleep(resume, &mut frame)?,
             AppView::Error { book, .. } => {
@@ -367,6 +379,9 @@ impl WebLibrary {
                         Err(_) => return false,
                     }
                 }
+                AppEffect::Render if matches!(self.app.view(), AppView::BookCover { book, .. } if self.books[book.index()].cover.is_none()) => {
+                    self.app.input(AppInput::Confirm)
+                }
                 AppEffect::None | AppEffect::Render | AppEffect::EnterDeepSleep { .. } => {
                     return changed;
                 }
@@ -382,7 +397,7 @@ impl WebLibrary {
                 ShelfBook::new(
                     &book.title,
                     &book.creator,
-                    book.cover.as_ref().map(OwnedCover::bitmap),
+                    book.cover.as_ref().map(|cover| cover.thumbnail.bitmap()),
                 )
             })
             .collect::<Vec<_>>();
@@ -468,11 +483,7 @@ impl WebLibrary {
         target: &mut PackedImage<'_>,
     ) -> Result<FrameMetadata, JsValue> {
         let image = &self.images[image.index()];
-        render_app(
-            AppFrame::Sleep(SleepView::custom(image.bitmap(), self.app.battery())),
-            target,
-        )
-        .map_err(js_error)?;
+        render_app(AppFrame::Sleep(SleepView::custom(image.bitmap())), target).map_err(js_error)?;
         render_image_viewer(
             &image.name,
             self.app.selected_sleep_image() == Some(ImageId::new(image.index)),
@@ -506,19 +517,18 @@ impl WebLibrary {
             .iter()
             .map(|line| ReaderLine::new(&line.text, line.style))
             .collect::<Vec<_>>();
-        render_app(
-            AppFrame::Reader(ReaderView::new(
-                &book.title,
-                &chapter.title,
-                &lines,
-                location,
-                self.app.reader_preferences(),
-                self.app.battery(),
-            )),
-            target,
-        )
-        .map_err(js_error)?;
-        Ok(FrameMetadata {
+        let chapter_title = match self.app.view() {
+            AppView::ReaderDrawer(drawer) => &book.chapters[drawer.chapter()].title,
+            _ => &chapter.title,
+        };
+        let mut view = ReaderView::new(
+            &book.title,
+            chapter_title,
+            &lines,
+            self.app.reader_preferences(),
+            self.app.battery(),
+        );
+        let mut metadata = FrameMetadata {
             screen: "reader",
             title: book.title.clone(),
             creator: book.creator.clone(),
@@ -528,7 +538,21 @@ impl WebLibrary {
             page_count: location.page_count(),
             chapter: location.spine_index(),
             chapter_count: location.spine_count(),
-        })
+        };
+        if let AppView::ReaderDrawer(drawer) = self.app.view() {
+            view = view.with_drawer(drawer);
+            metadata.screen = "reader-drawer";
+            metadata.creator = match drawer.selected() {
+                brewthink::app::ReaderControl::Chapter => format!("Chapter: {chapter_title}"),
+                brewthink::app::ReaderControl::Position => {
+                    format!("Book position: {}%", drawer.position().percent())
+                }
+                other => other.label().into(),
+            };
+            metadata.chapter = drawer.chapter();
+        }
+        render_app(AppFrame::Reader(view), target).map_err(js_error)?;
+        Ok(metadata)
     }
 
     fn render_sleep(
@@ -542,26 +566,23 @@ impl WebLibrary {
                 page_index,
                 ..
             } => format!(
-                "CHAPTER {} · PAGE {} · POSITION SAVED",
+                "Chapter {} · page {} · position saved",
                 spine_index + 1,
                 page_index + 1
             ),
-            ResumePoint::Home { .. } => "HOME POSITION SAVED".into(),
-            ResumePoint::Books { .. } => "BOOKS POSITION SAVED".into(),
-            ResumePoint::Files { .. } => "FILES POSITION SAVED".into(),
-            ResumePoint::Settings { .. } => "SETTINGS POSITION SAVED".into(),
-            ResumePoint::Image { .. } => "IMAGE POSITION SAVED".into(),
+            ResumePoint::Home { .. } => "Home position saved".into(),
+            ResumePoint::Books { .. } => "Books position saved".into(),
+            ResumePoint::Files { .. } => "Files position saved".into(),
+            ResumePoint::Settings { .. } => "Settings position saved".into(),
+            ResumePoint::Image { .. } => "Image position saved".into(),
         };
 
         for source in self.app.sleep_screen_plan(resume).sources() {
             match source {
                 SleepScreenSource::CustomImage(image_id) => {
                     let image = &self.images[image_id.index()];
-                    render_app(
-                        AppFrame::Sleep(SleepView::custom(image.bitmap(), self.app.battery())),
-                        target,
-                    )
-                    .map_err(js_error)?;
+                    render_app(AppFrame::Sleep(SleepView::custom(image.bitmap())), target)
+                        .map_err(js_error)?;
                     return Ok(FrameMetadata::selection(
                         "sleep",
                         &image.name,
@@ -572,20 +593,11 @@ impl WebLibrary {
                 }
                 SleepScreenSource::BookCover(book_id) => {
                     let book = &self.books[book_id.index()];
-                    let Some(cover) = book.cover.as_ref().map(OwnedCover::bitmap) else {
+                    let Some(cover) = book.cover.as_ref().map(|cover| cover.frame.bitmap()) else {
                         continue;
                     };
-                    render_app(
-                        AppFrame::Sleep(SleepView::book_cover(
-                            &book.title,
-                            &book.creator,
-                            &status,
-                            cover,
-                            self.app.battery(),
-                        )),
-                        target,
-                    )
-                    .map_err(js_error)?;
+                    render_app(AppFrame::Sleep(SleepView::book_cover(cover)), target)
+                        .map_err(js_error)?;
                     let mut metadata = FrameMetadata::book("sleep", book);
                     metadata.selected = book_id.index();
                     return Ok(metadata);
@@ -679,9 +691,9 @@ impl OwnedBook {
             .to_owned();
         let cover = epub
             .read_cover()
-            .map_err(js_error)?
-            .map(|encoded| decode_cover(&encoded))
-            .transpose()?;
+            .ok()
+            .flatten()
+            .and_then(|encoded| decode_cover(&encoded).ok());
         let linear_spine = epub
             .publication()
             .spine()
@@ -692,6 +704,7 @@ impl OwnedBook {
         if linear_spine.len() > MAX_CHAPTERS {
             return Err(JsValue::from_str("EPUB exceeds the 512 chapter limit"));
         }
+        let titles = epub.chapter_titles();
         let mut text_bytes = 0usize;
         let mut chapters = Vec::with_capacity(linear_spine.len());
         for spine_index in linear_spine {
@@ -708,7 +721,11 @@ impl OwnedBook {
                     "EPUB exceeds the 8 MiB rendered-text limit",
                 ));
             }
-            chapters.push(OwnedChapter::from_content(content, chapters.len()));
+            let mut chapter = OwnedChapter::from_content(content, chapters.len());
+            if let Some(Some(title)) = titles.get(spine_index) {
+                chapter.title.clone_from(title);
+            }
+            chapters.push(chapter);
         }
         if chapters.is_empty() {
             return Err(JsValue::from_str("EPUB has no linear readable chapters"));
@@ -772,14 +789,19 @@ struct OwnedLine {
 }
 
 struct OwnedCover {
+    thumbnail: OwnedBitmap,
+    frame: OwnedBitmap,
+}
+
+struct OwnedBitmap {
     size: Size,
     pixels: Vec<u8>,
 }
 
-impl OwnedCover {
+impl OwnedBitmap {
     fn bitmap(&self) -> PackedBitmap<'_> {
         PackedBitmap::new(self.size, READER_DEPTH, &self.pixels)
-            .expect("owned cover shape was checked when it was packed")
+            .expect("owned bitmap shape was checked when it was packed")
     }
 }
 
@@ -879,7 +901,9 @@ fn push_line(
     theme: ReaderTheme,
 ) {
     let height = theme.line_height(line.style);
-    if *used_height + height > PAGE_HEIGHT && !lines.is_empty() {
+    if (*used_height + height > PAGE_HEIGHT || lines.len() == brewthink::reader::MAX_PAGE_LINES)
+        && !lines.is_empty()
+    {
         pages.push(OwnedPage {
             lines: std::mem::take(lines),
         });
@@ -1054,18 +1078,37 @@ fn pattern_cover(index: usize) -> OwnedCover {
 }
 
 fn pack_cover(source: &RgbImage<'_>) -> OwnedCover {
-    let size = Size::new(COVER_WIDTH, COVER_HEIGHT).unwrap();
+    OwnedCover {
+        thumbnail: pack_bitmap(
+            source,
+            Size::new(COVER_WIDTH, COVER_HEIGHT).unwrap(),
+            ScaleMode::Cover,
+        ),
+        frame: pack_bitmap(
+            source,
+            Size::new(WIDTH, HEIGHT).unwrap(),
+            ScaleMode::Contain,
+        ),
+    }
+}
+
+fn pack_bitmap(source: &RgbImage<'_>, size: Size, scale: ScaleMode) -> OwnedBitmap {
     let mut pixels = vec![0xFF; READER_DEPTH.byte_len(size).unwrap()];
     let mut target = PackedImage::new(size, READER_DEPTH, &mut pixels).unwrap();
     brewthink::image::render(
         source,
         &mut target,
         RenderOptions {
-            scale: ScaleMode::Cover,
+            scale,
             dither: Dither::None,
         },
     );
-    OwnedCover { size, pixels }
+    OwnedBitmap { size, pixels }
+}
+
+#[wasm_bindgen]
+pub fn front_button_centers() -> Vec<i32> {
+    brewthink::ui::FRONT_BUTTON_CENTERS.to_vec()
 }
 
 #[wasm_bindgen]

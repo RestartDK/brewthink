@@ -43,13 +43,16 @@ pub fn render_image_viewer(
     .draw(&mut display)
     .ok();
     let footer = if selected_for_sleep {
-        "SLEEP IMAGE SELECTED     BACK  FILES"
+        "Selected"
     } else {
-        "CONFIRM  SELECT SLEEP     BACK  FILES"
+        "Use for sleep"
     };
-    ui!(AppBar::new(name, battery), CommandBar::new(footer))
-        .draw(&mut display)
-        .ok();
+    ui!(
+        AppBar::new(name, battery),
+        CommandBar::new(["Files", footer, "", ""])
+    )
+    .draw(&mut display)
+    .ok();
     Ok(())
 }
 

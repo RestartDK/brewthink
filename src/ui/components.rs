@@ -3,19 +3,23 @@ use core::fmt::Write;
 use embedded_graphics::{
     Drawable, Pixel,
     draw_target::DrawTargetExt,
-    geometry::{Dimensions, Point, Size},
+    geometry::{Point, Size},
     pixelcolor::Gray8,
     prelude::{DrawTarget, Primitive},
-    primitives::{PrimitiveStyle, Rectangle},
-    text::{Baseline, Text},
+    primitives::{PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, RoundedRectangle},
 };
 use embedded_layout::View;
 
-use crate::power::{BatteryLevel, BatteryStatus};
+use crate::{
+    app::SettingsItem,
+    files::FileKind,
+    power::{BatteryLevel, BatteryStatus},
+};
 
 use super::{
-    APP_BAR_RULE_Y, CONTENT_LEFT, CONTENT_WIDTH, FOOTER_RULE_Y, FOOTER_TEXT_Y, FRAME_WIDTH,
-    FixedText, TextRole, text_style,
+    APP_BAR_RULE_Y, CHROME_INK, CONTENT_LEFT, CONTENT_WIDTH, FOOTER_RULE_Y, FOOTER_TEXT_Y,
+    FRAME_WIDTH, FRONT_BUTTON_CENTERS, FixedText, Icon, SELECTION_BACKGROUND, SELECTION_FOREGROUND,
+    SELECTION_OUTLINE, TextRole, text_font, text_width,
 };
 
 const POWER_SYMBOL_X: i32 = 386;
@@ -49,6 +53,7 @@ pub struct Label<'a> {
     role: TextRole,
     top_left: Point,
     clip: Option<Size>,
+    color: Gray8,
 }
 
 impl<'a> Label<'a> {
@@ -58,11 +63,17 @@ impl<'a> Label<'a> {
             role,
             top_left: Point::zero(),
             clip: None,
+            color: CHROME_INK,
         }
     }
 
     pub const fn at(mut self, top_left: Point) -> Self {
         self.top_left = top_left;
+        self
+    }
+
+    pub const fn color(mut self, color: Gray8) -> Self {
+        self.color = color;
         self
     }
 
@@ -80,13 +91,11 @@ impl View for Label<'_> {
     fn bounds(&self) -> Rectangle {
         self.clip.map_or_else(
             || {
-                Text::with_baseline(
-                    self.text,
+                let font = text_font(self.role);
+                Rectangle::new(
                     self.top_left,
-                    text_style(self.role),
-                    Baseline::Top,
+                    Size::new(font.text_width(self.text) as u32, font.line_height() as u32),
                 )
-                .bounding_box()
             },
             |size| Rectangle::new(self.top_left, size),
         )
@@ -101,17 +110,37 @@ impl Drawable for Label<'_> {
     where
         D: DrawTarget<Color = Self::Color>,
     {
-        let text = Text::with_baseline(
-            self.text,
-            self.top_left,
-            text_style(self.role),
-            Baseline::Top,
-        );
+        let font = text_font(self.role);
         match self.clip {
-            Some(size) => text
-                .draw(&mut target.clipped(&Rectangle::new(self.top_left, size)))
-                .map(|_| ()),
-            None => text.draw(target).map(|_| ()),
+            Some(size) => {
+                let mut clipped = target.clipped(&Rectangle::new(self.top_left, size));
+                let width = size.width as usize;
+                if font.text_width(self.text) <= width {
+                    return font.draw(self.text, self.top_left, self.color, &mut clipped);
+                }
+                let ellipsis = font.text_width("…");
+                if width < ellipsis {
+                    return Ok(());
+                }
+                let mut used = 0;
+                let end = self
+                    .text
+                    .char_indices()
+                    .find_map(|(index, character)| {
+                        used += font.character_width(character);
+                        (used + ellipsis > width).then_some(index)
+                    })
+                    .unwrap_or(self.text.len());
+                let prefix = &self.text[..end];
+                font.draw(prefix, self.top_left, self.color, &mut clipped)?;
+                font.draw(
+                    "…",
+                    self.top_left + Point::new(font.text_width(prefix) as i32, 0),
+                    self.color,
+                    &mut clipped,
+                )
+            }
+            None => font.draw(self.text, self.top_left, self.color, target),
         }
     }
 }
@@ -154,26 +183,18 @@ impl Drawable for AppBar<'_> {
     where
         D: DrawTarget<Color = Self::Color>,
     {
-        Label::new("BREWTHINK", TextRole::Brand)
-            .at(self.top_left + Point::new(CONTENT_LEFT, 14))
-            .draw(target)?;
         Label::new(self.section, TextRole::Section)
-            .at(self.top_left + Point::new(CONTENT_LEFT, 39))
-            .clipped_to(Size::new(330, 12))
+            .at(self.top_left + Point::new(CONTENT_LEFT, 8))
+            .clipped_to(Size::new(302, 34))
             .draw(target)?;
-        Rectangle::new(
-            self.top_left + Point::new(CONTENT_LEFT, APP_BAR_RULE_Y),
-            Size::new(CONTENT_WIDTH, 2),
-        )
-        .into_styled(PrimitiveStyle::with_fill(Gray8::new(0)))
-        .draw(target)?;
+        Icon::WifiOff.draw(target, self.top_left + Point::new(334, 15), CHROME_INK)?;
         draw_battery(target, self.top_left, self.battery)
     }
 }
 
 #[derive(Clone, Copy)]
 pub struct CommandBar<'a> {
-    text: &'a str,
+    actions: [&'a str; 4],
     left: i32,
     width: u32,
     rule_y: i32,
@@ -181,22 +202,14 @@ pub struct CommandBar<'a> {
 }
 
 impl<'a> CommandBar<'a> {
-    pub const fn new(text: &'a str) -> Self {
+    pub const fn new(actions: [&'a str; 4]) -> Self {
         Self {
-            text,
+            actions,
             left: CONTENT_LEFT,
             width: CONTENT_WIDTH,
             rule_y: FOOTER_RULE_Y,
             text_y: FOOTER_TEXT_Y,
         }
-    }
-
-    pub const fn at(mut self, left: i32, width: u32, rule_y: i32, text_y: i32) -> Self {
-        self.left = left;
-        self.width = width;
-        self.rule_y = rule_y;
-        self.text_y = text_y;
-        self
     }
 }
 
@@ -226,25 +239,39 @@ impl Drawable for CommandBar<'_> {
         Rectangle::new(Point::new(self.left, self.rule_y), Size::new(self.width, 1))
             .into_styled(PrimitiveStyle::with_fill(Gray8::new(0)))
             .draw(target)?;
-        Label::new(self.text, TextRole::CommandHint)
-            .at(Point::new(self.left, self.text_y))
-            .draw(target)
+        let icons = [Icon::Back, Icon::Confirm, Icon::Left, Icon::Right];
+        for ((icon, action), center) in icons
+            .into_iter()
+            .zip(self.actions)
+            .zip(FRONT_BUTTON_CENTERS)
+        {
+            let center = center + self.left - CONTENT_LEFT;
+            icon.draw(target, Point::new(center - 12, self.rule_y + 8), CHROME_INK)?;
+            Label::new(action, TextRole::CommandHint)
+                .at(Point::new(
+                    center - text_width(TextRole::CommandHint, action) as i32 / 2,
+                    self.text_y,
+                ))
+                .clipped_to(Size::new(92, 22))
+                .draw(target)?;
+        }
+        Ok(())
     }
 }
 
 #[derive(Clone, Copy)]
 pub struct MenuRow<'a> {
     title: &'a str,
-    detail: &'a str,
+    icon: Icon,
     selection: Selection,
     top_left: Point,
 }
 
 impl<'a> MenuRow<'a> {
-    pub const fn new(title: &'a str, detail: &'a str, selection: Selection) -> Self {
+    pub const fn new(title: &'a str, icon: Icon, selection: Selection) -> Self {
         Self {
             title,
-            detail,
+            icon,
             selection,
             top_left: Point::zero(),
         }
@@ -257,7 +284,7 @@ impl View for MenuRow<'_> {
     }
 
     fn bounds(&self) -> Rectangle {
-        Rectangle::new(self.top_left, Size::new(CONTENT_WIDTH, 92))
+        Rectangle::new(self.top_left, Size::new(CONTENT_WIDTH, 76))
     }
 }
 
@@ -269,33 +296,28 @@ impl Drawable for MenuRow<'_> {
     where
         D: DrawTarget<Color = Self::Color>,
     {
-        self.bounds()
-            .into_styled(PrimitiveStyle::with_stroke(
-                Gray8::new(0),
-                self.selection.stroke(1, 4),
-            ))
-            .draw(target)?;
+        let color = draw_selection(target, self.bounds(), self.selection)?;
+        self.icon
+            .draw(target, self.top_left + Point::new(20, 26), color)?;
         Label::new(self.title, TextRole::ControlLabel)
-            .at(self.top_left + Point::new(24, 22))
-            .draw(target)?;
-        Label::new(self.detail, TextRole::Metadata)
-            .at(self.top_left + Point::new(24, 55))
+            .color(color)
+            .at(self.top_left + Point::new(68, 22))
             .draw(target)
     }
 }
 
 #[derive(Clone, Copy)]
 pub struct SettingsRow<'a> {
-    label: &'a str,
+    item: SettingsItem,
     value: Option<&'a str>,
     selection: Selection,
     top_left: Point,
 }
 
 impl<'a> SettingsRow<'a> {
-    pub const fn new(label: &'a str, value: Option<&'a str>, selection: Selection) -> Self {
+    pub const fn new(item: SettingsItem, value: Option<&'a str>, selection: Selection) -> Self {
         Self {
-            label,
+            item,
             value,
             selection,
             top_left: Point::zero(),
@@ -323,7 +345,7 @@ impl Drawable for SettingsRow<'_> {
         D: DrawTarget<Color = Self::Color>,
     {
         let (top, height, role, label_y) = match self.value {
-            Some(_) => (self.top_left, 46, TextRole::Body, 14),
+            Some(_) => (self.top_left, 46, TextRole::ControlLabel, 8),
             None => (
                 self.top_left + Point::new(0, 10),
                 64,
@@ -331,18 +353,27 @@ impl Drawable for SettingsRow<'_> {
                 20,
             ),
         };
-        Rectangle::new(top, Size::new(CONTENT_WIDTH, height))
-            .into_styled(PrimitiveStyle::with_stroke(
-                Gray8::new(0),
-                self.selection.stroke(1, 3),
-            ))
-            .draw(target)?;
-        Label::new(self.label, role)
-            .at(top + Point::new(16, label_y))
+        let color = draw_selection(
+            target,
+            Rectangle::new(top, Size::new(CONTENT_WIDTH, height)),
+            self.selection,
+        )?;
+        let icon = match self.item {
+            SettingsItem::Font => Icon::Font,
+            SettingsItem::Size => Icon::TextSize,
+            SettingsItem::Spacing => Icon::Spacing,
+            SettingsItem::SleepScreen => Icon::Moon,
+            SettingsItem::Apply => Icon::Confirm,
+        };
+        icon.draw(target, top + Point::new(20, label_y + 3), color)?;
+        Label::new(self.item.label(), role)
+            .color(color)
+            .at(top + Point::new(68, label_y))
             .draw(target)?;
         if let Some(value) = self.value {
             Label::new(value, TextRole::Body)
-                .at(top + Point::new(312, 14))
+                .color(color)
+                .at(top + Point::new(428 - text_width(TextRole::Body, value) as i32, 10))
                 .draw(target)?;
         }
         Ok(())
@@ -353,13 +384,13 @@ impl Drawable for SettingsRow<'_> {
 pub struct FileRow<'a> {
     name: &'a str,
     size: u32,
-    kind: &'a str,
+    kind: FileKind,
     selection: Selection,
     top_left: Point,
 }
 
 impl<'a> FileRow<'a> {
-    pub const fn new(name: &'a str, size: u32, kind: &'a str, selection: Selection) -> Self {
+    pub const fn new(name: &'a str, size: u32, kind: FileKind, selection: Selection) -> Self {
         Self {
             name,
             size,
@@ -388,24 +419,53 @@ impl Drawable for FileRow<'_> {
     where
         D: DrawTarget<Color = Self::Color>,
     {
-        self.bounds()
-            .into_styled(PrimitiveStyle::with_stroke(
-                Gray8::new(0),
-                self.selection.stroke(1, 3),
-            ))
-            .draw(target)?;
+        let color = draw_selection(target, self.bounds(), self.selection)?;
+        let icon = match self.kind {
+            FileKind::Epub => Icon::Book,
+            FileKind::Jpeg | FileKind::Png => Icon::Image,
+        };
+        icon.draw(target, self.top_left + Point::new(16, 19), color)?;
         Label::new(self.name, TextRole::ControlLabel)
-            .at(self.top_left + Point::new(14, 12))
-            .clipped_to(Size::new(330, 18))
+            .color(color)
+            .at(self.top_left + Point::new(58, 3))
+            .clipped_to(Size::new(370, 30))
             .draw(target)?;
-        let mut size = FixedText::<24>::new();
-        write!(size, "{} KiB", self.size.div_ceil(1024)).ok();
+        let mut size = FixedText::<32>::new();
+        write!(
+            size,
+            "{}  {} KiB",
+            self.kind.label(),
+            self.size.div_ceil(1024)
+        )
+        .ok();
         Label::new(size.as_str(), TextRole::Metadata)
-            .at(self.top_left + Point::new(364, 20))
-            .draw(target)?;
-        Label::new(self.kind, TextRole::Metadata)
-            .at(self.top_left + Point::new(14, 39))
+            .color(color)
+            .at(self.top_left + Point::new(58, 35))
             .draw(target)
+    }
+}
+
+pub(super) fn draw_selection<D>(
+    target: &mut D,
+    bounds: Rectangle,
+    selection: Selection,
+) -> Result<Gray8, D::Error>
+where
+    D: DrawTarget<Color = Gray8>,
+{
+    if selection == Selection::Selected {
+        RoundedRectangle::with_equal_corners(bounds, super::ROW_CORNERS)
+            .into_styled(
+                PrimitiveStyleBuilder::new()
+                    .fill_color(SELECTION_BACKGROUND)
+                    .stroke_color(SELECTION_OUTLINE)
+                    .stroke_width(2)
+                    .build(),
+            )
+            .draw(target)?;
+        Ok(SELECTION_FOREGROUND)
+    } else {
+        Ok(CHROME_INK)
     }
 }
 
@@ -434,7 +494,7 @@ where
         }
     };
     Label::new(label.as_str(), TextRole::Metadata)
-        .at(origin + Point::new(410, 22))
+        .at(origin + Point::new(410, 17))
         .draw(target)?;
     if battery.usb().is_connected() {
         draw_external_power_symbol(target, origin)?;

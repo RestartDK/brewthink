@@ -30,6 +30,7 @@ pub struct DevicePublication {
     spine: [Option<DeviceSpineItem>; MAX_DEVICE_SPINE_ITEMS],
     spine_length: u8,
     cover: Option<FixedString<MAX_DEVICE_PATH_BYTES>>,
+    navigation: Option<FixedString<MAX_DEVICE_PATH_BYTES>>,
 }
 
 impl DevicePublication {
@@ -40,6 +41,7 @@ impl DevicePublication {
             spine: [None; MAX_DEVICE_SPINE_ITEMS],
             spine_length: 0,
             cover: None,
+            navigation: None,
         }
     }
 
@@ -56,6 +58,7 @@ impl DevicePublication {
             }
             core::ptr::addr_of_mut!((*publication).spine_length).write(0);
             core::ptr::addr_of_mut!((*publication).cover).write(None);
+            core::ptr::addr_of_mut!((*publication).navigation).write(None);
         }
     }
 
@@ -65,6 +68,7 @@ impl DevicePublication {
         self.spine.fill(None);
         self.spine_length = 0;
         self.cover = None;
+        self.navigation = None;
     }
 
     pub fn title(&self) -> &str {
@@ -262,6 +266,40 @@ where
         self.read_path(item.path(), output, inflater)
     }
 
+    pub fn read_chapter_titles(
+        &self,
+        titles: &mut [FixedString<{ crate::navigation::CHAPTER_TITLE_BYTES }>;
+                 MAX_DEVICE_SPINE_ITEMS],
+        output: &mut [u8],
+        inflater: &mut InflateWorkspace,
+    ) -> Result<(), DeviceEpubError<R::Error>> {
+        titles.fill(FixedString::new());
+        let Some(path) = self.publication.navigation.as_ref() else {
+            return Ok(());
+        };
+        let maximum = output.len().min(64 * 1024);
+        let length = self.read_path(path.as_str(), &mut output[..maximum], inflater)?;
+        let result = crate::navigation::read_entries(&output[..length], |href, title| {
+            let Ok(resolved) = resolve_resource_path::<R::Error>(path.as_str(), href) else {
+                return;
+            };
+            if let Some(index) = self
+                .publication
+                .spine
+                .iter()
+                .position(|item| item.as_ref().is_some_and(|item| item.path == resolved))
+                && titles[index].is_empty()
+                && let Ok(title) = FixedString::try_from_str(title)
+            {
+                titles[index] = title;
+            }
+        });
+        if result.is_err() {
+            titles.fill(FixedString::new());
+        }
+        result.map_err(DeviceEpubError::Xml)
+    }
+
     pub fn read_cover(
         &self,
         output: &mut [u8],
@@ -439,6 +477,13 @@ fn resolve_manifest<E>(
             .ok_or(DeviceEpubError::InvalidPackage)?;
         let properties = tag.attribute("properties")?.unwrap_or("");
         let path = resolve_resource_path(package_path, href)?;
+        if properties
+            .split_ascii_whitespace()
+            .any(|property| property == "nav")
+            || (publication.navigation.is_none() && media_type == "application/x-dtbncx+xml")
+        {
+            publication.navigation = Some(path);
+        }
         let cover_property = properties
             .split_ascii_whitespace()
             .any(|property| property == "cover-image");
@@ -579,8 +624,11 @@ mod tests {
 
     use std::{boxed::Box, convert::Infallible};
 
-    use super::{DeviceEpub, DevicePackageScratch, resolve_resource_path};
-    use crate::zip_stream::{InflateWorkspace, ReadAt, ZipValidationScratch};
+    use super::{DeviceEpub, DevicePackageScratch, DevicePublication, resolve_resource_path};
+    use crate::{
+        bounded_xml::FixedString,
+        zip_stream::{InflateWorkspace, ReadAt, ZipValidationScratch},
+    };
 
     struct SliceFile<'a>(&'a [u8]);
 
@@ -632,7 +680,7 @@ mod tests {
     fn package_metadata_preserves_cdata_and_ignores_empty_title_elements() {
         let mut scratch = DevicePackageScratch::new();
         let xml = br#"<!DOCTYPE package [<!ENTITY custom "unused">]><package><metadata><title/>ignored<title><![CDATA[A &amp; B]]></title><creator><![CDATA[C & D]]></creator><description>&custom;</description></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="chapter"/></spine></package>"#;
-        let mut publication = super::DevicePublication::new();
+        let mut publication = DevicePublication::new();
         super::parse_package::<Infallible>("OPS/book.opf", xml, &mut scratch, &mut publication)
             .unwrap();
         assert_eq!(publication.title(), "A &amp; B");
@@ -641,6 +689,49 @@ mod tests {
             publication.spine_item(0).unwrap().path(),
             "OPS/chapter.xhtml"
         );
+    }
+
+    #[test]
+    fn in_place_initialization_writes_the_navigation_field() {
+        let mut storage = core::mem::MaybeUninit::<DevicePublication>::uninit();
+        unsafe {
+            storage.as_mut_ptr().write_bytes(0xa5, 1);
+            DevicePublication::initialize_in_place(storage.as_mut_ptr());
+        }
+        let publication = unsafe { storage.assume_init() };
+
+        assert!(publication.navigation.is_none());
+        assert_eq!(publication, DevicePublication::new());
+    }
+
+    #[test]
+    fn package_reset_drops_navigation_from_the_previous_book() {
+        let mut scratch = DevicePackageScratch::new();
+        let mut publication = DevicePublication::new();
+        let with_navigation = br#"<package><metadata><title>First</title></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/></manifest><spine><itemref idref="chapter"/></spine></package>"#;
+        let without_navigation = br#"<package><metadata><title>Second</title></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="chapter"/></spine></package>"#;
+
+        super::parse_package::<Infallible>(
+            "OPS/book.opf",
+            with_navigation,
+            &mut scratch,
+            &mut publication,
+        )
+        .unwrap();
+        assert_eq!(
+            publication.navigation.as_ref().map(FixedString::as_str),
+            Some("OPS/nav.xhtml")
+        );
+
+        super::parse_package::<Infallible>(
+            "OPS/book.opf",
+            without_navigation,
+            &mut scratch,
+            &mut publication,
+        )
+        .unwrap();
+        assert!(publication.navigation.is_none());
+        assert_eq!(publication.title(), "Second");
     }
 
     #[test]

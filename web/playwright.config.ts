@@ -11,6 +11,7 @@ export default defineConfig({
   testIgnore: "**/dev-server.spec.ts",
   timeout: 60_000,
   fullyParallel: false,
+  workers: 1,
   forbidOnly: true,
   retries: 0,
   reporter: "line",

@@ -5,6 +5,7 @@
 # ///
 
 from pathlib import Path
+import argparse
 import subprocess
 
 import freetype
@@ -45,9 +46,12 @@ def rust_array(name: str, type_name: str, values: list[str], columns: int) -> st
     return "\n".join(lines)
 
 
-def generate_font(point_size: int, style: str) -> tuple[str, str, str]:
-    face = freetype.Face(str(FONT_DIR / f"NotoSerif-{style}.ttf"))
-    face.set_char_size(point_size * 64, 0, DPI, 0)
+def generate_font(point_size: int, style: str, family: str = "NotoSerif", pixels: bool = False) -> tuple[str, str, str]:
+    face = freetype.Face(str(FONT_DIR / f"{family}-{style}.ttf"))
+    if pixels:
+        face.set_pixel_sizes(0, point_size)
+    else:
+        face.set_char_size(point_size * 64, 0, DPI, 0)
     glyphs: list[str] = []
     bitmaps: list[int] = []
     for codepoint in CODEPOINTS:
@@ -64,14 +68,15 @@ def generate_font(point_size: int, style: str) -> tuple[str, str, str]:
             ")"
         )
 
-    prefix = f"NOTO_SERIF_{point_size}_{style.upper()}"
+    family_prefix = "NOTO_SANS" if family == "NotoSans" else "NOTO_SERIF"
+    prefix = f"{family_prefix}_{point_size}_{style.upper()}"
     glyph_table = rust_array(f"{prefix}_GLYPHS", "BitmapGlyph", glyphs, 1)
     bitmap_table = rust_array(
         f"{prefix}_BITMAP", "u8", [f"0x{value:02X}" for value in bitmaps], 16
     )
     font = (
         f"pub(crate) static {prefix}: BitmapFont = BitmapFont::new(\n"
-        "    &NOTO_SERIF_CODEPOINTS,\n"
+        f"    &{family_prefix}_CODEPOINTS,\n"
         f"    &{prefix}_GLYPHS,\n"
         f"    &{prefix}_BITMAP,\n"
         f"    {round(face.size.height / 64)},\n"
@@ -81,16 +86,25 @@ def generate_font(point_size: int, style: str) -> tuple[str, str, str]:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate the checked-in 1-bit reader or UI fonts.")
+    parser.add_argument("--ui", action="store_true")
+    args = parser.parse_args()
     codepoints = [f"0x{codepoint:04X}" for codepoint in CODEPOINTS]
+    prefix = "NOTO_SANS" if args.ui else "NOTO_SERIF"
     sections = [
         "use super::{BitmapFont, BitmapGlyph};",
-        rust_array("NOTO_SERIF_CODEPOINTS", "u16", codepoints, 12),
+        rust_array(f"{prefix}_CODEPOINTS", "u16", codepoints, 12),
     ]
-    for point_size in POINT_SIZES:
-        for style in STYLES:
-            sections.extend(generate_font(point_size, style))
-    OUTPUT.write_text("\n\n".join(sections) + "\n")
-    subprocess.run(["rustfmt", "--edition", "2024", str(OUTPUT)], check=True)
+    if args.ui:
+        for size, style in [(14, "Regular"), (18, "Regular"), (22, "Regular"), (24, "SemiBold")]:
+            sections.extend(generate_font(size, style, "NotoSans", pixels=True))
+    else:
+        for point_size in POINT_SIZES:
+            for style in STYLES:
+                sections.extend(generate_font(point_size, style))
+    output = OUTPUT.with_name("noto_sans.rs") if args.ui else OUTPUT
+    output.write_text("\n\n".join(sections) + "\n")
+    subprocess.run(["rustfmt", "--edition", "2024", str(output)], check=True)
 
 
 if __name__ == "__main__":

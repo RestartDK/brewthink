@@ -6,7 +6,7 @@ extern crate std;
 pub mod app;
 #[cfg(feature = "device-reader")]
 pub mod bounded_layout;
-#[cfg(feature = "device-reader")]
+#[cfg(any(feature = "device-reader", feature = "epub"))]
 pub mod bounded_xml;
 #[cfg(feature = "device-reader")]
 pub mod cover;
@@ -25,6 +25,8 @@ pub mod image_decoder;
 pub mod image_viewer;
 pub mod input;
 pub mod library;
+#[cfg(any(feature = "device-reader", feature = "epub"))]
+pub mod navigation;
 pub mod power;
 pub mod reader;
 #[cfg(all(feature = "device-reader", any(target_arch = "riscv32", test)))]
