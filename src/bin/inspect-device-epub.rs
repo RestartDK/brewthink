@@ -34,12 +34,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut package_scratch = Box::new(DevicePackageScratch::new());
     let mut inflater = Box::new(InflateWorkspace::new());
     let mut resource = Box::new([0; MAX_DEVICE_RESOURCE_BYTES]);
+    let mut publication = Box::new(brewthink::device_epub::DevicePublication::new());
     let book = DeviceEpub::open(
         SliceFile(&encoded),
         &mut zip_scratch,
         &mut package_scratch,
         &mut inflater,
         &mut resource,
+        &mut publication,
     )
     .map_err(|error| format!("{error:?}"))?;
 

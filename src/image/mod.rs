@@ -1,3 +1,6 @@
+mod packed;
+pub use packed::{PackedBitmap, PackedImage, PixelDepth, READER_DEPTH};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Size {
     width: usize,
@@ -81,84 +84,8 @@ impl<'a> RgbImage<'a> {
         let red = u32::from(self.pixels[offset]);
         let green = u32::from(self.pixels[offset + 1]);
         let blue = u32::from(self.pixels[offset + 2]);
-        ((77 * red + 150 * green + 29 * blue + 128) >> 8) as u8
+        ((54 * red + 183 * green + 19 * blue + 128) >> 8) as u8
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MonochromeBitmap<'a> {
-    size: Size,
-    bytes: &'a [u8],
-}
-
-impl<'a> MonochromeBitmap<'a> {
-    pub fn new(size: Size, bytes: &'a [u8]) -> Result<Self, Error> {
-        validate_monochrome_shape(size, bytes.len())?;
-        Ok(Self { size, bytes })
-    }
-
-    pub const fn size(self) -> Size {
-        self.size
-    }
-
-    pub fn pixel_is_black(self, x: usize, y: usize) -> bool {
-        pixel_is_black(self.size, self.bytes, x, y)
-    }
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub struct MonochromeImage<'a> {
-    size: Size,
-    bytes: &'a mut [u8],
-}
-
-impl<'a> MonochromeImage<'a> {
-    pub fn new(size: Size, bytes: &'a mut [u8]) -> Result<Self, Error> {
-        validate_monochrome_shape(size, bytes.len())?;
-        Ok(Self { size, bytes })
-    }
-
-    pub const fn size(&self) -> Size {
-        self.size
-    }
-
-    pub fn as_bytes(&self) -> &[u8] {
-        self.bytes
-    }
-
-    pub fn pixel_is_black(&self, x: usize, y: usize) -> bool {
-        pixel_is_black(self.size, self.bytes, x, y)
-    }
-
-    pub(crate) fn clear_white(&mut self) {
-        self.bytes.fill(0xFF);
-    }
-
-    pub(crate) fn set_pixel(&mut self, x: usize, y: usize, black: bool) {
-        let mask = 0x80 >> (x % 8);
-        let byte = &mut self.bytes[y * (self.size.width / 8) + x / 8];
-        if black {
-            *byte &= !mask;
-        } else {
-            *byte |= mask;
-        }
-    }
-}
-
-fn validate_monochrome_shape(size: Size, actual: usize) -> Result<(), Error> {
-    if !size.width.is_multiple_of(8) {
-        return Err(Error::WidthNotByteAligned { width: size.width });
-    }
-    let expected = size.pixels() / 8;
-    if actual != expected {
-        return Err(Error::InvalidMonochromeLength { expected, actual });
-    }
-    Ok(())
-}
-
-fn pixel_is_black(size: Size, bytes: &[u8], x: usize, y: usize) -> bool {
-    let row_bytes = size.width / 8;
-    bytes[y * row_bytes + x / 8] & (0x80 >> (x % 8)) == 0
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -169,6 +96,7 @@ pub enum ScaleMode {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Dither {
+    None,
     Threshold(u8),
     Ordered4x4,
 }
@@ -201,23 +129,23 @@ pub enum Error {
     DimensionOverflow,
     InvalidRgbLength { expected: usize, actual: usize },
     WidthNotByteAligned { width: usize },
-    InvalidMonochromeLength { expected: usize, actual: usize },
+    InvalidPackedLength { expected: usize, actual: usize },
     RegionOutOfBounds,
 }
 
 pub fn render(
     source: &RgbImage<'_>,
-    target: &mut MonochromeImage<'_>,
+    target: &mut PackedImage<'_>,
     options: RenderOptions,
 ) -> RenderReport {
     target.clear_white();
-    render_region(source, target, Region::new(0, 0, target.size), options)
+    render_region(source, target, Region::new(0, 0, target.size()), options)
         .expect("the full target is always a valid render region")
 }
 
 pub fn render_region(
     source: &RgbImage<'_>,
-    target: &mut MonochromeImage<'_>,
+    target: &mut PackedImage<'_>,
     region: Region,
     options: RenderOptions,
 ) -> Result<RenderReport, Error> {
@@ -229,7 +157,7 @@ pub fn render_region(
         .y
         .checked_add(region.size.height)
         .ok_or(Error::RegionOutOfBounds)?;
-    if right > target.size.width || bottom > target.size.height {
+    if right > target.size().width || bottom > target.size().height {
         return Err(Error::RegionOutOfBounds);
     }
 
@@ -241,20 +169,19 @@ pub fn render_region(
         let scaled_y = region_y as i128 - top;
         for region_x in 0..region.size.width {
             let scaled_x = region_x as i128 - left;
-            let black = if (0..scaled.width as i128).contains(&scaled_x)
+            let luma = if (0..scaled.width as i128).contains(&scaled_x)
                 && (0..scaled.height as i128).contains(&scaled_y)
             {
-                let luma = sample_bilinear(source, scaled_x as usize, scaled_y as usize, scaled);
-                is_black(
-                    luma,
-                    region.x + region_x,
-                    region.y + region_y,
-                    options.dither,
-                )
+                sample_bilinear(source, scaled_x as usize, scaled_y as usize, scaled)
             } else {
-                false
+                255
             };
-            target.set_pixel(region.x + region_x, region.y + region_y, black);
+            target.set_luma_dithered(
+                region.x + region_x,
+                region.y + region_y,
+                luma,
+                options.dither,
+            );
         }
     }
 
@@ -317,17 +244,6 @@ fn interpolate(first: u8, second: u8, weight: u16) -> u8 {
     ((value + 128) / 256) as u8
 }
 
-fn is_black(luma: u8, x: usize, y: usize, dither: Dither) -> bool {
-    match dither {
-        Dither::Threshold(threshold) => luma < threshold,
-        Dither::Ordered4x4 => {
-            const BAYER: [[u8; 4]; 4] =
-                [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
-            luma < BAYER[y % 4][x % 4] * 16 + 8
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -335,8 +251,8 @@ mod tests {
     use std::vec;
 
     use super::{
-        Dither, Error, MonochromeBitmap, MonochromeImage, Region, RenderOptions, RgbImage,
-        ScaleMode, Size, render, render_region,
+        Dither, Error, PackedBitmap, PackedImage, Region, RenderOptions, RgbImage, ScaleMode, Size,
+        render, render_region,
     };
 
     #[test]
@@ -351,16 +267,16 @@ mod tests {
             })
         ));
         assert!(matches!(
-            MonochromeBitmap::new(size, &[0; 1]),
-            Err(Error::InvalidMonochromeLength {
+            PackedBitmap::monochrome(size, &[0; 1]),
+            Err(Error::InvalidPackedLength {
                 expected: 2,
                 actual: 1,
             })
         ));
         let mut bytes = [0; 1];
         assert!(matches!(
-            MonochromeImage::new(size, &mut bytes),
-            Err(Error::InvalidMonochromeLength {
+            PackedImage::monochrome(size, &mut bytes),
+            Err(Error::InvalidPackedLength {
                 expected: 2,
                 actual: 1,
             })
@@ -375,7 +291,7 @@ mod tests {
         rgb[3..6].copy_from_slice(&[0, 255, 0]);
         let source = RgbImage::new(size, &rgb).unwrap();
         let mut bytes = [0; 1];
-        let mut target = MonochromeImage::new(size, &mut bytes).unwrap();
+        let mut target = PackedImage::monochrome(size, &mut bytes).unwrap();
 
         render(
             &source,
@@ -398,7 +314,7 @@ mod tests {
         let source = RgbImage::new(source_size, &source_bytes).unwrap();
         let target_size = Size::new(8, 16).unwrap();
         let mut bytes = [0; 16];
-        let mut target = MonochromeImage::new(target_size, &mut bytes).unwrap();
+        let mut target = PackedImage::monochrome(target_size, &mut bytes).unwrap();
 
         let report = render(
             &source,
@@ -424,7 +340,7 @@ mod tests {
         let source = RgbImage::new(source_size, &source_bytes).unwrap();
         let target_size = Size::new(8, 8).unwrap();
         let mut bytes = [0; 8];
-        let mut target = MonochromeImage::new(target_size, &mut bytes).unwrap();
+        let mut target = PackedImage::monochrome(target_size, &mut bytes).unwrap();
 
         let report = render(
             &source,
@@ -446,7 +362,7 @@ mod tests {
         let source = RgbImage::new(source_size, &[0, 0, 0]).unwrap();
         let target_size = Size::new(16, 8).unwrap();
         let mut bytes = [0xFF; 16];
-        let mut target = MonochromeImage::new(target_size, &mut bytes).unwrap();
+        let mut target = PackedImage::monochrome(target_size, &mut bytes).unwrap();
 
         render_region(
             &source,
@@ -471,7 +387,7 @@ mod tests {
         let source = RgbImage::new(Size::new(1, 1).unwrap(), &[0, 0, 0]).unwrap();
         let target_size = Size::new(8, 8).unwrap();
         let mut bytes = [0xFF; 8];
-        let mut target = MonochromeImage::new(target_size, &mut bytes).unwrap();
+        let mut target = PackedImage::monochrome(target_size, &mut bytes).unwrap();
 
         assert_eq!(
             render_region(
@@ -490,7 +406,7 @@ mod tests {
         let rgb = [128; 8 * 4 * 3];
         let source = RgbImage::new(size, &rgb).unwrap();
         let mut bytes = [0; 4];
-        let mut target = MonochromeImage::new(size, &mut bytes).unwrap();
+        let mut target = PackedImage::monochrome(size, &mut bytes).unwrap();
 
         render(&source, &mut target, RenderOptions::default());
 

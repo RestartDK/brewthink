@@ -40,7 +40,11 @@ use embedded_sdmmc::{
 use esp_backtrace as _;
 #[cfg(feature = "device-reader")]
 use esp_hal::interrupt::{Priority, software::SoftwareInterrupt};
-#[cfg(any(feature = "device-reader", feature = "sd-diagnostic"))]
+#[cfg(any(
+    feature = "device-reader",
+    feature = "sd-diagnostic",
+    feature = "grayscale-bench"
+))]
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_hal::{
     clock::CpuClock,
@@ -266,6 +270,33 @@ fn initialize(spawner: Spawner) {
                 peripherals.LPWR,
                 esp_hal::system::wakeup_cause(),
             );
+        }
+        DiagnosticStage::GrayscaleBench => {
+            #[cfg(not(feature = "grayscale-bench"))]
+            hold(chip_selects, "grayscale bench feature is disabled");
+
+            #[cfg(feature = "grayscale-bench")]
+            {
+                let hardware = storage_hardware_or_hold(
+                    X4SharedSpiPeripherals::new(
+                        peripherals.SPI2,
+                        peripherals.GPIO8,
+                        peripherals.GPIO10,
+                        peripherals.GPIO7,
+                        peripherals.GPIO4,
+                        peripherals.GPIO5,
+                        peripherals.GPIO6,
+                    ),
+                    chip_selects,
+                    "SPI2 grayscale bench configuration failed",
+                );
+                let (control, _control_tx) = UsbSerialJtag::new(peripherals.USB_DEVICE).split();
+                let task = match brewthink::x4::grayscale_bench_task(hardware, control) {
+                    Ok(task) => task,
+                    Err(_) => hold((), "grayscale bench task allocation failed"),
+                };
+                spawner.spawn(task);
+            }
         }
         DiagnosticStage::ReaderApp => {
             #[cfg(not(feature = "device-reader"))]

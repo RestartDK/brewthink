@@ -88,6 +88,29 @@ impl<const CAPACITY: usize> BookCatalog<CAPACITY> {
         }
     }
 
+    #[cfg(all(feature = "device-reader", any(target_arch = "riscv32", test)))]
+    pub(crate) unsafe fn initialize_in_place(catalog: *mut Self) {
+        // SAFETY: the caller provides writable aligned storage; every field is initialized.
+        unsafe {
+            let books = core::ptr::addr_of_mut!((*catalog).books).cast::<Option<BookFile>>();
+            for index in 0..CAPACITY {
+                books.add(index).write(None);
+            }
+            core::ptr::addr_of_mut!((*catalog).length).write(0);
+            core::ptr::addr_of_mut!((*catalog).unsupported_files).write(0);
+            core::ptr::addr_of_mut!((*catalog).skipped_names).write(0);
+            core::ptr::addr_of_mut!((*catalog).truncated).write(false);
+        }
+    }
+
+    fn reset(&mut self) {
+        self.books.fill(None);
+        self.length = 0;
+        self.unsupported_files = 0;
+        self.skipped_names = 0;
+        self.truncated = false;
+    }
+
     pub fn books(&self) -> impl Iterator<Item = &BookFile> {
         self.books[..self.length].iter().flatten()
     }
@@ -293,14 +316,23 @@ where
     }
 
     pub fn scan<const CAPACITY: usize>(&self) -> Result<BookCatalog<CAPACITY>, Error<D::Error>> {
+        let mut catalog = BookCatalog::empty();
+        self.scan_into(&mut catalog)?;
+        Ok(catalog)
+    }
+
+    pub fn scan_into<const CAPACITY: usize>(
+        &self,
+        catalog: &mut BookCatalog<CAPACITY>,
+    ) -> Result<(), Error<D::Error>> {
+        catalog.reset();
         let volume = self.manager.open_volume(VolumeIdx(0))?;
         let root = volume.open_root_dir()?;
         let books = match root.open_dir(BOOK_DIRECTORY) {
             Ok(books) => books,
-            Err(Error::NotFound) => return Ok(BookCatalog::empty()),
+            Err(Error::NotFound) => return Ok(()),
             Err(error) => return Err(error),
         };
-        let mut catalog = BookCatalog::empty();
         let mut storage = [0; 768];
         let mut lfn = LfnBuffer::new(&mut storage);
         books.iterate_dir_lfn(&mut lfn, |entry, long_name| {
@@ -324,7 +356,7 @@ where
             catalog.inspect(name, entry.size);
             ControlFlow::Continue(())
         })?;
-        Ok(catalog)
+        Ok(())
     }
 
     #[cfg(feature = "device-reader")]

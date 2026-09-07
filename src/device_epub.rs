@@ -23,7 +23,7 @@ impl DeviceSpineItem {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct DevicePublication {
     title: FixedString<192>,
     creator: FixedString<128>,
@@ -33,6 +33,40 @@ pub struct DevicePublication {
 }
 
 impl DevicePublication {
+    pub const fn new() -> Self {
+        Self {
+            title: FixedString::new(),
+            creator: FixedString::new(),
+            spine: [None; MAX_DEVICE_SPINE_ITEMS],
+            spine_length: 0,
+            cover: None,
+        }
+    }
+
+    #[cfg(any(target_arch = "riscv32", test))]
+    pub(crate) unsafe fn initialize_in_place(publication: *mut Self) {
+        // SAFETY: the caller provides writable aligned storage; every field is initialized.
+        unsafe {
+            core::ptr::addr_of_mut!((*publication).title).write(FixedString::new());
+            core::ptr::addr_of_mut!((*publication).creator).write(FixedString::new());
+            let spine =
+                core::ptr::addr_of_mut!((*publication).spine).cast::<Option<DeviceSpineItem>>();
+            for index in 0..MAX_DEVICE_SPINE_ITEMS {
+                spine.add(index).write(None);
+            }
+            core::ptr::addr_of_mut!((*publication).spine_length).write(0);
+            core::ptr::addr_of_mut!((*publication).cover).write(None);
+        }
+    }
+
+    fn reset(&mut self) {
+        self.title.clear();
+        self.creator.clear();
+        self.spine.fill(None);
+        self.spine_length = 0;
+        self.cover = None;
+    }
+
     pub fn title(&self) -> &str {
         self.title.as_str()
     }
@@ -51,6 +85,12 @@ impl DevicePublication {
 
     pub fn cover_path(&self) -> Option<&str> {
         self.cover.as_ref().map(FixedString::as_str)
+    }
+}
+
+impl Default for DevicePublication {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -131,12 +171,12 @@ impl Default for DevicePackageScratch {
     }
 }
 
-pub struct DeviceEpub<R> {
+pub struct DeviceEpub<'a, R> {
     archive: StreamingZip<R>,
-    publication: DevicePublication,
+    publication: &'a DevicePublication,
 }
 
-impl<R> DeviceEpub<R>
+impl<'a, R> DeviceEpub<'a, R>
 where
     R: ReadAt,
 {
@@ -147,6 +187,7 @@ where
         package_scratch: &mut DevicePackageScratch,
         inflater: &mut InflateWorkspace,
         resource_buffer: &mut [u8; MAX_DEVICE_RESOURCE_BYTES],
+        publication: &'a mut DevicePublication,
     ) -> Result<Self, DeviceEpubError<R::Error>> {
         let archive = StreamingZip::open(reader, zip_scratch).map_err(DeviceEpubError::Zip)?;
         let first = archive.first_entry().map_err(DeviceEpubError::Zip)?;
@@ -192,10 +233,11 @@ where
         let package_length = archive
             .read_entry(package_entry, resource_buffer, inflater)
             .map_err(DeviceEpubError::Zip)?;
-        let publication = parse_package(
+        parse_package(
             package_path.as_str(),
             &resource_buffer[..package_length],
             package_scratch,
+            publication,
         )?;
         Ok(Self {
             archive,
@@ -204,7 +246,7 @@ where
     }
 
     pub const fn publication(&self) -> &DevicePublication {
-        &self.publication
+        self.publication
     }
 
     pub fn read_spine(
@@ -271,17 +313,12 @@ fn parse_package<E>(
     package_path: &str,
     encoded: &[u8],
     scratch: &mut DevicePackageScratch,
-) -> Result<DevicePublication, DeviceEpubError<E>> {
+    publication: &mut DevicePublication,
+) -> Result<(), DeviceEpubError<E>> {
     scratch.reset();
-    let mut publication = DevicePublication {
-        title: FixedString::new(),
-        creator: FixedString::new(),
-        spine: [None; MAX_DEVICE_SPINE_ITEMS],
-        spine_length: 0,
-        cover: None,
-    };
-    parse_package_structure(encoded, scratch, &mut publication)?;
-    resolve_manifest(package_path, encoded, scratch, &mut publication)?;
+    publication.reset();
+    parse_package_structure(encoded, scratch, publication)?;
+    resolve_manifest(package_path, encoded, scratch, publication)?;
     publication.title.normalize_whitespace();
     publication.creator.normalize_whitespace();
     if publication.title.is_empty() {
@@ -299,7 +336,7 @@ fn parse_package<E>(
     {
         return Err(DeviceEpubError::MissingSpineResource);
     }
-    Ok(publication)
+    Ok(())
 }
 
 fn parse_package_structure<E>(
@@ -554,6 +591,7 @@ mod tests {
         let mut package_scratch = Box::new(DevicePackageScratch::new());
         let mut inflater = Box::new(InflateWorkspace::new());
         let mut resource = Box::new([0; super::MAX_DEVICE_RESOURCE_BYTES]);
+        let mut publication = Box::new(super::DevicePublication::new());
 
         let book = DeviceEpub::open(
             SliceFile(encoded),
@@ -561,6 +599,7 @@ mod tests {
             &mut package_scratch,
             &mut inflater,
             &mut resource,
+            &mut publication,
         )
         .unwrap();
 

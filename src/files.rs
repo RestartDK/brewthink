@@ -9,7 +9,7 @@ use embedded_layout::{
 
 use crate::{
     app::FilesState,
-    image::{MonochromeImage, Size},
+    image::{PackedImage, Size},
     power::BatteryStatus,
     ui::{
         AppBar, CONTENT_LEFT, CommandBar, FRAME_HEIGHT, FRAME_WIDTH, FileRow, FixedText,
@@ -69,7 +69,7 @@ pub fn render_files(
     state: FilesState,
     files: &[FileItem<'_>],
     battery: BatteryStatus,
-    target: &mut MonochromeImage<'_>,
+    target: &mut PackedImage<'_>,
 ) -> Result<(), FilesRenderError> {
     let expected =
         Size::new(FRAME_WIDTH, FRAME_HEIGHT).expect("files frame dimensions are non-zero");
@@ -145,7 +145,7 @@ mod tests {
     use super::{FileItem, FileKind, render_files};
     use crate::{
         app::FilesState,
-        image::{MonochromeImage, Size},
+        image::{PackedImage, Size},
         input::UsbState,
         power::BatteryStatus,
     };
@@ -153,7 +153,7 @@ mod tests {
     #[test]
     fn renders_selected_files_with_sizes() {
         let mut bytes = std::vec![0xFF; 480 * 800 / 8];
-        let mut image = MonochromeImage::new(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        let mut image = PackedImage::monochrome(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
         render_files(
             FilesState::new(2),
             &[

@@ -183,6 +183,7 @@ mod tests {
             Connection {
                 file: std::fs::File::from(OwnedFd::from(client)),
                 stream: Default::default(),
+                original_termios: None,
             },
             worker,
         )
