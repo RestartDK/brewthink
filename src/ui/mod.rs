@@ -49,6 +49,48 @@ mod tests {
     }
 
     #[test]
+    fn command_bar_places_navigation_left_and_actions_right() {
+        use super::{CHROME_INK, CommandBar, Icon, Label, TextRole, text_width};
+        use embedded_graphics::geometry::{Point, Size as GraphicsSize};
+
+        let size = Size::new(480, 800).unwrap();
+        let mut actual = vec![0xff; READER_DEPTH.byte_len(size).unwrap()];
+        let mut expected = actual.clone();
+        let mut image = PackedImage::new(size, READER_DEPTH, &mut actual).unwrap();
+        CommandBar::new(["Cancel", "Go to", "Decrease", "Increase"])
+            .draw(&mut FrameTarget::new(&mut image))
+            .unwrap();
+        let mut reference = PackedImage::new(size, READER_DEPTH, &mut expected).unwrap();
+        let mut target = FrameTarget::new(&mut reference);
+        for (icon, label, center) in [
+            (Icon::Left, "Decrease", 100),
+            (Icon::Right, "Increase", 192),
+            (Icon::Back, "Cancel", 300),
+            (Icon::Confirm, "Go to", 392),
+        ] {
+            icon.draw(&mut target, Point::new(center - 12, 738), CHROME_INK)
+                .unwrap();
+            Label::new(label, TextRole::CommandHint)
+                .at(Point::new(
+                    center - text_width(TextRole::CommandHint, label) as i32 / 2,
+                    770,
+                ))
+                .clipped_to(GraphicsSize::new(92, 22))
+                .draw(&mut target)
+                .unwrap();
+        }
+        for y in 731..800 {
+            for x in 0..480 {
+                assert_eq!(
+                    image.luma(x, y),
+                    reference.luma(x, y),
+                    "footer pixel {x},{y}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn selection_palette_uses_light_gray_with_black_foreground_and_outline() {
         assert_eq!(super::SELECTION_BACKGROUND.luma(), 170);
         assert_eq!(super::SELECTION_FOREGROUND.luma(), 0);
