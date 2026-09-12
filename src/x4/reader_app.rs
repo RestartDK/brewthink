@@ -54,6 +54,7 @@ use crate::{
     library::ShelfBook,
     power::{BatteryEstimator, BatteryLevel, BatteryStatus},
     reader::{ReaderLine, ReaderStyle, ReaderView},
+    reader_orchestration::{self, ChapterPages, ReaderIo, Rendered, Startup, StartupStage},
     settings::CustomImagePreview,
     sleep::SleepView,
     storage::{
@@ -64,6 +65,37 @@ use crate::{
     x4::{X4FatBlockDevice, X4InputHardware, X4StorageHardware, decode_buttons},
     zip_stream::{InflateWorkspace, StreamingZip, ZipValidationScratch},
 };
+
+type FileError = embedded_sdmmc::Error<crate::x4::X4FatBlockDeviceError>;
+
+#[derive(Debug)]
+enum ReaderError {
+    File(FileError),
+    Card(crate::storage::SdError<crate::x4::X4StorageError>),
+    AppData(crate::storage::AppDataError<crate::x4::X4FatBlockDeviceError>),
+    Epub(crate::device_epub::DeviceEpubError<FileError>),
+    Archive(crate::zip_stream::ZipError<FileError>),
+    Layout(crate::bounded_layout::LayoutError),
+    BookMissing,
+    ResourceTooLarge,
+    Render(&'static str),
+}
+
+impl core::fmt::Display for ReaderError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::File(error) => write!(f, "{error}"),
+            Self::Card(error) => write!(f, "{error:?}"),
+            Self::AppData(error) => write!(f, "{error}"),
+            Self::Epub(error) => write!(f, "{error:?}"),
+            Self::Archive(error) => write!(f, "{error:?}"),
+            Self::Layout(error) => write!(f, "{error}"),
+            Self::BookMissing => f.write_str("book is missing"),
+            Self::ResourceTooLarge => f.write_str("chapter exceeds resource capacity"),
+            Self::Render(error) => f.write_str(error),
+        }
+    }
+}
 
 const MAX_DEVICE_BOOKS: usize = 16;
 const MAX_DEVICE_IMAGES: usize = 16;
@@ -246,44 +278,7 @@ impl DeviceLibrary {
     }
 }
 
-struct DeviceImages {
-    files: [Option<ImageFile>; MAX_DEVICE_IMAGES],
-    length: usize,
-}
-
-impl DeviceImages {
-    const fn empty() -> Self {
-        Self {
-            files: [None; MAX_DEVICE_IMAGES],
-            length: 0,
-        }
-    }
-
-    fn file(&self, image: ImageId) -> Option<&ImageFile> {
-        self.files.get(image.index()).and_then(Option::as_ref)
-    }
-
-    fn selected(&self, store: &DeviceStore) -> Option<ImageId> {
-        let name = match store.app_data().read_selected_image() {
-            Ok(name) => name,
-            Err(error) => {
-                info!(
-                    "reader image selection unavailable: {}",
-                    defmt::Display2Format(&error)
-                );
-                None
-            }
-        };
-        name.and_then(|name| {
-            self.files[..self.length]
-                .iter()
-                .flatten()
-                .position(|image| *image.name() == name)
-                .map(ImageId::new)
-        })
-        .or_else(|| (self.length > 0).then(|| ImageId::new(0)))
-    }
-}
+type DeviceImages = reader_orchestration::ReaderImages<MAX_DEVICE_IMAGES>;
 
 #[derive(Clone, Copy)]
 struct DeviceCatalogs<'a> {
@@ -556,20 +551,8 @@ pub async fn reader_app_task(
     static UPLOAD_BUFFER: ConstStaticCell<[u8; UPLOAD_CHUNK_BYTES]> =
         ConstStaticCell::new([0; UPLOAD_CHUNK_BYTES]);
 
-    let mut card = ReadOnlySdCard::new(hardware);
-    info!("reader startup: SD initialization start");
-    if card.initialize().is_err() {
-        stop("reader SD initialization failed").await;
-    }
-    info!("reader startup: SD initialization done");
-    let store = STORE.init_with(|| {
-        FatStorage::new(X4FatBlockDevice::new(card.enable_writes()), FixedTimeSource)
-    });
-    info!("reader startup: layout initialization start");
-    if store.ensure_layout().is_err() {
-        stop("reader SD layout initialization failed").await;
-    }
-    info!("reader startup: layout initialization done");
+    let mut card = Some(ReadOnlySdCard::new(hardware));
+    let mut store: Option<&'static DeviceStore> = None;
     let mut workspaces = Workspaces {
         navigation: NAVIGATION.take(),
         zip: ZIP.take(),
@@ -578,30 +561,128 @@ pub async fn reader_app_task(
         content: CONTENT.take(),
         resource: RESOURCE.take(),
     };
-    info!("reader startup: workspace initialization done");
     let library = LIBRARY.take();
-    info!("reader startup: book scan start");
-    if load_library(store, library, &mut workspaces).is_err() {
-        stop("reader /books scan failed").await;
-    }
-    info!("reader startup: book scan done");
     let images = IMAGES.take();
-    load_images(store, images);
-    info!("reader startup: image scan done");
+    let mut panel = None;
+    let mut startup = Startup::Run(StartupStage::Card);
+    let mut startup_commands = ControlLineBuffer::new();
+    loop {
+        match startup {
+            Startup::Run(stage) => {
+                let result = match stage {
+                    StartupStage::Card => card
+                        .as_mut()
+                        .expect("card is owned until initialized")
+                        .initialize()
+                        .map(|_| ())
+                        .map_err(ReaderError::Card),
+                    StartupStage::Layout => store
+                        .expect("card initialized")
+                        .ensure_layout()
+                        .map_err(ReaderError::File),
+                    StartupStage::Books => {
+                        load_library(store.expect("card initialized"), library, &mut workspaces)
+                            .map_err(ReaderError::File)
+                    }
+                    StartupStage::Images => load_images(store.expect("card initialized"), images)
+                        .map_err(ReaderError::AppData),
+                    StartupStage::Display => {
+                        let profile = X4DriveProfile::parse(X4_DRIVE_PROFILE)
+                            .expect("build validates drive profile");
+                        let mode = RefreshPolicyMode::parse(DISPLAY_REFRESH)
+                            .expect("build validates refresh policy");
+                        initialize_panel(store.expect("card initialized"), profile, mode)
+                            .map(|display| panel = Some(display))
+                            .map_err(ReaderError::Render)
+                    }
+                };
+                if let Err(error) = startup.complete(result) {
+                    esp_println::println!(
+                        "BREWCTL/1 LOG stage=startup state=retry-required operation={:?} reason={}",
+                        stage,
+                        error
+                    );
+                } else if stage == StartupStage::Card {
+                    store = Some(STORE.init_with(|| {
+                        FatStorage::new(
+                            X4FatBlockDevice::new(
+                                card.take().expect("initialized card").enable_writes(),
+                            ),
+                            FixedTimeSource,
+                        )
+                    }));
+                }
+            }
+            Startup::AwaitingRetry(stage) => {
+                for _ in 0..64 {
+                    let Ok(byte) = control.read_byte() else { break };
+                    if let Some(command) = startup_commands.push(byte) {
+                        match command {
+                            Ok(ControlCommand::Tap(button)) => {
+                                startup.input(map_button(button));
+                                esp_println::println!("BREWCTL/1 DONE command=tap status=ok");
+                            }
+                            Ok(ControlCommand::Status) => {
+                                esp_println::println!(
+                                    "BREWCTL/1 STATUS view=startup operation={:?} retry=confirm",
+                                    stage
+                                );
+                                esp_println::println!("BREWCTL/1 DONE command=status status=ok");
+                            }
+                            Ok(command) => {
+                                let name = match command {
+                                    ControlCommand::Screen => "screen",
+                                    ControlCommand::Upload(_) => "upload",
+                                    ControlCommand::AbortUpload => "abort-upload",
+                                    ControlCommand::Tap(_) | ControlCommand::Status => {
+                                        unreachable!()
+                                    }
+                                };
+                                esp_println::println!(
+                                    "BREWCTL/1 ERROR command={} reason=startup-recovery",
+                                    name
+                                );
+                                esp_println::println!(
+                                    "BREWCTL/1 DONE command={} status=error",
+                                    name
+                                );
+                            }
+                            Err(error) => {
+                                esp_println::println!(
+                                    "BREWCTL/1 ERROR command=parse reason={}",
+                                    error.name()
+                                );
+                                esp_println::println!("BREWCTL/1 DONE command=parse status=error");
+                            }
+                        }
+                    }
+                }
+                if let Either::First(event) = select(
+                    INPUT_EVENTS.receive(),
+                    Timer::after(Duration::from_millis(20)),
+                )
+                .await
+                    && event.transition() == ButtonTransition::Pressed
+                {
+                    startup.input(map_button(event.button()));
+                }
+                if !matches!(startup, Startup::AwaitingRetry(_)) {
+                    esp_println::println!(
+                        "BREWCTL/1 LOG stage=startup state=continuing operation={:?} next={:?}",
+                        stage,
+                        startup
+                    );
+                }
+            }
+            Startup::Ready => break,
+        }
+    }
+    let store = store.expect("startup initialized storage");
+    let mut panel = panel.expect("startup initialized display");
     info!(
         "reader catalog ready: books={} images={} cached_spines={} path_bytes={}",
         library.length, images.length, library.spine_path_count, library.spine_path_byte_length
     );
-
-    let Some(profile) = X4DriveProfile::parse(X4_DRIVE_PROFILE) else {
-        stop("reader X4 drive profile is invalid").await;
-    };
-    let Some(refresh_policy_mode) = RefreshPolicyMode::parse(DISPLAY_REFRESH) else {
-        stop("reader display refresh policy is invalid").await;
-    };
-    let Some(mut panel) = initialize_panel(store, profile, refresh_policy_mode) else {
-        stop("reader display initialization failed").await;
-    };
     info!(
         "reader display configured: drive={=str} previous={=str} refresh={=str}",
         panel.display.drive_profile().name(),
@@ -625,18 +706,32 @@ pub async fn reader_app_task(
             retained.preferences
         }
     };
-    let selected_image = images.selected(store);
+    let selected_image = images.selected(store.app_data().read_selected_image());
     let (mut app, first_effect) = App::from_resume_with_catalog(
         library.length,
         images.length,
-        selected_image,
+        selected_image.as_ref().copied().unwrap_or(None),
         preferences,
         retained.resume,
     )
-    .unwrap_or((
-        App::with_catalog(library.length, images.length, selected_image, preferences),
-        AppEffect::Render,
-    ));
+    .unwrap_or_else(|error| {
+        esp_println::println!("BREWCTL/1 LOG stage=resume state=home reason={:?}", error);
+        (
+            App::with_catalog(
+                library.length,
+                images.length,
+                selected_image.as_ref().copied().unwrap_or(None),
+                preferences,
+            ),
+            AppEffect::Render,
+        )
+    });
+    if let Err(error) = images.apply_selection(&mut app, selected_image) {
+        esp_println::println!(
+            "BREWCTL/1 LOG stage=sleep-image state=unavailable reason={:?}",
+            error
+        );
+    }
     if let Some(status) = BATTERY_STATUS.try_take() {
         let _ = app.set_battery(status);
     }
@@ -654,7 +749,7 @@ pub async fn reader_app_task(
             enter_sleep(resume, app.preferences(), library, store, panel, rtc_resume).await;
         }
         Ok(None) => {}
-        Err(status) => stop(status).await,
+        Err(status) => info!("{=str}", status),
     }
     if matches!(wakeup_cause, SleepSource::Gpio) {
         info!("reader resumed after GPIO3 deep-sleep wake");
@@ -686,7 +781,7 @@ pub async fn reader_app_task(
                     enter_sleep(resume, app.preferences(), library, store, panel, rtc_resume).await;
                 }
                 Ok(None) => {}
-                Err(status) => stop(status).await,
+                Err(status) => info!("{=str}", status),
             }
         }
         if let Some(event) =
@@ -703,27 +798,44 @@ pub async fn reader_app_task(
                     loaded: &mut loaded,
                 })
                 .run_input(InputSource::Usb, button),
-                ControlEvent::ImagesChanged => {
-                    load_images(store, images);
-                    let selected = images.selected(store);
-                    let effect = app.replace_image_catalog(images.length, selected);
-                    run_effect(
-                        effect,
-                        &mut app,
-                        DeviceCatalogs { library, images },
-                        store,
-                        &mut panel,
-                        &mut workspaces,
-                        &mut loaded,
-                    )
-                }
+                ControlEvent::ImagesChanged => match load_images(store, images) {
+                    Ok(()) => {
+                        let selected = images.selected(store.app_data().read_selected_image());
+                        let effect = app.replace_image_catalog(
+                            images.length,
+                            selected.as_ref().copied().unwrap_or(None),
+                        );
+                        if let Err(error) = images.apply_selection(&mut app, selected) {
+                            esp_println::println!(
+                                "BREWCTL/1 LOG stage=sleep-image state=unavailable reason={:?}",
+                                error
+                            );
+                        }
+                        run_effect(
+                            effect,
+                            &mut app,
+                            DeviceCatalogs { library, images },
+                            store,
+                            &mut panel,
+                            &mut workspaces,
+                            &mut loaded,
+                        )
+                    }
+                    Err(error) => {
+                        esp_println::println!(
+                            "BREWCTL/1 LOG stage=image-scan state=retained reason={:?}",
+                            error
+                        );
+                        Err("reader image scan failed; catalog retained")
+                    }
+                },
             };
             match result {
                 Ok(Some(resume)) => {
                     enter_sleep(resume, app.preferences(), library, store, panel, rtc_resume).await;
                 }
                 Ok(None) => {}
-                Err(status) => stop(status).await,
+                Err(status) => info!("{=str}", status),
             }
         }
 
@@ -750,7 +862,7 @@ pub async fn reader_app_task(
                 enter_sleep(resume, app.preferences(), library, store, panel, rtc_resume).await;
             }
             Ok(None) => {}
-            Err(status) => stop(status).await,
+            Err(status) => info!("{=str}", status),
         }
     }
 }
@@ -807,6 +919,26 @@ impl ReaderRuntime<'_> {
             self.loaded,
         );
 
+        let result = reader_orchestration::persist_input_preferences(
+            result,
+            previous_preferences,
+            self.app,
+            |preferences| {
+                if self
+                    .store
+                    .app_data()
+                    .write_preferences(preferences)
+                    .is_err()
+                {
+                    esp_println::println!(
+                        "BREWCTL/1 LOG stage=preferences state=volatile reason=app-data-unavailable"
+                    );
+                } else {
+                    esp_println::println!("BREWCTL/1 LOG stage=preferences state=persisted");
+                }
+            },
+        );
+
         match result {
             Ok(resume) => {
                 if self.app.selected_sleep_image() != previous_image
@@ -824,20 +956,6 @@ impl ReaderRuntime<'_> {
                         );
                     } else {
                         esp_println::println!("BREWCTL/1 LOG stage=sleep-image state=persisted");
-                    }
-                }
-                if self.app.preferences() != previous_preferences {
-                    if self
-                        .store
-                        .app_data()
-                        .write_preferences(self.app.preferences())
-                        .is_err()
-                    {
-                        esp_println::println!(
-                            "BREWCTL/1 LOG stage=preferences state=volatile reason=app-data-unavailable"
-                        );
-                    } else {
-                        esp_println::println!("BREWCTL/1 LOG stage=preferences state=persisted");
                     }
                 }
                 if source == InputSource::Usb {
@@ -1132,19 +1250,18 @@ fn write_control_screen(frame: &[u8; FRAME_BYTES]) {
     esp_println::Printer::write_bytes(b"\n");
 }
 
+#[inline(never)]
 fn load_library(
     store: &DeviceStore,
     library: &mut DeviceLibrary,
     workspaces: &mut Workspaces,
-) -> Result<(), ()> {
+) -> Result<(), FileError> {
     info!("reader startup: book directory scan start");
     let catalog = workspaces.content.prepare_catalog();
-    store.scan_into(catalog).map_err(|error| {
-        info!(
-            "reader book catalog unavailable: {}",
-            defmt::Display2Format(&error)
-        );
-    })?;
+    store.scan_into(catalog)?;
+    library.length = 0;
+    library.spine_path_count = 0;
+    library.spine_path_byte_length = 0;
     info!(
         "reader startup: book directory scan done entries={}",
         catalog.len()
@@ -1155,10 +1272,26 @@ fn load_library(
             catalog_index,
             file.size()
         );
+        let index = library.length;
+        let book_id = BookId::new(index);
+        library.files[index] = Some(file);
+        library.titles[index] = FixedString::try_from_str("Unavailable EPUB").expect("title fits");
+        library.creators[index] = FixedString::new();
+        library.cover_paths[index] = None;
+        library.spine_counts[index] = 0;
+        library.book_cached_spine_counts[index] = 0;
+        library.length += 1;
         let (inflate, publication) = workspaces.frame_codec.prepare_epub();
         let reader = match store.open_reader(file) {
             Ok(reader) => reader,
-            Err(_) => continue,
+            Err(error) => {
+                esp_println::println!(
+                    "BREWCTL/1 LOG stage=book-open state=unavailable book={} reason={:?}",
+                    index,
+                    error
+                );
+                continue;
+            }
         };
         info!("reader startup: book open done index={}", catalog_index);
         let book = match DeviceEpub::open(
@@ -1170,70 +1303,69 @@ fn load_library(
             publication,
         ) {
             Ok(book) => book,
-            Err(_) => continue,
+            Err(error) => {
+                esp_println::println!(
+                    "BREWCTL/1 LOG stage=book-validation state=unavailable book={} reason={:?}",
+                    index,
+                    error
+                );
+                continue;
+            }
         };
         info!(
             "reader startup: book validation done index={}",
             catalog_index
         );
         let publication = book.publication();
-        let Ok(title) = FixedString::try_from_str(publication.title()) else {
-            continue;
-        };
-        let Ok(creator) = FixedString::try_from_str(publication.creator()) else {
-            continue;
-        };
-        let cover_path = match publication
-            .cover_path()
-            .map(FixedString::try_from_str)
-            .transpose()
-        {
-            Ok(path) => path,
-            Err(_) => continue,
-        };
-        let Ok(spine_count) = u8::try_from(publication.spine_len()) else {
-            continue;
-        };
-        let index = library.length;
-        let book_id = BookId::new(index);
+        let title = FixedString::try_from_str(publication.title())
+            .expect("publication and catalog title capacities match");
+        let creator = FixedString::try_from_str(publication.creator())
+            .expect("publication and catalog creator capacities match");
+        let cover_path = publication.cover_path().map(|path| {
+            FixedString::try_from_str(path).expect("publication and catalog path capacities match")
+        });
+        let spine_count = u8::try_from(publication.spine_len())
+            .expect("bounded publication has at most 64 spine items");
         library.cache_spine_paths(book_id, publication);
         library.files[index] = Some(file);
         library.titles[index] = title;
         library.creators[index] = creator;
         library.cover_paths[index] = cover_path;
         library.spine_counts[index] = spine_count;
-        library.length += 1;
     }
     Ok(())
 }
 
-fn load_images(store: &DeviceStore, images: &mut DeviceImages) {
-    *images = DeviceImages::empty();
-    let catalog = match store.app_data().scan_images::<MAX_DEVICE_IMAGES>() {
-        Ok(catalog) => catalog,
-        Err(error) => {
-            info!(
-                "reader image catalog unavailable: {}",
-                defmt::Display2Format(&error)
-            );
-            return;
-        }
-    };
-    for image in catalog.images() {
-        images.files[images.length] = Some(image);
-        images.length += 1;
-    }
+fn load_images(
+    store: &DeviceStore,
+    images: &mut DeviceImages,
+) -> Result<(), crate::storage::AppDataError<crate::x4::X4FatBlockDeviceError>> {
+    images.scanned(store.app_data().scan_images::<MAX_DEVICE_IMAGES>())
 }
 
 fn initialize_panel(
     store: &DeviceStore,
     profile: X4DriveProfile,
     refresh_policy_mode: RefreshPolicyMode,
-) -> Option<ReaderDisplay> {
+) -> Result<ReaderDisplay, &'static str> {
     store.with_device(|device| {
         device.with_hardware(|hardware| {
-            let mut bus = hardware.display_bus().ok()?;
-            let controller = Ssd1677::with_profile(profile).initialize(&mut bus).ok()?;
+            let mut bus = hardware.display_bus().map_err(|error| {
+                esp_println::println!(
+                    "BREWCTL/1 LOG stage=display-session state=failed reason={:?}",
+                    error
+                );
+                "reader display session failed"
+            })?;
+            let controller = Ssd1677::with_profile(profile)
+                .initialize(&mut bus)
+                .map_err(|error| {
+                    esp_println::println!(
+                        "BREWCTL/1 LOG stage=display-init state=failed reason={:?}",
+                        error
+                    );
+                    "reader display initialization failed"
+                })?;
             #[cfg(brewthink_previous_frame_storage = "host_ram")]
             let display = BufferedDisplay::with_host_ram(
                 controller,
@@ -1242,7 +1374,7 @@ fn initialize_panel(
             );
             #[cfg(brewthink_previous_frame_storage = "controller_ram")]
             let display = BufferedDisplay::with_controller_ram(controller, Rotation::Degrees270);
-            Some(ReaderDisplay {
+            Ok(ReaderDisplay {
                 display,
                 refresh_policy: RefreshPolicy::new(refresh_policy_mode),
             })
@@ -1251,7 +1383,7 @@ fn initialize_panel(
 }
 
 fn run_effect(
-    mut effect: AppEffect,
+    effect: AppEffect,
     app: &mut App,
     catalogs: DeviceCatalogs<'_>,
     store: &DeviceStore,
@@ -1259,85 +1391,108 @@ fn run_effect(
     workspaces: &mut Workspaces,
     loaded: &mut Option<LoadedChapter>,
 ) -> Result<Option<ResumePoint>, &'static str> {
-    let library = catalogs.library;
-    let images = catalogs.images;
-    loop {
-        effect = match effect {
-            AppEffect::None => return Ok(None),
-            AppEffect::LoadChapter {
-                book,
-                spine_index,
-                target: _,
-            } => {
-                esp_println::println!(
-                    "BREWCTL/1 LOG stage=load-chapter state=start book={} spine={}",
-                    book.index(),
-                    spine_index
-                );
-                let next = match load_chapter(book, spine_index, library, store, workspaces) {
-                    Ok(chapter) => {
-                        *loaded = Some(chapter);
-                        let page = workspaces.content.prepare_page();
-                        match layout_xhtml_page_into(
-                            &workspaces.resource[..chapter.length],
-                            0,
-                            app.reader_preferences(),
-                            page,
-                        ) {
-                            Ok(()) => app
-                                .chapter_loaded(chapter.spine_count, page.page_count())
-                                .map_err(|_| "reader application state rejected chapter")?,
-                            Err(_) => app
-                                .chapter_failed()
-                                .map_err(|_| "reader application state rejected layout failure")?,
-                        }
-                    }
-                    Err(_) => app
-                        .chapter_failed()
-                        .map_err(|_| "reader application state rejected failure")?,
-                };
-                esp_println::println!(
-                    "BREWCTL/1 LOG stage=load-chapter state=done book={} spine={}",
-                    book.index(),
-                    spine_index
-                );
-                next
-            }
-            AppEffect::Render => match app.view() {
+    reader_orchestration::run_effect(
+        effect,
+        app,
+        &mut DeviceReaderIo {
+            catalogs,
+            store,
+            panel,
+            workspaces,
+            loaded,
+        },
+    )
+    .map_err(|failure| {
+        esp_println::println!(
+            "BREWCTL/1 LOG stage=reader-operation state={} reason={:?}",
+            if failure.recovery.is_none() {
+                "recovered"
+            } else {
+                "recovery-failed"
+            },
+            failure
+        );
+        "reader operation failed; input remains available"
+    })
+}
+
+struct DeviceReaderIo<'a> {
+    catalogs: DeviceCatalogs<'a>,
+    store: &'a DeviceStore,
+    panel: &'a mut ReaderDisplay,
+    workspaces: &'a mut Workspaces,
+    loaded: &'a mut Option<LoadedChapter>,
+}
+
+impl ReaderIo for DeviceReaderIo<'_> {
+    type Error = ReaderError;
+
+    fn load_chapter(
+        &mut self,
+        book: BookId,
+        spine_index: usize,
+        preferences: crate::app::ReaderPreferences,
+    ) -> Result<ChapterPages, Self::Error> {
+        *self.loaded = None;
+        esp_println::println!(
+            "BREWCTL/1 LOG stage=load-chapter state=start book={} spine={}",
+            book.index(),
+            spine_index
+        );
+        let chapter = load_chapter(
+            book,
+            spine_index,
+            self.catalogs.library,
+            self.store,
+            self.workspaces,
+        )?;
+        let page = self.workspaces.content.prepare_page();
+        layout_xhtml_page_into(
+            &self.workspaces.resource[..chapter.length],
+            0,
+            preferences,
+            page,
+        )
+        .map_err(ReaderError::Layout)?;
+        let pages = ChapterPages {
+            spine_count: chapter.spine_count,
+            page_count: page.page_count(),
+        };
+        *self.loaded = Some(chapter);
+        esp_println::println!(
+            "BREWCTL/1 LOG stage=load-chapter state=done book={} spine={}",
+            book.index(),
+            spine_index
+        );
+        Ok(pages)
+    }
+
+    fn render(&mut self, app: &App) -> Result<Rendered, Self::Error> {
+        let library = self.catalogs.library;
+        let images = self.catalogs.images;
+        let store = self.store;
+        let workspaces = &mut *self.workspaces;
+        let result = (|| {
+            match app.view() {
                 AppView::BookCover { book, .. } => {
-                    if decode_book_cover_frame(book, library, store, workspaces).unwrap_or(false) {
-                        refresh(store, panel, workspaces.frame_codec.frame())?;
-                        return Ok(None);
-                    }
-                    app.input(AppInput::Confirm)
-                }
-                AppView::Home(_) => {
-                    render_home_frame(app, workspaces.frame_codec.frame())?;
-                    refresh(store, panel, workspaces.frame_codec.frame())?;
-                    return Ok(None);
-                }
-                AppView::Library => {
-                    esp_println::println!("BREWCTL/1 LOG stage=render-library state=start");
-                    render_library(app, library, store, workspaces)?;
-                    esp_println::println!("BREWCTL/1 LOG stage=render-library state=frame-ready");
-                    refresh(store, panel, workspaces.frame_codec.frame())?;
-                    esp_println::println!("BREWCTL/1 LOG stage=render-library state=done");
-                    info!(
-                        "reader shelf refreshed: selected={}",
-                        app.library().selected().map_or(usize::MAX, BookId::index)
+                    return reader_orchestration::render_cover(
+                        decode_book_cover_frame(book, library, store, workspaces),
+                        |error| {
+                            esp_println::println!(
+                                "BREWCTL/1 LOG stage=cover state=unavailable book={} reason={}",
+                                book.index(),
+                                error
+                            );
+                        },
+                        || refresh(store, self.panel, workspaces.frame_codec.frame()),
                     );
-                    return Ok(None);
                 }
+                AppView::Home(_) => render_home_frame(app, workspaces.frame_codec.frame())?,
+                AppView::Library => render_library(app, library, store, workspaces)?,
                 AppView::Files(_) => {
-                    render_files_frame(app, library, images, workspaces.frame_codec.frame())?;
-                    refresh(store, panel, workspaces.frame_codec.frame())?;
-                    return Ok(None);
+                    render_files_frame(app, library, images, workspaces.frame_codec.frame())?
                 }
-                AppView::Settings(_) => {
-                    render_settings_frame(app, images, store, workspaces)?;
-                    refresh(store, panel, workspaces.frame_codec.frame())?;
-                    return Ok(None);
-                }
+                AppView::Settings(_) => render_settings_frame(app, images, store, workspaces)?,
                 AppView::Loading(_) => return Err("reader render requested while loading"),
                 AppView::Reader(_) | AppView::ReaderDrawer(_) => {
                     let location = match app.view() {
@@ -1345,68 +1500,34 @@ fn run_effect(
                         AppView::ReaderDrawer(drawer) => drawer.session().location(),
                         _ => unreachable!(),
                     };
-                    esp_println::println!(
-                        "BREWCTL/1 LOG stage=render-reader state=start book={} spine={} page={}",
-                        location.book().index(),
-                        location.spine_index(),
-                        location.page_index()
-                    );
-                    let chapter = loaded.ok_or("reader chapter was not loaded")?;
+                    let chapter = self.loaded.ok_or("reader chapter was not loaded")?;
                     if chapter.book != location.book()
                         || chapter.spine_index != location.spine_index()
                     {
                         return Err("reader chapter cache mismatch");
                     }
-                    let xhtml = &workspaces.resource[..chapter.length];
                     render_page(
                         app,
                         location,
                         library,
-                        xhtml,
+                        &workspaces.resource[..chapter.length],
                         workspaces.content.prepare_page(),
                         &workspaces.navigation.titles,
                         workspaces.frame_codec.frame(),
                     )?;
-                    refresh(store, panel, workspaces.frame_codec.frame())?;
-                    esp_println::println!(
-                        "BREWCTL/1 LOG stage=render-reader state=done book={} spine={} page={}",
-                        location.book().index(),
-                        location.spine_index(),
-                        location.page_index()
-                    );
-                    info!(
-                        "reader page refreshed: book={} spine={} page={} pages={}",
-                        location.book().index(),
-                        location.spine_index(),
-                        location.page_index(),
-                        location.page_count()
-                    );
-                    return Ok(None);
                 }
-                AppView::Image(image) => {
-                    render_image_frame(app, image, images, store, workspaces)?;
-                    refresh(store, panel, workspaces.frame_codec.frame())?;
-                    return Ok(None);
-                }
+                AppView::Image(image) => render_image_frame(app, image, images, store, workspaces)?,
                 AppView::Error { book, .. } => {
-                    esp_println::println!("BREWCTL/1 LOG stage=render-error state=start");
-                    render_error(app, book, library, workspaces.frame_codec.frame())?;
-                    refresh(store, panel, workspaces.frame_codec.frame())?;
-                    esp_println::println!("BREWCTL/1 LOG stage=render-error state=done");
-                    return Ok(None);
+                    render_error(app, book, library, workspaces.frame_codec.frame())?
                 }
                 AppView::Sleeping { resume } => {
-                    esp_println::println!("BREWCTL/1 LOG stage=render-sleep state=start");
-                    render_sleep_frame(app, resume, library, images, store, workspaces)?;
-                    refresh(store, panel, workspaces.frame_codec.frame())?;
-                    esp_println::println!("BREWCTL/1 LOG stage=render-sleep state=done");
-                    info!("reader retained sleep frame refreshed");
-                    app.sleep_frame_ready()
-                        .map_err(|_| "reader application state rejected sleep frame")?
+                    render_sleep_frame(app, resume, library, images, store, workspaces)?
                 }
-            },
-            AppEffect::EnterDeepSleep { resume } => return Ok(Some(resume)),
-        };
+            }
+            refresh(store, self.panel, workspaces.frame_codec.frame())?;
+            Ok(Rendered::Frame)
+        })();
+        result.map_err(ReaderError::Render)
     }
 }
 
@@ -1416,22 +1537,22 @@ fn load_chapter(
     library: &DeviceLibrary,
     store: &DeviceStore,
     workspaces: &mut Workspaces,
-) -> Result<LoadedChapter, ()> {
-    let file = library.file(selected).ok_or(())?;
+) -> Result<LoadedChapter, ReaderError> {
+    let file = library.file(selected).ok_or(ReaderError::BookMissing)?;
     let (inflate, publication) = workspaces.frame_codec.prepare_epub();
-    let reader = store.open_reader(file).map_err(|_| ())?;
+    let reader = store.open_reader(file).map_err(ReaderError::File)?;
     let (spine_count, length) = if let Some(path) = library
         .spine_path(selected, spine_index)
         .filter(|_| workspaces.navigation.book == Some(selected))
     {
-        let archive = StreamingZip::open(reader, workspaces.zip).map_err(|_| ())?;
-        let entry = archive.find(path).map_err(|_| ())?;
+        let archive = StreamingZip::open(reader, workspaces.zip).map_err(ReaderError::Archive)?;
+        let entry = archive.find(path).map_err(ReaderError::Archive)?;
         if entry.uncompressed_size() as usize > workspaces.resource.len() {
-            return Err(());
+            return Err(ReaderError::ResourceTooLarge);
         }
         let length = archive
             .read_entry(entry, workspaces.resource, inflate)
-            .map_err(|_| ())?;
+            .map_err(ReaderError::Archive)?;
         (library.spine_count(selected), length)
     } else {
         let book = DeviceEpub::open(
@@ -1442,7 +1563,7 @@ fn load_chapter(
             workspaces.resource,
             publication,
         )
-        .map_err(|_| ())?;
+        .map_err(ReaderError::Epub)?;
         let spine_count = book.publication().spine_len();
         if workspaces.navigation.book != Some(selected) {
             if let Err(error) = book.read_chapter_titles(
@@ -1460,7 +1581,7 @@ fn load_chapter(
         }
         let length = book
             .read_spine(spine_index, workspaces.resource, inflate)
-            .map_err(|_| ())?;
+            .map_err(ReaderError::Epub)?;
         (spine_count, length)
     };
     Ok(LoadedChapter {
@@ -1487,18 +1608,31 @@ fn read_book_cover(
     );
     let file = library.file(selected).ok_or("reader book is missing")?;
     let inflate = workspaces.frame_codec.prepare_inflate();
-    let reader = store
-        .open_reader(file)
-        .map_err(|_| "reader cover file open failed")?;
-    let archive = StreamingZip::open(reader, workspaces.zip)
-        .map_err(|_| "reader cover archive open failed")?;
+    let reader = store.open_reader(file).map_err(|error| {
+        esp_println::println!(
+            "BREWCTL/1 LOG stage=cover-open state=failed reason={:?}",
+            error
+        );
+        "reader cover file open failed"
+    })?;
+    let archive = StreamingZip::open(reader, workspaces.zip).map_err(|error| {
+        esp_println::println!(
+            "BREWCTL/1 LOG stage=cover-archive state=failed reason={:?}",
+            error
+        );
+        "reader cover archive open failed"
+    })?;
     esp_println::println!(
         "BREWCTL/1 LOG stage=cover state=archive-open book={}",
         selected.index()
     );
-    let entry = archive
-        .find(path)
-        .map_err(|_| "reader cover entry is missing")?;
+    let entry = archive.find(path).map_err(|error| {
+        esp_println::println!(
+            "BREWCTL/1 LOG stage=cover-entry state=failed reason={:?}",
+            error
+        );
+        "reader cover entry is unavailable"
+    })?;
     esp_println::println!(
         "BREWCTL/1 LOG stage=cover state=entry-found book={} compressed={} uncompressed={}",
         selected.index(),
@@ -1517,7 +1651,13 @@ fn read_book_cover(
     let maximum = maximum.min(MAX_ENCODED_COVER_BYTES as usize);
     let length = archive
         .read_entry(entry, &mut workspaces.resource[..maximum], inflate)
-        .map_err(|_| "reader cover read failed")?;
+        .map_err(|error| {
+            esp_println::println!(
+                "BREWCTL/1 LOG stage=cover-read state=failed reason={:?}",
+                error
+            );
+            "reader cover read failed"
+        })?;
     Ok(Some(length))
 }
 
@@ -1560,7 +1700,13 @@ fn decode_book_cover(
     } else {
         return Ok(false);
     };
-    decoded.map_err(|_| "reader cover decode failed")?;
+    decoded.map_err(|error| {
+        esp_println::println!(
+            "BREWCTL/1 LOG stage=cover-decode state=failed reason={:?}",
+            error
+        );
+        "reader cover decode failed"
+    })?;
     esp_println::println!(
         "BREWCTL/1 LOG stage=cover state=done book={}",
         selected.index()
@@ -1590,14 +1736,20 @@ fn decode_image_preview(
     file: &ImageFile,
     store: &DeviceStore,
     workspaces: &mut Workspaces,
-) -> Result<(), ()> {
+) -> Result<(), &'static str> {
     let loaded = store
         .app_data()
         .read_image(
             *file.name(),
             &mut workspaces.resource[..MAX_DEVICE_IMAGE_BYTES],
         )
-        .map_err(|_| ())?;
+        .map_err(|error| {
+            esp_println::println!(
+                "BREWCTL/1 LOG stage=image-preview-read state=failed reason={:?}",
+                error
+            );
+            "reader image preview read failed"
+        })?;
     let encoded = &workspaces.resource[..loaded.length()];
     let output = &mut *workspaces.content.cover();
     let decoded = match loaded.format() {
@@ -1608,7 +1760,13 @@ fn decode_image_preview(
             .frame_codec
             .with_png(|workspace| decode_png_cover(encoded, output, workspace)),
     };
-    decoded.map(|_| ()).map_err(|_| ())
+    decoded.map(|_| ()).map_err(|error| {
+        esp_println::println!(
+            "BREWCTL/1 LOG stage=image-preview-decode state=failed reason={:?}",
+            error
+        );
+        "reader image preview decode failed"
+    })
 }
 
 fn decode_image_frame(
@@ -1623,7 +1781,13 @@ fn decode_image_frame(
             *file.name(),
             &mut workspaces.resource[..MAX_DEVICE_IMAGE_BYTES],
         )
-        .map_err(|_| "reader image read failed")?;
+        .map_err(|error| {
+            esp_println::println!(
+                "BREWCTL/1 LOG stage=image-read state=failed reason={:?}",
+                error
+            );
+            "reader image read failed"
+        })?;
     decode_resource_frame(loaded.length(), loaded.format(), scale, workspaces)
 }
 
@@ -1658,7 +1822,13 @@ fn decode_resource_frame(
                 .ok_or("reader PNG workspace does not fit")?,
         ),
     }
-    .map_err(|_| "reader image decode failed")?;
+    .map_err(|error| {
+        esp_println::println!(
+            "BREWCTL/1 LOG stage=image-decode state=failed reason={:?}",
+            error
+        );
+        "reader image decode failed"
+    })?;
     Ok(())
 }
 
@@ -1737,7 +1907,13 @@ fn render_settings_frame(
                 name: file.name().as_str(),
                 bitmap: bitmap(workspaces.content.cover()),
             },
-            Err(()) => CustomImagePreview::Invalid,
+            Err(error) => {
+                esp_println::println!(
+                    "BREWCTL/1 LOG stage=image-preview state=unavailable reason={}",
+                    error
+                );
+                CustomImagePreview::Invalid
+            }
         },
         None => CustomImagePreview::Missing,
     };
@@ -1764,20 +1940,7 @@ fn render_image_frame(
     let file = images
         .file(image)
         .ok_or("image selection is out of bounds")?;
-    if decode_image_frame(file, ScaleMode::Contain, store, workspaces).is_err() {
-        let mut target =
-            PackedImage::new(frame_size(), READER_DEPTH, workspaces.frame_codec.frame())
-                .map_err(|_| "reader frame buffer has the wrong size")?;
-        return render_app(
-            AppFrame::Error {
-                book_title: file.name().as_str(),
-                message: "This image could not be opened.",
-                battery: app.battery(),
-            },
-            &mut target,
-        )
-        .map_err(|_| "reader image error render failed");
-    }
+    decode_image_frame(file, ScaleMode::Contain, store, workspaces)?;
     let mut target = PackedImage::new(frame_size(), READER_DEPTH, workspaces.frame_codec.frame())
         .map_err(|_| "reader frame buffer has the wrong size")?;
     render_image_viewer(
@@ -1803,8 +1966,15 @@ fn render_library(
         if Some(index) == selected {
             continue;
         }
-        decoded[slot] =
-            decode_book_cover(BookId::new(index), library, store, workspaces).unwrap_or(false);
+        decoded[slot] = decode_book_cover(BookId::new(index), library, store, workspaces)
+            .unwrap_or_else(|error| {
+                esp_println::println!(
+                    "BREWCTL/1 LOG stage=shelf-cover state=unavailable book={} reason={}",
+                    index,
+                    error
+                );
+                false
+            });
         if decoded[slot] {
             let cache_slot = slot - usize::from(selected_slot < slot);
             let offset = MAX_ENCODED_COVER_BYTES as usize + cache_slot * SHELF_COVER_BYTES;
@@ -1816,7 +1986,16 @@ fn render_library(
     }
     if let Some(index) = selected.filter(|index| visible.contains(index)) {
         decoded[index - visible.start] =
-            decode_book_cover(BookId::new(index), library, store, workspaces).unwrap_or(false);
+            decode_book_cover(BookId::new(index), library, store, workspaces).unwrap_or_else(
+                |error| {
+                    esp_println::println!(
+                        "BREWCTL/1 LOG stage=shelf-cover state=unavailable book={} reason={}",
+                        index,
+                        error
+                    );
+                    false
+                },
+            );
     }
     let covers = &workspaces.resource[MAX_ENCODED_COVER_BYTES as usize..];
     let full_cover = &*workspaces.content.cover();
@@ -1863,8 +2042,15 @@ fn render_page(
     chapter_titles: &[FixedString<{ crate::navigation::CHAPTER_TITLE_BYTES }>],
     frame: &mut [u8; FRAME_BYTES],
 ) -> Result<(), &'static str> {
-    layout_xhtml_page_into(xhtml, location.page_index(), app.reader_preferences(), page)
-        .map_err(|_| "reader requested page layout failed")?;
+    layout_xhtml_page_into(xhtml, location.page_index(), app.reader_preferences(), page).map_err(
+        |error| {
+            esp_println::println!(
+                "BREWCTL/1 LOG stage=page-layout state=failed reason={:?}",
+                error
+            );
+            "reader requested page layout failed"
+        },
+    )?;
     let mut lines = [ReaderLine::new("", ReaderStyle::Body); MAX_PAGE_LINES];
     let mut line_count = 0;
     for line in page.lines() {
@@ -1940,18 +2126,29 @@ fn render_sleep_frame(
                 let Some(file) = images.file(image) else {
                     continue;
                 };
-                if decode_image_frame(file, ScaleMode::Cover, store, workspaces).is_ok() {
-                    esp_println::println!(
-                        "BREWCTL/1 LOG stage=sleep-frame source=custom image={} crc32={:08x}",
-                        image.index(),
-                        crc32fast::hash(workspaces.frame_codec.frame())
-                    );
-                    return Ok(());
+                match decode_image_frame(file, ScaleMode::Cover, store, workspaces) {
+                    Ok(()) => {
+                        esp_println::println!(
+                            "BREWCTL/1 LOG stage=sleep-frame source=custom image={} crc32={:08x}",
+                            image.index(),
+                            crc32fast::hash(workspaces.frame_codec.frame())
+                        );
+                        return Ok(());
+                    }
+                    Err(error) => esp_println::println!(
+                        "BREWCTL/1 LOG stage=sleep-frame source=custom state=fallback reason={}",
+                        error
+                    ),
                 }
             }
             SleepScreenSource::BookCover(book) => {
-                if decode_book_cover_frame(book, library, store, workspaces).unwrap_or(false) {
-                    return Ok(());
+                match decode_book_cover_frame(book, library, store, workspaces) {
+                    Ok(true) => return Ok(()),
+                    Ok(false) => {}
+                    Err(error) => esp_println::println!(
+                        "BREWCTL/1 LOG stage=sleep-frame source=cover state=fallback reason={}",
+                        error
+                    ),
                 }
             }
             SleepScreenSource::BuiltIn => {
@@ -1999,13 +2196,23 @@ fn refresh(
     let frequency = esp_hal::time::Rate::from_mhz(if image.is_monochrome() { 40 } else { 20 });
     let applied = store.with_device(|device| {
         device.with_hardware(|hardware| {
-            let mut bus = hardware
-                .display_bus_at(frequency)
-                .map_err(|_| "reader display session failed")?;
+            let mut bus = hardware.display_bus_at(frequency).map_err(|error| {
+                esp_println::println!(
+                    "BREWCTL/1 LOG stage=display-session state=failed reason={:?}",
+                    error
+                );
+                "reader display session failed"
+            })?;
             panel
                 .display
                 .refresh_image(&mut bus, &mut Delay::new(), image, mode)
-                .map_err(|_| "reader display refresh failed")
+                .map_err(|error| {
+                    esp_println::println!(
+                        "BREWCTL/1 LOG stage=display-refresh state=failed reason={:?}",
+                        error
+                    );
+                    "reader display refresh failed"
+                })
         })
     })?;
     panel.refresh_policy.commit(applied);

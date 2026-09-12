@@ -509,6 +509,106 @@ fn every_failed_preference_write_retains_a_readable_record_after_remount() {
 }
 
 #[test]
+fn reader_orchestration_retains_catalog_and_selection_read_failures() {
+    use crate::{
+        app::{App, AppInput, AppPreferences, AppView, Direction, ImageId},
+        reader_orchestration::ReaderImages,
+    };
+
+    let card = Card::formatted();
+    let store = card.store();
+    let data = store.app_data();
+    let bytes = b"\x89PNG\r\n\x1a\nimage";
+    let name = ImageName::parse("KEEP.PNG").unwrap();
+    let request = UploadRequest::image(name, bytes.len(), crc32fast::hash(bytes));
+    data.begin_image_upload(request).unwrap();
+    data.append_image_upload(bytes).unwrap();
+    data.commit_image_upload(request, &mut [0; 512]).unwrap();
+    data.write_selected_image(name).unwrap();
+
+    let mut images = ReaderImages::<4>::empty();
+    images.scanned(data.scan_images()).unwrap();
+    assert_eq!(
+        images.selected(Ok::<_, Fault>(None)),
+        Ok(Some(ImageId::new(0)))
+    );
+    let mut app = App::with_catalog(0, 0, None, AppPreferences::default());
+    images
+        .apply_selection(&mut app, images.selected(data.read_selected_image()))
+        .unwrap();
+    assert_eq!(app.selected_sleep_image(), Some(ImageId::new(0)));
+
+    data.write_file(AppDataFile::ImageUploadTransaction, b"corrupt journal")
+        .unwrap();
+    assert_eq!(
+        images.scanned(data.scan_images()),
+        Err(AppDataError::InvalidMetadata)
+    );
+    assert_eq!(images.file(ImageId::new(0)).unwrap().name(), &name);
+    assert_eq!(app.image_count(), 1);
+    card.fail_read_containing(b"corrupt journal");
+    assert_eq!(
+        images.scanned(data.scan_images()),
+        Err(AppDataError::Filesystem(Error::DeviceError(Fault::Read)))
+    );
+    assert_eq!(images.file(ImageId::new(0)).unwrap().name(), &name);
+    card.0.borrow_mut().fail_read = None;
+    let mut output = [0; 64];
+    assert_eq!(
+        data.read_file(AppDataFile::ImageUploadTransaction, &mut output),
+        Ok(15)
+    );
+    assert_eq!(&output[..15], b"corrupt journal");
+
+    data.write_file(AppDataFile::ImageSelection, b"corrupt selection")
+        .unwrap();
+    assert_eq!(
+        images.apply_selection(&mut app, images.selected(data.read_selected_image())),
+        Err(AppDataError::InvalidMetadata)
+    );
+    assert_eq!(app.selected_sleep_image(), None);
+    assert_eq!(app.image_count(), 1);
+    assert_eq!(
+        data.read_file(AppDataFile::ImageSelection, &mut output),
+        Ok(17)
+    );
+    assert_eq!(&output[..17], b"corrupt selection");
+    card.fail_read_containing(b"corrupt selection");
+    assert_eq!(
+        images.apply_selection(&mut app, images.selected(data.read_selected_image())),
+        Err(AppDataError::Filesystem(Error::DeviceError(Fault::Read)))
+    );
+    assert_eq!(app.selected_sleep_image(), None);
+    card.0.borrow_mut().fail_read = None;
+    assert_eq!(
+        data.read_file(AppDataFile::ImageSelection, &mut output),
+        Ok(17)
+    );
+    assert_eq!(&output[..17], b"corrupt selection");
+
+    app.input(AppInput::Move(Direction::Down));
+    app.input(AppInput::Confirm);
+    app.input(AppInput::Confirm);
+    assert_eq!(app.view(), AppView::Image(ImageId::new(0)));
+    app.input(AppInput::Back);
+    assert!(matches!(app.view(), AppView::Files(_)));
+
+    data.write_file(AppDataFile::ImageUploadTransaction, &[])
+        .unwrap();
+    images.scanned(data.scan_images()).unwrap();
+    data.write_selected_image(name).unwrap();
+    images
+        .apply_selection(&mut app, images.selected(data.read_selected_image()))
+        .unwrap();
+    assert_eq!(app.selected_sleep_image(), Some(ImageId::new(0)));
+    assert_eq!(
+        data.read_named_file(name.as_str(), &mut output),
+        Ok(bytes.len())
+    );
+    assert_eq!(&output[..bytes.len()], bytes);
+}
+
+#[test]
 fn filesystem_errors_keep_their_source_chain() {
     use core::error::Error as _;
     let error = AppDataError::Filesystem(Error::DeviceError(Fault::Read));
@@ -521,4 +621,124 @@ fn filesystem_errors_keep_their_source_chain() {
             .downcast_ref::<Fault>(),
         Some(&Fault::Read)
     );
+}
+
+struct TypographyIo {
+    fail_load: bool,
+}
+
+impl crate::reader_orchestration::ReaderIo for TypographyIo {
+    type Error = Fault;
+
+    fn load_chapter(
+        &mut self,
+        _: crate::app::BookId,
+        _: usize,
+        _: crate::app::ReaderPreferences,
+    ) -> Result<crate::reader_orchestration::ChapterPages, Fault> {
+        if self.fail_load {
+            Err(Fault::Read)
+        } else {
+            Ok(crate::reader_orchestration::ChapterPages {
+                spine_count: 2,
+                page_count: 3,
+            })
+        }
+    }
+
+    fn render(
+        &mut self,
+        _: &crate::app::App,
+    ) -> Result<crate::reader_orchestration::Rendered, Fault> {
+        Ok(crate::reader_orchestration::Rendered::Frame)
+    }
+}
+
+#[test]
+fn failed_typography_reload_persists_surviving_preferences_before_reopen_and_restore() {
+    use crate::app::{App, AppInput, AppView, BookId, BookOrigin, Direction, ResumePoint};
+    use crate::reader_orchestration::{
+        Failure, OperationFailure, persist_input_preferences, run_effect,
+    };
+    use crate::storage::book_resume::SavedResume;
+
+    for fail_write in [false, true] {
+        let card = Card::formatted();
+        let store = card.store();
+        store.ensure_layout().unwrap();
+        let original = AppPreferences::default();
+        store.app_data().write_preferences(original).unwrap();
+        let resume = ResumePoint::Reader {
+            book: BookId::new(0),
+            spine_index: 1,
+            page_index: 2,
+            origin: BookOrigin::Books,
+        };
+        let (mut app, effect) = App::from_resume(1, original, resume).unwrap();
+        let mut io = TypographyIo { fail_load: false };
+        run_effect(effect, &mut app, &mut io).unwrap();
+        let mut persistence = Vec::new();
+        let mut input = |app: &mut App, io: &mut TypographyIo, button| {
+            let previous = app.preferences();
+            let result = run_effect(app.input(button), app, io);
+            persist_input_preferences(result, previous, app, |preferences| {
+                persistence.push(store.app_data().write_preferences(preferences));
+            })
+        };
+        input(&mut app, &mut io, AppInput::Confirm).unwrap();
+        for _ in 0..3 {
+            input(&mut app, &mut io, AppInput::Move(Direction::Down)).unwrap();
+        }
+        input(&mut app, &mut io, AppInput::Move(Direction::Right)).unwrap();
+        io.fail_load = true;
+        if fail_write {
+            let mut memory = card.0.borrow_mut();
+            memory.fail_write_after = Some(memory.writes);
+        }
+        assert_eq!(
+            input(&mut app, &mut io, AppInput::Confirm),
+            Err(OperationFailure {
+                cause: Failure::Chapter(Fault::Read),
+                recovery: None,
+            })
+        );
+        let changed = app.preferences();
+        assert_ne!(changed, original);
+        assert!(matches!(app.view(), AppView::Error { .. }));
+        card.0.borrow_mut().fail_write_after = None;
+        io.fail_load = false;
+        input(&mut app, &mut io, AppInput::Back).unwrap();
+        input(&mut app, &mut io, AppInput::Confirm).unwrap();
+        assert!(matches!(app.view(), AppView::Reader(_)));
+        assert_eq!(app.preferences(), changed);
+        let asleep = input(&mut app, &mut io, AppInput::Power).unwrap().unwrap();
+        assert_eq!(persistence.len(), 1);
+        let expected = if fail_write {
+            assert_eq!(
+                persistence[0],
+                Err(AppDataError::Filesystem(Error::DeviceError(Fault::Write)))
+            );
+            original
+        } else {
+            assert_eq!(persistence[0], Ok(()));
+            changed
+        };
+        let books = [Some(BookFile::new(
+            BookFileName::new("TEST.EPUB").unwrap(),
+            100,
+        ))];
+        let words = SavedResume::capture(asleep, changed, &books)
+            .unwrap()
+            .encode();
+        let retained = SavedResume::decode(&words).unwrap();
+        let remounted = card.store();
+        let record = remounted.app_data().read_preferences().unwrap();
+        assert_eq!(record, Some(expected));
+        let preferences = record.unwrap_or(retained.preferences());
+        let (mut restored, effect) =
+            App::from_resume(1, preferences, retained.resolve(&books).unwrap()).unwrap();
+        run_effect(effect, &mut restored, &mut io).unwrap();
+        assert_eq!(restored.preferences(), expected);
+        assert!(matches!(restored.view(), AppView::Reader(_)));
+    }
 }
