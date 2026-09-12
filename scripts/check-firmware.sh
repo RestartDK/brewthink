@@ -13,7 +13,7 @@ while read -r stage features storage; do
     scripts/build-app1-image.sh "artifacts/ci/$stage-$storage.bin"
 
   if [[ "$stage" == reader-app ]]; then
-    python3 scripts/check-reader-stack.py target/riscv32imc-unknown-none-elf/release/brewthink
+    cp "artifacts/ci/$stage-$storage.bin.reader-stack.json" artifacts/ci/reader-stack.json
   fi
 done <<'CONFIGURATIONS'
 heartbeat none controller-ram

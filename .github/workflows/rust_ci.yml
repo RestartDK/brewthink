@@ -87,12 +87,16 @@ jobs:
       - run: python3 -m pip install esptool==5.3.1
       - run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - run: scripts/check-firmware.sh
-      - name: Save image inspection reports
+      - run: python3 scripts/check-reader-memory.py artifacts/ci/reader-memory
+      - name: Save image inspection and limited memory reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: firmware-image-reports
-          path: artifacts/ci/*.txt
+          path: |
+            artifacts/ci/*.txt
+            artifacts/ci/*.json
+            artifacts/ci/reader-memory/
           if-no-files-found: error
 
   web-simulator:
