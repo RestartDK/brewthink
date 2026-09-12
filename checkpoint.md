@@ -1,5 +1,21 @@
 # Brewthink checkpoint
 
+## Current hardware, footer button order, 2026-09-12
+
+The user explicitly requested swapping the footer groups and flashing that change. The reader now places Left/Right on the left and Back/Confirm actions on the right. Button decoding and grayscale refresh behavior are unchanged.
+
+- Source is `07a6d1f` plus the footer correction on `daniel/footer-button-order`.
+- Image `artifacts/footer-button-order/reader-app1.bin`, 573,664 bytes.
+- SHA-256 `948fa52d06d1fc0c687cef9fea149fe46327c02facc415359b9aa525b34c5ce6`.
+- Reviewed app1 write `0x650000..0x6DC0DF`; affected sectors `0x650000..0x6DCFFF`.
+- Guarded write and byte-for-byte readback succeeded, followed by reset. Stock app0, otadata, all other partitions, and eFuses were not written.
+- After reset, `BREWCTL/1 STATUS view=home selected=0` and both status/screen terminal records reported success. The returned 480 × 800, 2-bpp frame was inspected. It confirms the corrected footer in the firmware's logical frame, not an optical measurement of the panel.
+- 239 combined host tests, 19 production-browser tests, host/embedded Clippy, formatting, release image checks, and the reader stack check passed. Required stack is 12,944 bytes with an 8,192-byte reserve; available stack is 20,592 bytes.
+- One hot-reloading browser session captured Home and the reading drawer before and after the fix. Both pairs differ only by the exact footer-group swap. All 26 changed PBM fixtures satisfy the same check.
+- Evidence, native captures, build/flash logs, and the source patch are under ignored `artifacts/footer-button-order/`. No monitor or simulator server remains running after completion.
+
+This supersedes the older hardware records below.
+
 ## Active hardware override, grayscale bench, 2026-09-06
 
 This section supersedes the historical live-firmware state below. Source `main` was at `ef32fbb` when the diagnostic was added. The grayscale PR preserves the diagnostic changes and `docs/grayscale-depth.md`. The original experiment checkout remains separate.

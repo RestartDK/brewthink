@@ -239,12 +239,14 @@ impl Drawable for CommandBar<'_> {
         Rectangle::new(Point::new(self.left, self.rule_y), Size::new(self.width, 1))
             .into_styled(PrimitiveStyle::with_fill(Gray8::new(0)))
             .draw(target)?;
-        let icons = [Icon::Back, Icon::Confirm, Icon::Left, Icon::Right];
-        for ((icon, action), center) in icons
-            .into_iter()
-            .zip(self.actions)
-            .zip(FRONT_BUTTON_CENTERS)
-        {
+        let [back, confirm, left, right] = self.actions;
+        let buttons = [
+            (Icon::Left, left),
+            (Icon::Right, right),
+            (Icon::Back, back),
+            (Icon::Confirm, confirm),
+        ];
+        for ((icon, action), center) in buttons.into_iter().zip(FRONT_BUTTON_CENTERS) {
             let center = center + self.left - CONTENT_LEFT;
             icon.draw(target, Point::new(center - 12, self.rule_y + 8), CHROME_INK)?;
             Label::new(action, TextRole::CommandHint)

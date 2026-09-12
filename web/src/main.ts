@@ -98,10 +98,10 @@ app.innerHTML = `
           </div>
         </div>
         <div class="front-controls" aria-label="Front buttons">
-          <button class="front-key" id="back-button" type="button" aria-label="Back" disabled>↶</button>
-          <button class="front-key" id="confirm-selection" type="button" aria-label="Confirm" disabled>✓</button>
           <button class="front-key" type="button" data-input="left" aria-label="Move left" disabled>‹</button>
           <button class="front-key" type="button" data-input="right" aria-label="Move right" disabled>›</button>
+          <button class="front-key" id="back-button" type="button" aria-label="Back" disabled>↶</button>
+          <button class="front-key" id="confirm-selection" type="button" aria-label="Confirm" disabled>✓</button>
         </div>
         <div class="side-controls" aria-label="Side buttons">
           <button class="side-key" type="button" data-input="up" aria-label="Move up" disabled>↑</button>

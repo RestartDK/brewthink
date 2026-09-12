@@ -25,8 +25,15 @@ test("aligns the two front rockers with the shared framebuffer hint centers", as
   if (frame === null) throw new Error("Missing frame");
   const buttons = page.locator(".front-key");
   await expect(buttons).toHaveCount(4);
-  for (const [index, center] of [100, 192, 300, 392].entries()) {
-    const bounds = await buttons.nth(index).boundingBox();
+  const physicalButtons = [
+    { name: "Move left", center: 100 },
+    { name: "Move right", center: 192 },
+    { name: "Back", center: 300 },
+    { name: "Confirm", center: 392 },
+  ];
+  for (const [index, { name, center }] of physicalButtons.entries()) {
+    await expect(buttons.nth(index)).toHaveAccessibleName(name);
+    const bounds = await page.getByRole("button", { name, exact: true }).boundingBox();
     if (bounds === null) throw new Error("Missing rocker");
     expect(bounds.x + bounds.width / 2 - frame.x).toBeCloseTo(center, 1);
     expect(bounds.y).toBeGreaterThan(frame.y + frame.height);
