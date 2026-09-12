@@ -222,13 +222,37 @@ class ProducerBoundaryTests(unittest.TestCase):
             configuration = root / ".cargo/config.toml"
             overrides = ['[build]\nrustc="other"', '[build]\nrustc-wrapper="other"',
                          '[build]\nrustc-workspace-wrapper="other"', '[env]\nRUSTC_BOOTSTRAP="1"',
-                         '[env]\nCARGO_BUILD_RUSTC="other"']
+                         '[env]\nCARGO_BUILD_RUSTC="other"',
+                         '[env]\nRUSTUP_TOOLCHAIN={value="other-installed-toolchain", force=true}',
+                         '[env]\nRUSTUP_HOME={value="other", force=true}',
+                         '[env]\nPATH={value="other", force=true}',
+                         '[env]\nCARGO_HOME={value="other", force=true}',
+                         '[env]\nBREWTHINK_DIAGNOSTIC_STAGE={value="other", force=true}']
             for text in overrides:
                 configuration.write_text(text)
                 with self.subTest(text=text), patch.object(memory, "ROOT", root), \
                      patch.dict(os.environ, {"CARGO_HOME": str(root / "home")}, clear=True):
                     with self.assertRaises(ValueError):
                         memory.cargo_configuration()
+
+    def test_cargo_home_must_not_resolve_against_another_working_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "target/cargo-home"
+            home.mkdir(parents=True)
+            (home / "config.toml").write_text('[build]\nrustc="other"\n')
+            with patch.object(memory, "ROOT", root), patch.dict(os.environ, {"CARGO_HOME": "target/cargo-home"}, clear=True):
+                with self.assertRaisesRegex(ValueError, "absolute"):
+                    memory.cargo_configuration()
+
+    def test_reviewed_logging_configuration_is_hashed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".cargo").mkdir()
+            configuration = root / ".cargo/config.toml"
+            configuration.write_text('[env]\nDEFMT_LOG={value="info", force=true}\n')
+            with patch.object(memory, "ROOT", root), patch.dict(os.environ, {"CARGO_HOME": str(root / "home")}, clear=True):
+                self.assertEqual(memory.cargo_configuration()[str(configuration)], memory.digest(configuration.read_bytes()))
 
     def test_cargo_includes_cannot_escape_configuration_binding(self):
         with tempfile.TemporaryDirectory() as directory:

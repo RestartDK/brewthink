@@ -183,6 +183,8 @@ def generated_inputs(target):
 
 def cargo_configuration():
     home = Path(os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")))
+    if not home.is_absolute():
+        raise ValueError("CARGO_HOME must be absolute for reader evidence")
     directories = {home, *(path / ".cargo" for path in [ROOT, *ROOT.parents])}
     hashes = {}
     for directory in sorted(directories):
@@ -194,8 +196,10 @@ def cargo_configuration():
             if "include" in configuration:
                 raise ValueError(f"Cargo configuration includes are unsupported by reader evidence: {path}")
             build = configuration.get("build", {})
-            if set(build) & {"rustc", "rustc-wrapper", "rustc-workspace-wrapper"} or compiler_overrides(configuration.get("env", {})):
+            if set(build) & {"rustc", "rustc-wrapper", "rustc-workspace-wrapper"}:
                 raise ValueError(f"Cargo configuration selects an unreviewed compiler or override: {path}")
+            if set(configuration.get("env", {})) - {"DEFMT_LOG"}:
+                raise ValueError(f"Cargo environment configuration only supports DEFMT_LOG for reader evidence: {path}")
             hashes[str(path)] = digest(data)
     return hashes
 
