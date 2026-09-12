@@ -1,6 +1,6 @@
 # Persistent book identity
 
-`BookId` is a position in the current app catalog. It is suitable for navigation within one boot, not for saved progress. Discovery order can change, and unreadable EPUBs disappear from the validated catalog.
+`BookId` is a position in the current app catalog. It is suitable for navigation within one boot, not for saved progress. Discovery order and catalog admission can change across scans.
 
 `storage::book_resume::BookIdentity` identifies a file by its complete observed UTF-8 filename under `/books`, plus its byte length. It uses the same long name or short-name fallback that `FatStorage` uses to open the file. Names are bounded to 256 bytes without truncation. Comparison is exact. There is no case folding, Unicode normalization, title matching, or hash-based identity.
 
@@ -8,9 +8,9 @@
 
 The reader derives identities from existing `BookFile` metadata. It does not retain another identity array, read EPUB contents for a digest, or write identity files to SD.
 
-On sleep, `SavedResume::capture` converts a transient book selection into a unique identity. On startup, `SavedResume::resolve` searches the current validated catalog and returns a current `BookId` only for one exact match. The result is typed. Missing and ambiguous identities cannot become a chapter-load request through an index fallback.
+On sleep, `SavedResume::capture` converts a transient book selection into a unique identity. On startup, `SavedResume::resolve` searches the current admitted catalog and returns a current `BookId` only for one exact match. The result is typed. Missing and ambiguous identities cannot become a chapter-load request through an index fallback.
 
-Reordering, inserting unrelated books, removing unrelated books, and skipping unreadable entries preserve progress when the saved file remains in the admitted catalog. Duplicate matching entries reject both capture and restore. A book omitted by the sixteen-book scan limit is missing for resume purposes.
+Reordering, inserting unrelated books, and removing unrelated books preserve progress when the saved file remains in the admitted catalog. The device catalog keeps unreadable EPUB entries as unavailable rather than assigning their positions to later books. Duplicate matching entries reject both capture and restore. A book omitted by the sixteen-book scan limit is missing for resume purposes.
 
 Reader progress, Books selections, and book selections in Files all use this identity. Files image selections retain an image-relative index, so changes in book count cannot turn an image selection into a book. Persistent image identity is unchanged and outside this boundary.
 
