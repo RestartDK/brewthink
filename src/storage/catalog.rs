@@ -59,6 +59,10 @@ pub struct BookFile {
 }
 
 impl BookFile {
+    pub const fn new(name: BookFileName, size: u32) -> Self {
+        Self { name, size }
+    }
+
     pub const fn name(&self) -> &BookFileName {
         &self.name
     }
@@ -148,7 +152,7 @@ impl<const CAPACITY: usize> BookCatalog<CAPACITY> {
             self.truncated = true;
             return;
         }
-        self.books[self.length] = Some(BookFile { name, size });
+        self.books[self.length] = Some(BookFile::new(name, size));
         self.length += 1;
     }
 }

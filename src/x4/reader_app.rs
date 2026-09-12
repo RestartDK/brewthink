@@ -21,10 +21,12 @@ use esp_hal::{
 };
 use static_cell::{ConstStaticCell, StaticCell};
 
+use self::retained_resume::RtcResume;
+
 use crate::{
     app::{
-        App, AppEffect, AppInput, AppPreferences, AppView, BookId, BookOrigin, Direction, HomeItem,
-        ImageId, ReadingLocation, ResumePoint, SettingsItem, SleepScreenMode, SleepScreenSource,
+        App, AppEffect, AppInput, AppPreferences, AppView, BookId, Direction, HomeItem, ImageId,
+        ReadingLocation, ResumePoint, SettingsItem, SleepScreenMode, SleepScreenSource,
     },
     bounded_layout::{BoundedPage, MAX_PAGE_LINES, layout_xhtml_page_into},
     bounded_xml::FixedString,
@@ -407,33 +409,67 @@ struct LoadedChapter {
 }
 
 #[derive(Clone, Copy)]
-struct ResumeRecord {
-    magic: u32,
-    kind: u32,
-    primary: u32,
-    secondary: u32,
-    tertiary: u32,
-    detail: u32,
-    preferences: u32,
-    checksum: u32,
-}
-
-#[derive(Clone, Copy)]
 struct RetainedApp {
     resume: ResumePoint,
     preferences: AppPreferences,
 }
 
-const RESUME_MAGIC: u32 = 0x4257_5233;
-const HOME_KIND: u32 = 1;
-const BOOKS_KIND: u32 = 2;
-const FILES_KIND: u32 = 3;
-const SETTINGS_KIND: u32 = 4;
-const READER_KIND: u32 = 5;
-const IMAGE_KIND: u32 = 6;
+mod retained_resume {
+    use defmt::info;
+    use esp_hal::peripherals::LPWR;
 
-#[esp_hal::ram(unstable(rtc_fast, persistent))]
-static mut RETAINED_RESUME: [u32; 8] = [0; 8];
+    use super::{AppPreferences, DeviceLibrary, HomeItem, ResumePoint, RetainedApp};
+    use crate::storage::book_resume::{RESUME_WORDS, SavedResume};
+
+    #[esp_hal::ram(unstable(rtc_fast, persistent))]
+    static mut RETAINED_RESUME: [u32; RESUME_WORDS] = [0; RESUME_WORDS];
+
+    pub(super) struct RtcResume {
+        low_power: LPWR<'static>,
+    }
+
+    impl RtcResume {
+        pub(super) fn new(low_power: LPWR<'static>) -> Self {
+            Self { low_power }
+        }
+
+        #[inline(never)]
+        pub(super) fn read_resume(&mut self, library: &DeviceLibrary) -> Option<RetainedApp> {
+            let words = unsafe { core::ptr::read_volatile(&raw const RETAINED_RESUME) };
+            let saved = SavedResume::decode(&words).ok()?;
+            let resume = saved
+                .resolve(&library.files[..library.length])
+                .unwrap_or_else(|error| {
+                    info!("reader resume unavailable: {}", defmt::Debug2Format(&error));
+                    ResumePoint::Home {
+                        selected: HomeItem::Books,
+                    }
+                });
+            Some(RetainedApp {
+                resume,
+                preferences: saved.preferences(),
+            })
+        }
+
+        pub(super) fn write_resume(
+            self,
+            resume: ResumePoint,
+            preferences: AppPreferences,
+            library: &DeviceLibrary,
+        ) -> LPWR<'static> {
+            let words =
+                match SavedResume::capture(resume, preferences, &library.files[..library.length]) {
+                    Ok(saved) => saved.encode(),
+                    Err(error) => {
+                        info!("reader resume not saved: {}", defmt::Debug2Format(&error));
+                        [0; RESUME_WORDS]
+                    }
+                };
+            unsafe { core::ptr::write_volatile(&raw mut RETAINED_RESUME, words) };
+            self.low_power
+        }
+    }
+}
 
 #[cfg(brewthink_previous_frame_storage = "host_ram")]
 static DISPLAYED_FRAME: StaticCell<[u8; MONO_FRAME_BYTES]> = StaticCell::new();
@@ -501,6 +537,7 @@ pub async fn reader_app_task(
     low_power: LPWR<'static>,
     wakeup_cause: SleepSource,
 ) {
+    let mut rtc_resume = RtcResume::new(low_power);
     static STORE: StaticCell<DeviceStore> = StaticCell::new();
     static LIBRARY: ConstStaticCell<DeviceLibrary> = ConstStaticCell::new(DeviceLibrary::empty());
     static IMAGES: ConstStaticCell<DeviceImages> = ConstStaticCell::new(DeviceImages::empty());
@@ -571,7 +608,7 @@ pub async fn reader_app_task(
         panel.display.previous_frame_storage().name(),
         panel.refresh_policy.mode().name()
     );
-    let retained = read_resume().unwrap_or(RetainedApp {
+    let retained = rtc_resume.read_resume(library).unwrap_or(RetainedApp {
         resume: ResumePoint::Home {
             selected: HomeItem::Books,
         },
@@ -614,7 +651,7 @@ pub async fn reader_app_task(
         &mut loaded,
     ) {
         Ok(Some(resume)) => {
-            enter_sleep(resume, app.preferences(), store, panel, low_power).await;
+            enter_sleep(resume, app.preferences(), library, store, panel, rtc_resume).await;
         }
         Ok(None) => {}
         Err(status) => stop(status).await,
@@ -646,7 +683,7 @@ pub async fn reader_app_task(
                 &mut loaded,
             ) {
                 Ok(Some(resume)) => {
-                    enter_sleep(resume, app.preferences(), store, panel, low_power).await;
+                    enter_sleep(resume, app.preferences(), library, store, panel, rtc_resume).await;
                 }
                 Ok(None) => {}
                 Err(status) => stop(status).await,
@@ -683,7 +720,7 @@ pub async fn reader_app_task(
             };
             match result {
                 Ok(Some(resume)) => {
-                    enter_sleep(resume, app.preferences(), store, panel, low_power).await;
+                    enter_sleep(resume, app.preferences(), library, store, panel, rtc_resume).await;
                 }
                 Ok(None) => {}
                 Err(status) => stop(status).await,
@@ -710,7 +747,7 @@ pub async fn reader_app_task(
         .run_input(InputSource::Physical, event.button())
         {
             Ok(Some(resume)) => {
-                enter_sleep(resume, app.preferences(), store, panel, low_power).await;
+                enter_sleep(resume, app.preferences(), library, store, panel, rtc_resume).await;
             }
             Ok(None) => {}
             Err(status) => stop(status).await,
@@ -1986,11 +2023,12 @@ fn refresh(
 async fn enter_sleep(
     resume: ResumePoint,
     preferences: AppPreferences,
+    library: &DeviceLibrary,
     store: &'static DeviceStore,
     panel: ReaderDisplay,
-    low_power: LPWR<'static>,
+    rtc_resume: RtcResume,
 ) -> ! {
-    write_resume(resume, preferences);
+    let low_power = rtc_resume.write_resume(resume, preferences, library);
     let sleep_result = store.with_device(move |device| {
         device.with_hardware(move |hardware| {
             let mut bus = hardware
@@ -2037,148 +2075,6 @@ fn map_button(button: Button) -> AppInput {
         Button::Down => AppInput::Move(Direction::Down),
         Button::Power => AppInput::Power,
     }
-}
-
-fn read_resume() -> Option<RetainedApp> {
-    // SAFETY: the single-core reader accesses this fixed RTC record only from its task.
-    let words = unsafe { core::ptr::read_volatile(&raw const RETAINED_RESUME) };
-    let record = ResumeRecord {
-        magic: words[0],
-        kind: words[1],
-        primary: words[2],
-        secondary: words[3],
-        tertiary: words[4],
-        detail: words[5],
-        preferences: words[6],
-        checksum: words[7],
-    };
-    if record.magic != RESUME_MAGIC || record.checksum != resume_checksum(record) {
-        return None;
-    }
-    let preferences = AppPreferences::from_packed(record.preferences)?;
-    let selected_index = || {
-        if record.primary == u32::MAX {
-            Some(None)
-        } else {
-            Some(Some(usize::try_from(record.primary).ok()?))
-        }
-    };
-    let resume = match record.kind {
-        HOME_KIND => ResumePoint::Home {
-            selected: HomeItem::from_index(usize::try_from(record.primary).ok()?)?,
-        },
-        BOOKS_KIND => ResumePoint::Books {
-            selected: selected_index()?.map(BookId::new),
-        },
-        FILES_KIND => ResumePoint::Files {
-            selected: selected_index()?.map(crate::app::FileId::new),
-        },
-        SETTINGS_KIND => ResumePoint::Settings {
-            selected: SettingsItem::from_index(usize::try_from(record.primary).ok()?)?,
-            draft: AppPreferences::from_packed(record.detail)?,
-        },
-        READER_KIND => ResumePoint::Reader {
-            book: BookId::new(usize::try_from(record.primary).ok()?),
-            spine_index: usize::try_from(record.secondary).ok()?,
-            page_index: usize::try_from(record.tertiary).ok()?,
-            origin: BookOrigin::from_index(usize::try_from(record.detail).ok()?)?,
-        },
-        IMAGE_KIND => ResumePoint::Image {
-            image: ImageId::new(usize::try_from(record.primary).ok()?),
-        },
-        _ => return None,
-    };
-    Some(RetainedApp {
-        resume,
-        preferences,
-    })
-}
-
-fn write_resume(resume: ResumePoint, preferences: AppPreferences) {
-    let (kind, primary, secondary, tertiary, detail) = match resume {
-        ResumePoint::Home { selected } => (HOME_KIND, selected.index() as u32, 0, 0, 0),
-        ResumePoint::Books { selected } => (
-            BOOKS_KIND,
-            packed_index(selected.map(BookId::index)),
-            0,
-            0,
-            0,
-        ),
-        ResumePoint::Files { selected } => (
-            FILES_KIND,
-            packed_index(selected.map(crate::app::FileId::index)),
-            0,
-            0,
-            0,
-        ),
-        ResumePoint::Settings { selected, draft } => {
-            (SETTINGS_KIND, selected.index() as u32, 0, 0, draft.packed())
-        }
-        ResumePoint::Reader {
-            book,
-            spine_index,
-            page_index,
-            origin,
-        } => (
-            READER_KIND,
-            u32::try_from(book.index()).unwrap_or(u32::MAX),
-            u32::try_from(spine_index).unwrap_or(u32::MAX),
-            u32::try_from(page_index).unwrap_or(u32::MAX),
-            origin.index() as u32,
-        ),
-        ResumePoint::Image { image } => (
-            IMAGE_KIND,
-            u32::try_from(image.index()).unwrap_or(u32::MAX),
-            0,
-            0,
-            0,
-        ),
-    };
-    let mut record = ResumeRecord {
-        magic: RESUME_MAGIC,
-        kind,
-        primary,
-        secondary,
-        tertiary,
-        detail,
-        preferences: preferences.packed(),
-        checksum: 0,
-    };
-    record.checksum = resume_checksum(record);
-    let words = [
-        record.magic,
-        record.kind,
-        record.primary,
-        record.secondary,
-        record.tertiary,
-        record.detail,
-        record.preferences,
-        record.checksum,
-    ];
-    // SAFETY: the single-core reader is the sole writer before entering deep sleep.
-    unsafe { core::ptr::write_volatile(&raw mut RETAINED_RESUME, words) };
-}
-
-fn packed_index(index: Option<usize>) -> u32 {
-    index
-        .and_then(|index| u32::try_from(index).ok())
-        .unwrap_or(u32::MAX)
-}
-
-fn resume_checksum(record: ResumeRecord) -> u32 {
-    [
-        record.magic,
-        record.kind,
-        record.primary,
-        record.secondary,
-        record.tertiary,
-        record.detail,
-        record.preferences,
-    ]
-    .into_iter()
-    .fold(0x811C_9DC5, |hash, value| {
-        (hash ^ value).wrapping_mul(0x0100_0193)
-    })
 }
 
 fn frame_size() -> Size {
