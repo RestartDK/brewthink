@@ -97,6 +97,7 @@ jobs:
           path: |
             artifacts/ci/*.txt
             artifacts/ci/*.json
+            artifacts/ci/*.memory.*/
             artifacts/ci/reader-memory/
           if-no-files-found: error
 

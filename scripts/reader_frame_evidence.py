@@ -366,7 +366,8 @@ def symbol_inventory(stack, elf, functions, nm):
             addresses.append(address + offset)
             offset += 4 if halfword & 3 == 3 else 2
         if offset != size or addresses != [item[0] for item in parsed]:
-            raise ValueError('disassembly does not decode every byte of selected extent')
+            raise ValueError(f'disassembly does not decode every byte of selected extent: {name}; '
+                             f'expected {len(addresses)} instructions, decoded {len(parsed)}')
         insert_unique(result, raw, {"name": name, "address": address, "size": size,
                                    "code_sha256": hashlib.sha256(function).hexdigest()})
     return result

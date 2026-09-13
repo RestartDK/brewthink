@@ -264,6 +264,12 @@ class ProducerBoundaryTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "include"):
                     memory.cargo_configuration()
 
+    def test_ci_keeps_reader_image_proof_bundles_on_failure(self):
+        workflow = (memory.ROOT / ".github/workflows/rust_ci.yml").read_text()
+        firmware = workflow.split("  firmware:\n", 1)[1].split("  web-simulator:\n", 1)[0]
+        self.assertIn("artifacts/ci/*.memory.*/", firmware)
+        self.assertIn("if: always()", firmware)
+
     def test_ci_fetches_locked_dependencies_before_offline_checks(self):
         workflow = (memory.ROOT / ".github/workflows/rust_ci.yml").read_text()
         firmware = workflow.split("  firmware:\n", 1)[1].split("  web-simulator:\n", 1)[0]
