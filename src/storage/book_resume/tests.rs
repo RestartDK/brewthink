@@ -6,7 +6,32 @@ use super::*;
 use crate::app::{App, AppEffect, AppInput, AppView, Direction, PageTarget};
 
 fn file(name: &str, size: u32) -> Option<BookFile> {
-    Some(BookFile::new(BookFileName::new(name).unwrap(), size))
+    Some(BookFile::new(BookFileName::try_from(name).unwrap(), size))
+}
+
+#[test]
+fn standard_conversions_preserve_filename_bounds_and_identity() {
+    let maximum = "å".repeat(MAX_BOOK_NAME_BYTES / 2);
+    let name = BookFileName::try_from(maximum.as_str()).unwrap();
+    assert_eq!(name.as_str(), maximum);
+    let via_try_into: BookFileName = maximum.as_str().try_into().unwrap();
+    assert_eq!(via_try_into, name);
+    assert!(BookFileName::try_from("").is_err());
+    assert!(BookFileName::try_from(format!("{maximum}x").as_str()).is_err());
+    assert_eq!(BookFileName::try_from("a").unwrap().as_str(), "a");
+
+    let book = BookFile::new(name, 123);
+    let identity: BookIdentity = (&book).into();
+    assert_eq!(identity, BookIdentity::from(&book));
+    assert_eq!(identity.resolve(&[Some(book)]), Ok(BookId::new(0)));
+    assert_eq!(
+        identity.resolve(&[Some(BookFile::new(name, 124))]),
+        Err(ResumeError::Missing)
+    );
+    assert_eq!(
+        identity.resolve(&[Some(book), Some(book)]),
+        Err(ResumeError::Ambiguous)
+    );
 }
 
 fn reader(book: usize) -> ResumePoint {

@@ -23,14 +23,16 @@ pub struct BookIdentity {
     size: u32,
 }
 
-impl BookIdentity {
-    pub const fn from_file(file: &BookFile) -> Self {
+impl From<&BookFile> for BookIdentity {
+    fn from(file: &BookFile) -> Self {
         Self {
             name: *file.name(),
             size: file.size(),
         }
     }
+}
 
+impl BookIdentity {
     pub fn resolve(self, books: &[Option<BookFile>]) -> Result<BookId, ResumeError> {
         let mut matched = None;
         for (index, file) in books.iter().enumerate() {
@@ -50,7 +52,7 @@ impl BookIdentity {
             .get(book.index())
             .and_then(Option::as_ref)
             .ok_or(ResumeError::Missing)?;
-        let identity = Self::from_file(file);
+        let identity = Self::from(file);
         identity.resolve(books)?;
         Ok(identity)
     }
@@ -296,7 +298,7 @@ fn decode_identity(words: &[u32]) -> Result<BookIdentity, ResumeError> {
     let name = core::str::from_utf8(bytes.get(..length).ok_or(ResumeError::InvalidRecord)?)
         .map_err(|_| ResumeError::InvalidRecord)?;
     Ok(BookIdentity {
-        name: BookFileName::new(name).map_err(|_| ResumeError::InvalidRecord)?,
+        name: BookFileName::try_from(name).map_err(|_| ResumeError::InvalidRecord)?,
         size: words[9],
     })
 }
