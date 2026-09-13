@@ -29,6 +29,8 @@ pub mod library;
 pub mod navigation;
 pub mod power;
 pub mod reader;
+#[cfg(feature = "device-reader")]
+pub mod reader_orchestration;
 #[cfg(all(feature = "device-reader", any(target_arch = "riscv32", test)))]
 mod scratch;
 pub mod settings;

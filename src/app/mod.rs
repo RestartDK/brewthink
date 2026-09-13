@@ -696,6 +696,22 @@ pub enum AppInput {
     Power,
 }
 
+impl From<crate::input::Button> for AppInput {
+    fn from(button: crate::input::Button) -> Self {
+        use crate::input::Button;
+
+        match button {
+            Button::Back => Self::Back,
+            Button::Confirm => Self::Confirm,
+            Button::Left => Self::Move(Direction::Left),
+            Button::Right => Self::Move(Direction::Right),
+            Button::Up => Self::Move(Direction::Up),
+            Button::Down => Self::Move(Direction::Down),
+            Button::Power => Self::Power,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PageTarget {
     First,
@@ -1485,6 +1501,34 @@ impl App {
         Ok(AppEffect::Render)
     }
 
+    #[cfg(feature = "device-reader")]
+    pub(crate) fn recover_operation(&mut self) -> AppEffect {
+        if matches!(self.view, AppView::Sleeping { .. }) {
+            return self.wake();
+        }
+        self.view = match self.view {
+            AppView::Loading(pending) => AppView::Error {
+                book: pending.book,
+                origin: pending.origin,
+            },
+            AppView::BookCover { book, origin } => AppView::Error { book, origin },
+            AppView::Reader(session) | AppView::ReaderDrawer(ReaderDrawer { session, .. }) => {
+                AppView::Error {
+                    book: session.location.book,
+                    origin: session.origin,
+                }
+            }
+            AppView::Image(_) => AppView::Files(self.files),
+            view => view,
+        };
+        AppEffect::Render
+    }
+
+    #[cfg(feature = "device-reader")]
+    pub(crate) fn sleep_image_unavailable(&mut self) {
+        self.selected_sleep_image = None;
+    }
+
     pub fn sleep_frame_ready(&self) -> Result<AppEffect, AppStateError> {
         match self.view {
             AppView::Sleeping { resume } => Ok(AppEffect::EnterDeepSleep { resume }),
@@ -1790,6 +1834,25 @@ mod tests {
         SleepScreenSource,
     };
     use crate::{input::UsbState, power::BatteryStatus};
+
+    #[test]
+    fn button_conversion_preserves_all_inputs() {
+        use crate::input::Button;
+
+        for (button, expected) in [
+            (Button::Back, AppInput::Back),
+            (Button::Confirm, AppInput::Confirm),
+            (Button::Left, AppInput::Move(Direction::Left)),
+            (Button::Right, AppInput::Move(Direction::Right)),
+            (Button::Up, AppInput::Move(Direction::Up)),
+            (Button::Down, AppInput::Move(Direction::Down)),
+            (Button::Power, AppInput::Power),
+        ] {
+            assert_eq!(AppInput::from(button), expected);
+            let input: AppInput = button.into();
+            assert_eq!(input, expected);
+        }
+    }
 
     fn open_books(app: &mut App) {
         assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
