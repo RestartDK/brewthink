@@ -89,6 +89,11 @@ jobs:
       - run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - run: scripts/check-firmware.sh
       - run: python3 scripts/check-reader-memory.py artifacts/ci/reader-memory
+      - name: Inspect failed reader disassembly
+        if: failure()
+        run: |
+          llvm-objdump --version
+          find artifacts/ci -name frames.elf -exec llvm-objdump -d --demangle --no-show-raw-insn {} \; > artifacts/ci/failed-reader-disassembly.txt
       - name: Save image inspection and limited memory reports
         if: always()
         uses: actions/upload-artifact@v4
