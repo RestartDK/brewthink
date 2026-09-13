@@ -147,12 +147,22 @@ impl InflateWorkspace {
         }
     }
 
+    /// # Safety
+    /// `storage` must be non-null, aligned, writable for `Self`, and exclusively
+    /// owned. No reference to its contents may exist until initialization returns.
+    /// The previous contents need not be valid. This type must not require Drop.
     #[cfg(any(target_arch = "riscv32", test))]
     pub(crate) unsafe fn initialize_in_place(storage: *mut Self) {
-        // SAFETY: miniz_oxide 0.9.1's InflateState is valid when zeroed: its
-        // decompressor documents an all-zero initial state, and zero is a valid
-        // discriminant for its remaining enums and booleans. Reset establishes
-        // the required Raw format and streaming flags before first use.
+        const {
+            assert!(!core::mem::needs_drop::<InflateState>());
+            assert!(DataFormat::Zlib as u8 == 0);
+            assert!(miniz_oxide::inflate::TINFLStatus::Done as i8 == 0);
+        }
+        // SAFETY: the pinned 0.9.1 fields are zero-valid before forming &mut state.
+        // core.rs State::Start = 0 and DecompressorOxide::default cover the core.
+        // stream.rs InflateState adds integers, byte arrays, bools, DataFormat,
+        // and TINFLStatus. FullReset then establishes Raw/first_call/NeedsMoreInput.
+        // Source locations and the upgrade review contract are in docs/reader-memory.md.
         unsafe {
             storage.write_bytes(0, 1);
             (*storage).state.reset(DataFormat::Raw);
@@ -567,7 +577,12 @@ fn le_u32(bytes: &[u8], offset: usize) -> u32 {
 mod tests {
     extern crate std;
 
-    use std::{boxed::Box, convert::Infallible};
+    use std::{boxed::Box, convert::Infallible, vec, vec::Vec};
+
+    use miniz_oxide::{
+        MZError, MZFlush, MZStatus,
+        inflate::{TINFLStatus, stream::inflate},
+    };
 
     use super::{
         InflateWorkspace, ReadAt, StreamingZip, ZipError, ZipValidationScratch, safe_path,
@@ -631,6 +646,208 @@ mod tests {
                 .unwrap()
                 .contains("Readable text.")
         );
+    }
+
+    fn poisoned_workspace() -> Box<InflateWorkspace> {
+        let mut storage = Box::<InflateWorkspace>::new_uninit();
+        unsafe {
+            storage
+                .as_mut_ptr()
+                .cast::<u8>()
+                .write_bytes(0xA5, core::mem::size_of::<InflateWorkspace>());
+            InflateWorkspace::initialize_in_place(storage.as_mut_ptr());
+            storage.assume_init()
+        }
+    }
+
+    fn compare_stream(
+        workspace: &mut InflateWorkspace,
+        encoded: &[u8],
+        input_chunk: usize,
+        output_chunk: usize,
+    ) -> Vec<u8> {
+        let mut reference = Box::new(InflateWorkspace::new());
+        assert_eq!(workspace.state.last_status(), TINFLStatus::NeedsMoreInput);
+        let mut input_position = 0;
+        let mut decoded = Vec::new();
+        for _ in 0..200_000 {
+            let end = (input_position + input_chunk).min(encoded.len());
+            let input = &encoded[input_position..end];
+            let mut actual = vec![0xA5; output_chunk];
+            let mut expected = vec![0xA5; output_chunk];
+            let result = inflate(&mut workspace.state, input, &mut actual, MZFlush::None);
+            let oracle = inflate(&mut reference.state, input, &mut expected, MZFlush::None);
+            assert_eq!(result.status, oracle.status);
+            assert_eq!(result.bytes_consumed, oracle.bytes_consumed);
+            assert_eq!(result.bytes_written, oracle.bytes_written);
+            assert_eq!(workspace.state.last_status(), reference.state.last_status());
+            assert_eq!(actual, expected);
+            input_position += result.bytes_consumed;
+            decoded.extend_from_slice(&actual[..result.bytes_written]);
+            if result.status == Ok(MZStatus::StreamEnd) {
+                assert_eq!(input_position, encoded.len());
+                return decoded;
+            }
+            assert_eq!(result.status, Ok(MZStatus::Ok));
+            assert!(result.bytes_consumed != 0 || result.bytes_written != 0);
+        }
+        panic!("bounded streaming test did not terminate");
+    }
+
+    #[test]
+    fn in_place_state_is_raw_and_ready_before_zip_resets_it() {
+        let raw_hello = b"\x01\x05\x00\xfa\xffhello";
+        for (input_chunk, output_chunk) in [(1, 1), (3, 2), (512, 256)] {
+            let mut workspace = poisoned_workspace();
+            assert_eq!(
+                compare_stream(&mut workspace, raw_hello, input_chunk, output_chunk),
+                b"hello"
+            );
+        }
+    }
+
+    #[test]
+    fn in_place_state_matches_huffman_streaming_and_reuse() {
+        let encoded = include_bytes!("../web/tests/fixtures/minimal.epub");
+        let mut scratch = Box::new(ZipValidationScratch::new());
+        let archive = StreamingZip::open(SliceFile(encoded), &mut scratch).unwrap();
+        let entry = archive.find("EPUB/chapter.xhtml").unwrap();
+        assert!(!entry.is_stored());
+        let start = archive.entry_data_offset(entry).unwrap() as usize;
+        let compressed = &encoded[start..start + entry.compressed_size as usize];
+        assert_ne!(
+            (compressed[0] >> 1) & 3,
+            0,
+            "fixture must exercise Huffman tables"
+        );
+        let mut workspace = poisoned_workspace();
+        for (input_chunk, output_chunk) in [(1, 1), (7, 13), (512, 256)] {
+            let decoded = compare_stream(&mut workspace, compressed, input_chunk, output_chunk);
+            assert!(
+                core::str::from_utf8(&decoded)
+                    .unwrap()
+                    .contains("Readable text.")
+            );
+            workspace.reset();
+        }
+    }
+
+    #[test]
+    fn in_place_state_wraps_the_dictionary_and_resets_after_failure() {
+        let expected: Vec<u8> = (0..70_000).map(|index| (index % 251) as u8).collect();
+        let mut encoded = Vec::new();
+        for (index, chunk) in expected.chunks(35_000).enumerate() {
+            encoded.push(u8::from(index == 1));
+            let length = chunk.len() as u16;
+            encoded.extend_from_slice(&length.to_le_bytes());
+            encoded.extend_from_slice(&(!length).to_le_bytes());
+            encoded.extend_from_slice(chunk);
+        }
+        let mut workspace = poisoned_workspace();
+        assert_eq!(compare_stream(&mut workspace, &encoded, 511, 17), expected);
+        for (invalid, error) in [
+            (&b"\x07"[..], MZError::Data),
+            (&b"\x01\x05\x00\xfa\xffh"[..], MZError::Buf),
+        ] {
+            workspace.reset();
+            let mut output = [0; 8];
+            let failed = inflate(&mut workspace.state, invalid, &mut output, MZFlush::Finish);
+            assert_eq!(failed.status, Err(error));
+            let sticky = inflate(
+                &mut workspace.state,
+                b"\x03\x00",
+                &mut output,
+                MZFlush::None,
+            );
+            assert_eq!(sticky.status, Err(error));
+            assert_eq!((sticky.bytes_consumed, sticky.bytes_written), (0, 0));
+            workspace.reset();
+            assert_eq!(
+                compare_stream(&mut workspace, b"\x01\x05\x00\xfa\xffhello", 2, 2),
+                b"hello"
+            );
+        }
+    }
+
+    #[test]
+    fn reset_does_not_expose_previous_dictionary_to_invalid_distance() {
+        let expected_history = vec![b'o'; 65_535];
+        let mut encoded = vec![1, 0xFF, 0xFF, 0, 0];
+        encoded.extend_from_slice(&expected_history);
+        let mut workspace = poisoned_workspace();
+        assert_eq!(
+            compare_stream(&mut workspace, &encoded, 512, 1024),
+            expected_history
+        );
+        workspace.reset();
+        let mut reference = Box::new(InflateWorkspace::new());
+        let mut actual = [0xA5; 8];
+        let mut expected = [0xA5; 8];
+        // Fixed-Huffman length 3, distance 1, without any preceding literal.
+        let invalid_distance = b"\x03\x02\x00";
+        let result = inflate(
+            &mut workspace.state,
+            invalid_distance,
+            &mut actual,
+            MZFlush::None,
+        );
+        let oracle = inflate(
+            &mut reference.state,
+            invalid_distance,
+            &mut expected,
+            MZFlush::None,
+        );
+        assert_eq!(result.status, oracle.status);
+        assert_eq!(result.bytes_consumed, oracle.bytes_consumed);
+        assert_eq!(result.bytes_written, oracle.bytes_written);
+        assert_eq!(actual, expected);
+        assert!(!actual.contains(&b'o'));
+    }
+
+    #[test]
+    fn zip_workspace_recovers_after_length_and_decompression_errors() {
+        let encoded = include_bytes!("../web/tests/fixtures/minimal.epub");
+        let mut scratch = Box::new(ZipValidationScratch::new());
+        let archive = StreamingZip::open(SliceFile(encoded), &mut scratch).unwrap();
+        let entry = archive.find("EPUB/chapter.xhtml").unwrap();
+        let mut workspace = poisoned_workspace();
+        let mut output = [0; 256];
+        let mut short = entry;
+        short.uncompressed_size -= 1;
+        assert!(matches!(
+            archive.read_entry(short, &mut output, &mut workspace),
+            Err(ZipError::ResourceLengthMismatch)
+        ));
+        let mut truncated = entry;
+        truncated.compressed_size -= 1;
+        assert!(
+            archive
+                .read_entry(truncated, &mut output, &mut workspace)
+                .is_err()
+        );
+        for _ in 0..2 {
+            let length = archive
+                .read_entry(entry, &mut output, &mut workspace)
+                .unwrap();
+            assert!(
+                core::str::from_utf8(&output[..length])
+                    .unwrap()
+                    .contains("Readable text.")
+            );
+        }
+    }
+
+    #[test]
+    fn scratch_bytes_can_be_replaced_with_a_ready_decoder_repeatedly() {
+        let mut scratch = Box::new(crate::scratch::Scratch::<50_000>::new());
+        for poison in [0xA5, 0xFF, 0x01] {
+            scratch.bytes().fill(poison);
+            let workspace = unsafe { scratch.initialize(InflateWorkspace::initialize_in_place) };
+            assert_eq!(
+                compare_stream(workspace, b"\x01\x05\x00\xfa\xffhello", 1, 2),
+                b"hello"
+            );
+        }
     }
 
     #[test]

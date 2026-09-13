@@ -1,3 +1,5 @@
+#[cfg(feature = "device-reader")]
+pub mod book_resume;
 #[cfg(feature = "sd-card")]
 mod catalog;
 pub mod diagnostic;

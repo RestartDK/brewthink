@@ -85,14 +85,25 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y llvm libudev-dev
       - run: cargo install espflash --version 4.5.0 --locked
       - run: python3 -m pip install esptool==5.3.1
+      - run: cargo fetch --locked
       - run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - run: scripts/check-firmware.sh
-      - name: Save image inspection reports
+      - run: python3 scripts/check-reader-memory.py artifacts/ci/reader-memory
+      - name: Inspect failed reader disassembly
+        if: failure()
+        run: |
+          llvm-objdump --version
+          find artifacts/ci -name frames.elf -exec llvm-objdump -d --demangle --no-show-raw-insn {} \; > artifacts/ci/failed-reader-disassembly.txt
+      - name: Save image inspection and limited memory reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: firmware-image-reports
-          path: artifacts/ci/*.txt
+          path: |
+            artifacts/ci/*.txt
+            artifacts/ci/*.json
+            artifacts/ci/*.memory.*/
+            artifacts/ci/reader-memory/
           if-no-files-found: error
 
   web-simulator:

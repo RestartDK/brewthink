@@ -20,8 +20,18 @@ mkdir -p "$(dirname "$IMAGE")"
 
 cd "$ROOT_DIR"
 
+MEMORY_EVIDENCE=""
 echo "Building release ELF for $CHIP..."
-if [[ -n "${BREWTHINK_CARGO_FEATURES:-}" ]]; then
+if [[ "${BREWTHINK_DIAGNOSTIC_STAGE:-}" == reader-app ]]; then
+  if [[ "${BREWTHINK_CARGO_FEATURES:-}" != device-reader ]]; then
+    echo 'error: proved reader images require exactly BREWTHINK_CARGO_FEATURES=device-reader' >&2
+    exit 1
+  fi
+  require_cmd python3
+  MEMORY_EVIDENCE="$(mktemp -d "${IMAGE}.memory.XXXXXX")/evidence"
+  python3 "$ROOT_DIR/scripts/check-reader-memory.py" "$MEMORY_EVIDENCE"
+  ELF="$MEMORY_EVIDENCE/reader.elf"
+elif [[ -n "${BREWTHINK_CARGO_FEATURES:-}" ]]; then
   cargo build --locked --release --bin brewthink --features "$BREWTHINK_CARGO_FEATURES"
 else
   cargo build --locked --release --bin brewthink
@@ -46,6 +56,12 @@ espflash save-image \
   "$IMAGE"
 
 "$ROOT_DIR/scripts/check-app1-image.sh" "$IMAGE" "$INFO_FILE"
+
+if [[ -n "$MEMORY_EVIDENCE" ]]; then
+  python3 "$ROOT_DIR/scripts/check-reader-memory.py" "$MEMORY_EVIDENCE" --verify-elf "$ELF"
+  cp "$MEMORY_EVIDENCE/stack.json" "${IMAGE}.reader-stack.json"
+  printf 'Reader evidence: %s\n' "$MEMORY_EVIDENCE"
+fi
 
 cat <<EOF
 

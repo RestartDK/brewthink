@@ -30,8 +30,10 @@ pub struct BookFileName {
     length: u16,
 }
 
-impl BookFileName {
-    pub fn new(value: &str) -> Result<Self, BookFileNameError> {
+impl TryFrom<&str> for BookFileName {
+    type Error = BookFileNameError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
         if value.is_empty() || value.len() > MAX_BOOK_NAME_BYTES {
             return Err(BookFileNameError);
         }
@@ -42,7 +44,9 @@ impl BookFileName {
             length: value.len() as u16,
         })
     }
+}
 
+impl BookFileName {
     pub fn as_str(&self) -> &str {
         core::str::from_utf8(&self.bytes[..usize::from(self.length)])
             .expect("book filenames are copied from UTF-8 FAT names")
@@ -59,6 +63,10 @@ pub struct BookFile {
 }
 
 impl BookFile {
+    pub const fn new(name: BookFileName, size: u32) -> Self {
+        Self { name, size }
+    }
+
     pub const fn name(&self) -> &BookFileName {
         &self.name
     }
@@ -140,7 +148,7 @@ impl<const CAPACITY: usize> BookCatalog<CAPACITY> {
             self.unsupported_files = self.unsupported_files.saturating_add(1);
             return;
         }
-        let Ok(name) = BookFileName::new(name) else {
+        let Ok(name) = BookFileName::try_from(name) else {
             self.skipped_names = self.skipped_names.saturating_add(1);
             return;
         };
@@ -148,7 +156,7 @@ impl<const CAPACITY: usize> BookCatalog<CAPACITY> {
             self.truncated = true;
             return;
         }
-        self.books[self.length] = Some(BookFile { name, size });
+        self.books[self.length] = Some(BookFile::new(name, size));
         self.length += 1;
     }
 }
@@ -1410,7 +1418,10 @@ mod tests {
     #[test]
     fn filenames_are_bounded_without_truncation() {
         let valid = "a".repeat(MAX_BOOK_NAME_BYTES);
-        assert_eq!(BookFileName::new(&valid).unwrap().as_str(), valid);
-        assert!(BookFileName::new(&format!("{valid}x")).is_err());
+        assert_eq!(
+            BookFileName::try_from(valid.as_str()).unwrap().as_str(),
+            valid
+        );
+        assert!(BookFileName::try_from(format!("{valid}x").as_str()).is_err());
     }
 }
