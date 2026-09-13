@@ -225,7 +225,9 @@ def load_stack():
 def inventory(elf):
     stack = load_stack()
     disassembly = output("llvm-objdump", "-d", "--demangle", "--no-show-raw-insn", str(elf))
-    return stack.evidence.symbol_inventory(stack, elf.read_bytes(), stack.functions_from(disassembly),
+    code = elf.read_bytes()
+    functions = stack.functions_from(disassembly, stack.function_extents(code))
+    return stack.evidence.symbol_inventory(stack, code, functions,
                                            output("llvm-nm", "--defined-only", "--print-size", str(elf)))
 
 

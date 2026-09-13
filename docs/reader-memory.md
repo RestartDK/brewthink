@@ -17,6 +17,8 @@ The links must produce byte-identical entire ELFs. These options request diagnos
 
 Each selected symbol needs unique size/layout and machine records, a unique raw ELF symbol and executable extent, and disassembly covering every instruction byte. Missing, duplicate, truncated or unsupported records fail. Normal fixed locals have layout type `Variable`; that is not a variable-sized allocation. Dynamic/scalable slots, alignment beyond the RV32 ABI's 16 bytes, stack realignment, non-immediate SP changes and nonstandard save/restore helpers are rejected.
 
+ELF `STT_FUNC` extents distinguish function boundaries from interior debug labels in the disassembler output. Interior labels keep their instructions in the enclosing function; real function entries and same-address aliases remain visible to the raw-symbol and complete-byte checks. Direct selected edges use instruction addresses rather than debug-label names.
+
 The final machine CFG must account for every block and explicit branch target. Stack-depth propagation checks frame-setup/destroy adjustments, consistent joins, allocating cycles, balanced return/tail exits and the compiler's exact frame size. Local indirect dispatch needs closed compiler jump-table successors. Emitted SP adjustment multisets and indirect-transfer registers must match the machine record. A successful disassembly measurement cannot contradict the compiler frame, and known allocating cycles remain failures.
 
 Inline assembly is not assumed harmless. Only the reader's four exact CSR templates and checked register operands are admitted. Unknown templates, memory accesses, control transfers and reserved-register aliases fail. A store below SP can exceed a frame without moving SP; checking SP writes alone would miss it.

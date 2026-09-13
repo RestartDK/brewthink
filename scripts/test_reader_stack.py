@@ -122,6 +122,89 @@ class TableTransferTests(unittest.TestCase):
                 stack.readonly_sections(data)
 
 
+class FunctionBoundaryTests(unittest.TestCase):
+    def elf(self, symbols, entry_size=16):
+        data = bytearray(224 + len(symbols) * 16)
+        data[:7] = b"\x7fELF\x01\x01\x01"
+        struct.pack_into("<H", data, 18, 243)
+        struct.pack_into("<I", data, 32, 52)
+        struct.pack_into("<HH", data, 46, 40, 4)
+        struct.pack_into("<10I", data, 92, 0, 1, 2, 0x2000, 212, 4, 0, 0, 4, 0)
+        struct.pack_into("<10I", data, 132, 0, 1, 6, 0x1000, 216, 8, 0, 0, 4, 0)
+        struct.pack_into("<10I", data, 172, 0, 2, 0, 0, 224, len(symbols) * 16, 0, 0, 4, entry_size)
+        for index, (address, size, kind) in enumerate(symbols):
+            struct.pack_into("<IIIBBH", data, 224 + index * 16, 0, address, size, kind, 0, 2)
+        return data
+
+    def test_only_function_symbols_define_function_boundaries(self):
+        elf = self.elf([(0x1000, 8, 2), (0x1004, 0, 0)])
+        self.assertEqual(stack.function_extents(elf), {0x1000: 8})
+        elf = self.elf([(0x1000, 8, 2), (0x1004, 0, 2)])
+        self.assertEqual(stack.function_extents(elf), {0x1000: 8, 0x1004: 0})
+
+    def test_zero_sized_aliases_do_not_discard_the_known_function_extent(self):
+        symbols = [(0x1000, 8, 2), (0x1000, 0, 2)]
+        for ordered in (symbols, list(reversed(symbols))):
+            self.assertEqual(stack.function_extents(self.elf(ordered)), {0x1000: 8})
+        functions = stack.functions_from("1000 <owner>:\n1000 <alias>:\n1000: ret\n", {0x1000: 8})
+        self.assertEqual(set(functions), {"owner", "alias"})
+
+    def test_malformed_function_metadata_fails_closed(self):
+        cases = [
+            self.elf([(0x1000, 8, 2)], entry_size=15),
+            self.elf([(0x1000, 8, 2)])[:-1],
+            self.elf([(0x1000, 12, 2)]),
+            self.elf([(0x1000, 8, 2), (0x1000, 4, 2)]),
+            self.elf([(0x1000, 0, 0)]),
+        ]
+        for elf in cases:
+            with self.subTest(elf=bytes(elf)), self.assertRaises(ValueError):
+                stack.function_extents(elf)
+
+    def test_debug_labels_do_not_split_an_emitted_function(self):
+        text = """1000 <brewthink::bounded_layout::layout>:
+1000: addi sp, sp, -16
+1004 <.L0 >:
+1004: addi sp, sp, 16
+1008 <another_local_label>:
+1008: ret
+100c <next>:
+100c: ret
+"""
+        functions = stack.functions_from(text, {0x1000: 12, 0x100c: 4})
+        self.assertEqual(set(functions), {"brewthink::bounded_layout::layout", "next"})
+        self.assertEqual(len(stack.instructions(functions["brewthink::bounded_layout::layout"])), 3)
+        self.assertEqual(stack.stack_frame(functions["brewthink::bounded_layout::layout"]), 16)
+
+    def test_a_real_function_inside_an_extent_is_not_discarded_as_a_label(self):
+        text = "1000 <outer>:\n1000: nop\n1004 <inner>:\n1004: ret\n"
+        functions = stack.functions_from(text, {0x1000: 8, 0x1004: 4})
+        self.assertEqual(set(functions), {"outer", "inner"})
+        self.assertEqual(len(stack.instructions(functions["outer"])), 1)
+
+    def test_labels_at_an_extent_end_do_not_extend_its_body(self):
+        text = "1000 <owner>:\n1000: ret\n1004 <.L0 >:\n1004: nop\n"
+        functions = stack.functions_from(text, {0x1000: 4})
+        self.assertEqual(len(stack.instructions(functions["owner"])), 1)
+        self.assertIn(".L0 ", functions)
+
+    def test_direct_selected_edges_use_addresses_not_debug_label_names(self):
+        functions = {
+            "caller": ["1000: addi sp, sp, -16", "1004: j 0x2000 <.L0 >"],
+            "callee": ["2000: addi sp, sp, -400", "2004: ret"],
+        }
+        edges, _ = stack.direct_graph(functions, set(functions))
+        self.assertEqual(edges["caller"], {"callee"})
+        self.assertEqual(stack.longest_path("caller", edges, {"caller": 16, "callee": 400})[0], 416)
+
+    def test_direct_call_to_self_stays_recursive_with_a_debug_label(self):
+        functions = {"caller": ["1000: addi sp, sp, -16", "1004: jal 0x1000 <.L0 >"]}
+        edges, _ = stack.direct_graph(functions, set(functions))
+        self.assertEqual(edges["caller"], {"caller"})
+        with self.assertRaises(ValueError):
+            stack.longest_path("caller", edges, {"caller": 16})
+
+
 class ReaderStackTests(unittest.TestCase):
     def test_integrated_orchestration_and_identity_frames_are_selected(self):
         poll = f"TaskStorage<{stack.TASK}>::poll"
@@ -291,7 +374,7 @@ class ReaderStackTests(unittest.TestCase):
 
     def test_indirect_and_unmeasured_calls_are_visible(self):
         functions = {"root": [
-            "100: jalr a0", "104: jal 0x200 <outside>",
+            "100: jalr a0", "104: jal 0x300 <outside>",
             "108: jalr 0x10(ra) <child>", "10c: ret",
         ], "child": ["200: ret"]}
         edges, frontier = stack.direct_graph(functions, set(functions))

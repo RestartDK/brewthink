@@ -383,14 +383,52 @@ def stack_frame(body, transfers=None):
     return maximum
 
 
-def functions_from(disassembly):
+def function_extents(elf):
+    readonly_sections(elf)
+    section_offset = struct.unpack_from("<I", elf, 32)[0]
+    section_count = struct.unpack_from("<H", elf, 48)[0]
+    sections = [struct.unpack_from("<10I", elf, section_offset + index * 40) for index in range(section_count)]
+    extents = {}
+    for _, kind, _, _, offset, length, _, _, _, entry_size in sections:
+        if kind != 2:
+            continue
+        if entry_size != 16 or length % 16 or offset + length > len(elf):
+            raise ValueError("malformed ELF symbol table")
+        for position in range(offset, offset + length, 16):
+            _, address, size, info, _, section = struct.unpack_from("<IIIBBH", elf, position)
+            if info & 15 != 2 or section == 0 or section >= 0xff00:
+                continue
+            if section >= len(sections):
+                raise ValueError("function has an invalid ELF section")
+            _, section_kind, flags, base, start, count, *_ = sections[section]
+            if section_kind != 1 or flags & 6 != 6 or start + count > len(elf):
+                raise ValueError("function lacks complete executable storage")
+            if not base <= address <= address + size <= base + count <= 1 << 32:
+                raise ValueError("function exceeds its executable section")
+            previous = extents.get(address, size)
+            if previous and size and previous != size:
+                raise ValueError("conflicting function extents at one address")
+            extents[address] = max(previous, size)
+    if not extents:
+        raise ValueError("ELF has no defined function symbols")
+    return extents
+
+
+def functions_from(disassembly, extents=None):
     functions = {}
     body = None
     addresses = {}
+    extents = extents or {}
+    owner_start = owner_end = None
     for line in disassembly.splitlines():
         header = re.fullmatch(r"([0-9a-f]+) <(.+)>:", line)
         if header:
             address, name = header.groups()
+            start = int(address, 16)
+            if owner_end is not None and owner_start < start < owner_end and start not in extents:
+                continue
+            owner_start = start
+            owner_end = start + extents[start] if start in extents else None
             if name in addresses:
                 if name in functions:
                     functions[f"{name} [0x{addresses[name]}]"] = functions.pop(name)
@@ -442,6 +480,15 @@ def direct_graph(functions, selected, transfers=None, discovered=None):
         for address, opcode, args, target in instructions(functions[name]):
             if not control_flow(opcode) or opcode == "ret" or (opcode == "jr" and args == ["ra"]):
                 continue
+            if opcode in BRANCHES | {"j", "jal", "tail"}:
+                destination = next((int(arg, 16) for arg in args if re.fullmatch(r"0x[0-9a-f]+", arg)), None)
+                body = instructions(functions[name])
+                if destination is not None:
+                    if body[0][0] <= destination <= body[-1][0] and not is_call(opcode, args):
+                        continue
+                    if destination in entries:
+                        edges[name].add(entries[destination])
+                        continue
             if target is None and address in transfers.get(name, {}):
                 body = instructions(functions[name])
                 for destination in sorted(transfers[name][address]):
@@ -496,8 +543,8 @@ def longest_path(root, edges, frames):
     return memo[root]
 
 
-def analyze(disassembly, available, readonly=None, compiler=None):
-    functions = functions_from(disassembly)
+def analyze(disassembly, available, readonly=None, compiler=None, extents=None):
+    functions = functions_from(disassembly, extents)
     poll = reader_symbols(functions)
     selected = {name for name in functions if name.lstrip("<").startswith(SCOPES)} | {poll}
     if compiler is not None and set(compiler) != selected:
@@ -578,7 +625,8 @@ def main():
     memory = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(memory)
     bundle = memory.validate_bundle(arguments.evidence, arguments.elf)
-    functions = functions_from(disassembly)
+    extents = function_extents(arguments.elf.read_bytes())
+    functions = functions_from(disassembly, extents)
     inventory = evidence.symbol_inventory(sys.modules[__name__], arguments.elf.read_bytes(), functions,
         subprocess.check_output(["llvm-nm", "--defined-only", "--print-size", str(arguments.elf)], text=True))
     if inventory != bundle["symbols"]:
@@ -592,7 +640,7 @@ def main():
         proof = evidence.machine_frame(machines[raw], records[raw])
         proof["callees"] = [inventory[callee]["name"] for callee in proof["calls"] if callee in inventory]
         compiler[symbol["name"]] = proof
-    report = analyze(disassembly, int(matches[0]), readonly=readonly_sections(arguments.elf.read_bytes()), compiler=compiler)
+    report = analyze(disassembly, int(matches[0]), readonly=readonly_sections(arguments.elf.read_bytes()), compiler=compiler, extents=extents)
     report["compiler_frames"] = {name: {key: value for key, value in proof.items() if key != "sp_writes"} for name, proof in compiler.items()}
     report["evidence_inputs_sha256"] = hashlib.sha256((arguments.evidence / "inputs.json").read_bytes()).hexdigest()
     report["elf"] = str(arguments.elf.resolve())
