@@ -264,6 +264,13 @@ class ProducerBoundaryTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "include"):
                     memory.cargo_configuration()
 
+    def test_ci_fetches_locked_dependencies_before_offline_checks(self):
+        workflow = (memory.ROOT / ".github/workflows/rust_ci.yml").read_text()
+        firmware = workflow.split("  firmware:\n", 1)[1].split("  web-simulator:\n", 1)[0]
+        fetch = firmware.index("- run: cargo fetch --locked")
+        self.assertLess(fetch, firmware.index("- run: python3 -m unittest"))
+        self.assertLess(fetch, firmware.index("- run: scripts/check-firmware.sh"))
+
     def test_stage_and_storage_are_not_silently_changed(self):
         for environment in [{"BREWTHINK_DIAGNOSTIC_STAGE": "grayscale-bench"}, {"BREWTHINK_PREVIOUS_FRAME_STORAGE": "host-ram"}]:
             with self.subTest(environment=environment), patch.dict(os.environ, environment, clear=True):
