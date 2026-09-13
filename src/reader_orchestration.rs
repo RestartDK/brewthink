@@ -12,6 +12,12 @@ pub struct ReaderImages<const CAPACITY: usize> {
     pub(crate) length: usize,
 }
 
+impl<const CAPACITY: usize> Default for ReaderImages<CAPACITY> {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
 impl<const CAPACITY: usize> ReaderImages<CAPACITY> {
     pub const fn empty() -> Self {
         Self {
@@ -26,7 +32,7 @@ impl<const CAPACITY: usize> ReaderImages<CAPACITY> {
 
     pub fn scanned<E>(&mut self, result: Result<ImageCatalog<CAPACITY>, E>) -> Result<(), E> {
         let catalog = result?;
-        *self = Self::empty();
+        *self = Self::default();
         for image in catalog.images() {
             self.files[self.length] = Some(image);
             self.length += 1;

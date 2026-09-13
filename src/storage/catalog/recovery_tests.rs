@@ -526,7 +526,7 @@ fn reader_orchestration_retains_catalog_and_selection_read_failures() {
     data.commit_image_upload(request, &mut [0; 512]).unwrap();
     data.write_selected_image(name).unwrap();
 
-    let mut images = ReaderImages::<4>::empty();
+    let mut images = ReaderImages::<4>::default();
     images.scanned(data.scan_images()).unwrap();
     assert_eq!(
         images.selected(Ok::<_, Fault>(None)),
@@ -724,7 +724,7 @@ fn failed_typography_reload_persists_surviving_preferences_before_reopen_and_res
             changed
         };
         let books = [Some(BookFile::new(
-            BookFileName::new("TEST.EPUB").unwrap(),
+            BookFileName::try_from("TEST.EPUB").unwrap(),
             100,
         ))];
         let words = SavedResume::capture(asleep, changed, &books)

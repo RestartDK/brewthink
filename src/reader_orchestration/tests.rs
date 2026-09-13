@@ -4,6 +4,17 @@ use super::*;
 use crate::app::{AppPreferences, AppView, BookOrigin, Direction, HomeItem};
 use std::vec::Vec;
 
+#[test]
+fn default_images_match_the_const_empty_catalog() {
+    const EMPTY: ReaderImages<4> = ReaderImages::empty();
+    let images = ReaderImages::<4>::default();
+    assert_eq!(images.length, EMPTY.length);
+    assert_eq!(images.files, EMPTY.files);
+    let zero = ReaderImages::<0>::default();
+    assert_eq!(zero.length, 0);
+    assert!(zero.files.is_empty());
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum IoError {
     Unreadable,
@@ -411,9 +422,12 @@ fn failed_sleep_reloads_nonzero_position_before_retry_and_serialized_wake() {
     let resume = input(&mut app, &mut io, AppInput::Power).unwrap().unwrap();
     assert_eq!(resume, expected);
     let books = [
-        Some(BookFile::new(BookFileName::new("FIRST.EPUB").unwrap(), 100)),
         Some(BookFile::new(
-            BookFileName::new("SECOND.EPUB").unwrap(),
+            BookFileName::try_from("FIRST.EPUB").unwrap(),
+            100,
+        )),
+        Some(BookFile::new(
+            BookFileName::try_from("SECOND.EPUB").unwrap(),
             200,
         )),
     ];

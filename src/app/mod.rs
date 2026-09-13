@@ -696,6 +696,22 @@ pub enum AppInput {
     Power,
 }
 
+impl From<crate::input::Button> for AppInput {
+    fn from(button: crate::input::Button) -> Self {
+        use crate::input::Button;
+
+        match button {
+            Button::Back => Self::Back,
+            Button::Confirm => Self::Confirm,
+            Button::Left => Self::Move(Direction::Left),
+            Button::Right => Self::Move(Direction::Right),
+            Button::Up => Self::Move(Direction::Up),
+            Button::Down => Self::Move(Direction::Down),
+            Button::Power => Self::Power,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PageTarget {
     First,
@@ -1818,6 +1834,25 @@ mod tests {
         SleepScreenSource,
     };
     use crate::{input::UsbState, power::BatteryStatus};
+
+    #[test]
+    fn button_conversion_preserves_all_inputs() {
+        use crate::input::Button;
+
+        for (button, expected) in [
+            (Button::Back, AppInput::Back),
+            (Button::Confirm, AppInput::Confirm),
+            (Button::Left, AppInput::Move(Direction::Left)),
+            (Button::Right, AppInput::Move(Direction::Right)),
+            (Button::Up, AppInput::Move(Direction::Up)),
+            (Button::Down, AppInput::Move(Direction::Down)),
+            (Button::Power, AppInput::Power),
+        ] {
+            assert_eq!(AppInput::from(button), expected);
+            let input: AppInput = button.into();
+            assert_eq!(input, expected);
+        }
+    }
 
     fn open_books(app: &mut App) {
         assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);

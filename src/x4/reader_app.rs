@@ -25,8 +25,8 @@ use self::retained_resume::RtcResume;
 
 use crate::{
     app::{
-        App, AppEffect, AppInput, AppPreferences, AppView, BookId, Direction, HomeItem, ImageId,
-        ReadingLocation, ResumePoint, SettingsItem, SleepScreenMode, SleepScreenSource,
+        App, AppEffect, AppPreferences, AppView, BookId, HomeItem, ImageId, ReadingLocation,
+        ResumePoint, SettingsItem, SleepScreenMode, SleepScreenSource,
     },
     bounded_layout::{BoundedPage, MAX_PAGE_LINES, layout_xhtml_page_into},
     bounded_xml::FixedString,
@@ -619,7 +619,7 @@ pub async fn reader_app_task(
                     if let Some(command) = startup_commands.push(byte) {
                         match command {
                             Ok(ControlCommand::Tap(button)) => {
-                                startup.input(map_button(button));
+                                startup.input(button.into());
                                 esp_println::println!("BREWCTL/1 DONE command=tap status=ok");
                             }
                             Ok(ControlCommand::Status) => {
@@ -664,7 +664,7 @@ pub async fn reader_app_task(
                 .await
                     && event.transition() == ButtonTransition::Pressed
                 {
-                    startup.input(map_button(event.button()));
+                    startup.input(event.button().into());
                 }
                 if !matches!(startup, Startup::AwaitingRetry(_)) {
                     esp_println::println!(
@@ -907,7 +907,7 @@ impl ReaderRuntime<'_> {
         let previous_preferences = self.app.preferences();
         let previous_image = self.app.selected_sleep_image();
         let result = run_effect(
-            self.app.input(map_button(button)),
+            self.app.input(button.into()),
             self.app,
             DeviceCatalogs {
                 library: self.library,
@@ -2270,18 +2270,6 @@ async fn enter_sleep(
         &mut [(&mut power, WakeupLevel::Low)];
     let wake = RtcioWakeupSource::new(wakeup_pins);
     rtc.sleep_deep(&[&wake]);
-}
-
-fn map_button(button: Button) -> AppInput {
-    match button {
-        Button::Back => AppInput::Back,
-        Button::Confirm => AppInput::Confirm,
-        Button::Left => AppInput::Move(Direction::Left),
-        Button::Right => AppInput::Move(Direction::Right),
-        Button::Up => AppInput::Move(Direction::Up),
-        Button::Down => AppInput::Move(Direction::Down),
-        Button::Power => AppInput::Power,
-    }
 }
 
 fn frame_size() -> Size {
