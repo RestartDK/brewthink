@@ -2,7 +2,7 @@
 
 ## Device scene
 
-A reader uses Brewthink one-handed on a slow 480 × 800 e-paper display. Images and selected controls use four logical shades. Text and icons remain black. Controls must remain obvious without animation, color, touch, or frequent refreshes.
+A reader uses Brewthink one-handed on a slow 480 × 800 e-paper display. Full-screen images use four logical shades. UI gray uses screen-anchored black-and-white dithering. Text and icons remain black. Controls must remain obvious without animation, color, touch, or frequent refreshes.
 
 ## Frame
 
@@ -23,7 +23,9 @@ Reading pages, opening covers, and book-cover sleep frames have no application b
 
 Home, Files, Settings, and the reader drawer use borderless idle rows. A selected row uses the shared `SELECTION_BACKGROUND` token at `Gray8(170)`, black text and icons, a two-pixel black outline, and the shared 12-pixel `ROW_CORNERS` size. The fill and outline make selection visible without relying on tone alone. The cover shelf retains outlines around the selected book.
 
-The intermediate selection fill uses the existing fixed grayscale refresh path. It gives focus a quiet solid gray instead of binary speckles, but menu selection changes no longer qualify for the faster binary differential path. This source integration does not measure refresh latency on hardware.
+`FrameTarget` converts UI gray to an ordered 2 × 2 black-and-white pattern at absolute screen coordinates. The light-gray selection has one black pixel per four pixels. Text, icons and outlines stay black. Shelf covers and settings thumbnails are dithered too, keeping interactive menus eligible for binary differential refresh. The existing policy performs a quick clean after fifteen differential updates.
+
+Full-screen covers, image-viewer content and sleep images retain genuine four-shade pixels through `PackedImage`. Returning from grayscale content resets and cleans the controller once before differential updates resume. EPUB body illustrations currently render as text placeholders; inline image layout is not implemented. See [device measurements and limits](docs/dithered-ui.md).
 
 `Icon` in `src/ui/icons.rs` owns the 24 × 24 icon grid and two-pixel strokes. Icons inherit the row foreground color. Books, folders, images, typography, sleep, chapters, and navigation share this set. The smaller battery glyph keeps its bounded capacity and USB-power treatment.
 
@@ -80,7 +82,7 @@ Shared components own recurring visual rules: `AppBar`, `CommandBar`, `DrawerSur
 
 Semantic `TextRole` values resolve application typography centrally. Reader typography continues to resolve through `ReaderTheme` and never changes application chrome.
 
-Home, Books, Files, Settings, Reader, all five drawer selections, Image, Error, and Sleep render through the 96,000-byte four-shade frame. Native grayscale PNG snapshots pin representative screen compositions after that real render. Focused Rust tests cover every selection row without a separate snapshot per row. Coverage includes empty catalogs, populated shelf pages, filename clipping, and sleep-image previews. A component or layout change must preserve those contracts unless the visual change is deliberate and the fixtures are reviewed.
+Home, Books, Files, Settings, Reader, all five drawer selections, Image, Error, and Sleep render through the 96,000-byte four-shade frame. Native grayscale PNG snapshots pin representative screen compositions after that real render. Focused Rust tests cover every selection row's dither pattern, black foreground and outline without a separate snapshot per row. Coverage includes empty catalogs, populated shelf pages, filename clipping, and sleep-image previews. A component or layout change must preserve those contracts unless the visual change is deliberate and the fixtures are reviewed.
 
 ## Simulator
 
@@ -90,7 +92,7 @@ The canvas backing bitmap and CSS dimensions are both 480 × 800. Narrow viewpor
 
 ## Native captures
 
-The committed device captures use native 480 × 800 pixels:
+The [dithered selection comparison](docs/images/dithered-ui/selection-before-after.png) contains unscaled native crops. The older device captures below predate dithering and show the former solid-gray selection. They use native 480 × 800 pixels:
 
 - [Home](docs/images/reader-ui/home.png)
 - [Cover shelf](docs/images/reader-ui/shelf.png)

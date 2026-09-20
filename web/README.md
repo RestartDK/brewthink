@@ -1,6 +1,6 @@
 # Brewthink web simulator
 
-The simulator runs Brewthink's shared home, books, files, settings, reader, sleep state, EPUB package parser, cover decoder, and grayscale renderers in WebAssembly. The canvas decodes the same 96,000-byte, four-shade `480 × 800` logical frame used by the X4 reader. Selections use the shared light-grey fill with black text and outlines. Native pixels are neutral 0, 85, 170, and 255. Simulated tones do not prove optical separation on the panel.
+The simulator runs Brewthink's shared home, books, files, settings, reader, sleep state, EPUB package parser, cover decoder, and grayscale renderers in WebAssembly. The canvas decodes the same 96,000-byte, four-shade `480 × 800` logical frame used by the X4 reader. UI light gray is a screen-anchored black-and-white dot pattern with black text and outlines. Shelf covers and settings previews are dithered; full-screen covers, image content and sleep images retain genuine grayscale. EPUB body illustrations currently use text placeholders. Native pixels are neutral 0, 85, 170, and 255. Simulated tones do not prove optical separation on the panel.
 
 ## Run locally
 
@@ -30,7 +30,7 @@ bun run test:e2e
 bun run test:e2e:dev
 ```
 
-`test:e2e` starts a production preview of the assets from `bun run build` on port 4173. It refuses to reuse an existing server. Tests cover production loading, file import, input controls, hint alignment, cover-only opening, image selection, sleep and resume, invalid-input recovery, and an accessibility scan. Exhaustive application and parser cases belong to host Rust tests. The parity suite checks representative reading and drawer flows against native frames. The grayscale test requires exact neutral values 0, 85, 170, and 255 in image, cover, and sleep frames. A synthetic 480 × 800 cover verifies every pixel to catch thumbnail enlargement or chrome overlays. The native decoder checks the same fixture. Regenerate the navigation and cover fixtures with `python3 scripts/generate-navigation-fixture.py` from the repository root.
+`test:e2e` starts a production preview of the assets from `bun run build` on port 4173. It refuses to reuse an existing server. Tests cover production loading, file import, input controls, hint alignment, cover-only opening, image selection, sleep and resume, invalid-input recovery, and an accessibility scan. Exhaustive application and parser cases belong to host Rust tests. The parity suite checks representative reading and drawer flows against native frames. The menu test requires only 0 and 255 in interactive frames, including shelf covers and settings previews. The grayscale test requires exact neutral values 0, 85, 170, and 255 in full-screen image, cover, and sleep frames. A synthetic 480 × 800 cover verifies every pixel to catch thumbnail enlargement or chrome overlays. The native decoder checks the same fixture. Regenerate the navigation and cover fixtures with `python3 scripts/generate-navigation-fixture.py` from the repository root.
 
 `test:e2e:dev` starts a separate development server on port 4174 and checks Rust-triggered WASM reloads. Both commands stop their servers when the tests finish. `BREWTHINK_WEB_PORT` selects an isolated test port. Screenshot-only walkthroughs and exact browser-chrome styling are not release gates. See [test organization](../docs/testing.md).
 

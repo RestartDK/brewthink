@@ -187,9 +187,11 @@ test("preserves every grayscale tone in images, covers, and sleep", async ({ pag
   await expect(page.locator("#preview-heading")).toHaveText("Home menu · 480 × 800");
   await page.keyboard.press("Enter");
   await expect(page.locator("#preview-heading")).toHaveText("Library shelf · 480 × 800");
+  expect(await palette()).toEqual([0, 255]);
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#preview-heading")).toHaveText("Book cover · 480 × 800");
   expect(await palette()).toEqual([0, 85, 170, 255]);
   await capture(`grayscale-cover-${tones}`);
-  await page.keyboard.press("Enter");
   await page.keyboard.press("p");
   await expect(page.locator("#preview-heading")).toHaveText("Retained sleep screen · 480 × 800");
   expect(await palette()).toEqual([0, 85, 170, 255]);

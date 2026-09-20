@@ -1,5 +1,11 @@
 # Brewthink checkpoint
 
+## Latest recorded hardware, dithered UI trial, 2026-09-20
+
+The authorized dithered UI trial supersedes the installation records below. App1 runs a normal reader with monochrome menu pixels and genuine-gray full-screen images, without the experimental three-attempt limit. The trial ended on Home/Settings, selection 2, with unchanged app1 boot selection and verified flash readback.
+
+See [the exact installed artifact, measurements and limits](docs/dithered-ui.md). That hardware trial predates the port onto current main. The main-based PR build has separate offline verification and has not been flashed. No hardware operation is part of preparing this PR.
+
 ## Current hardware, footer button order, 2026-09-12
 
 The user explicitly requested swapping the footer groups and flashing that change. The reader now places Left/Right on the left and Back/Confirm actions on the right. Button decoding and grayscale refresh behavior are unchanged.
