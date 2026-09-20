@@ -7,6 +7,8 @@ mod frame;
 mod icons;
 mod layout;
 mod reader_drawer;
+#[cfg(test)]
+mod render_tests;
 mod theme;
 
 pub use app::{AppFrame, AppRenderError, render_app};

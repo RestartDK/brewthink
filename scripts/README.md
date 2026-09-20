@@ -2,13 +2,15 @@
 
 Safe app1 workflow for the physical Xteink X4.
 
-## Board abstraction checks
+## Run checks
 
 ```bash
-scripts/check-board-abstraction.sh
+scripts/check.sh host
+scripts/check.sh firmware
+scripts/check.sh web
 ```
 
-This runs formatting, host library and device-control tests, host tool Clippy, a WASM library check, and embedded Clippy. It also builds the host executables, runs the pseudo-terminal and Python script tests, and calls `scripts/check-firmware.sh`.
+`host` is the default. `all` runs all three groups. Install web dependencies and Chromium before the web checks. See [test organization](../docs/testing.md) for coverage, prerequisites, and focused commands.
 
 `check-firmware.sh` links and inspects app1 images for the heartbeat, raw USB SD diagnostic, SD write diagnostic, four-shade reader, and grayscale bench. It checks the controller-RAM reader ELF against the stack budget. The heartbeat also builds with host-RAM previous-frame storage.
 
@@ -16,15 +18,15 @@ The reader requires controller-RAM previous-frame storage. The pre-grayscale hos
 
 Both scripts require the pinned development toolchain, `espflash`, `esptool`, Python, and LLVM. They only create local build artifacts. They do not access hardware or write device flash.
 
-## UI frame contract
+## UI snapshots
 
-Home, Books, Files, Settings, Reader, Image, Error, and Sleep have byte-exact PBM fixtures under `tests/fixtures/ui`. Empty catalogs, filename clipping, and sleep previews are included. After an intentional visual change, regenerate them with:
+Representative screen compositions have native 480 × 800 grayscale PNG snapshots under `tests/fixtures/ui`. Rust compares decoded pixels, including gray shades. Empty catalogs, filename clipping, and sleep previews are included. After an intentional visual change, regenerate them with:
 
 ```bash
-scripts/update-ui-frame-contract.sh
+BLESS_UI_FRAMES=1 cargo test --locked --lib --target "$(rustc -vV | awk '/^host:/ { print $2 }')" ui::render_tests
 ```
 
-Review the rendered fixture changes before committing them. The script runs on the host and does not access the device.
+Review the PNG changes before committing them. A failed comparison writes the actual image under ignored `artifacts/render-diffs/`. These tests do not access the device.
 
 ## Display diagnostic images
 
@@ -41,7 +43,7 @@ Valid stages are `display-reset`, `display-initialize`, `display-write`, `displa
 ## Raw input diagnostic image
 
 ```bash
-scripts/build-inputs-raw-app1.sh
+BREWTHINK_DIAGNOSTIC_STAGE=inputs-raw scripts/build-app1-image.sh artifacts/brewthink-inputs-raw-app1.bin
 ```
 
 This stage samples calibrated GPIO0/GPIO1/GPIO2 ADC voltages plus GPIO3 power-button and GPIO20 USB-detect levels every 100 ms. It keeps display and SD chip selects high and does not initialize SPI, the display, SD protocol, GPIO13, or radio hardware.
@@ -49,7 +51,7 @@ This stage samples calibrated GPIO0/GPIO1/GPIO2 ADC voltages plus GPIO3 power-bu
 Build the debounced button-event stage from this unit's measured voltage bands with:
 
 ```bash
-scripts/build-inputs-events-app1.sh
+BREWTHINK_DIAGNOSTIC_STAGE=inputs-events scripts/build-app1-image.sh artifacts/brewthink-inputs-events-app1.bin
 ```
 
 It samples every 20 ms, requires three consecutive readings, emits one structured press and release event per transition, and rejects voltages outside the measured bands instead of assigning them to the nearest button.
@@ -57,7 +59,7 @@ It samples every 20 ms, requires three consecutive readings, emits one structure
 Build the battery and USB transition stage with:
 
 ```bash
-scripts/build-power-usb-app1.sh
+BREWTHINK_DIAGNOSTIC_STAGE=power-usb scripts/build-app1-image.sh artifacts/brewthink-power-usb-app1.bin
 ```
 
 After booting that image once, stop `espflash monitor` and use the reconnecting, read-only serial collector:
@@ -71,7 +73,7 @@ The collector sends no serial data and requests neither reset nor download mode.
 ## Read-only microSD diagnostic image
 
 ```bash
-scripts/build-storage-readonly-app1.sh
+BREWTHINK_DIAGNOSTIC_STAGE=storage-readonly scripts/build-app1-image.sh artifacts/brewthink-storage-readonly-app1.bin
 ```
 
 This stage owns SPI2 exclusively, keeps display CS GPIO21 high during every SD session, initializes the card at 400 kHz, enables command/data CRC, then switches to 10 MHz. Its storage API exposes initialization and single-sector reads only: it has no block-write operation and sends no SD write command. It reads the CSD, sector zero, and—when present—the first MBR partition's boot sector to report capacity, partition metadata, and FAT/exFAT identification. The completion record explicitly reports `sectors_written=0` and both chip selects high.
@@ -81,7 +83,7 @@ This stage owns SPI2 exclusively, keeps display CS GPIO21 high during every SD s
 Build only after confirming the inserted card is disposable or backed up:
 
 ```bash
-scripts/build-storage-write-test-app1.sh
+BREWTHINK_DIAGNOSTIC_STAGE=storage-write-test BREWTHINK_CARGO_FEATURES=sd-write-diagnostic scripts/build-app1-image.sh artifacts/brewthink-storage-write-test-app1.bin
 ```
 
 The write path is excluded from normal firmware and exists only behind the `sd-write-diagnostic` feature. It refuses to run if `BWTST001.TMP` already exists. Otherwise it creates that root-directory file with a fixed 52-byte payload, flushes and closes it, reopens and verifies the exact bytes, deletes it, and confirms it is absent. If creation or verification fails after the target was known to be absent, it still attempts cleanup and reports if the file remains. The diagnostic may update the FAT, directory, free-space metadata, and one allocated data cluster. Do not flash or boot it until the exact app1 range and removable-media operation receive separate approval.
@@ -89,7 +91,7 @@ The write path is excluded from normal firmware and exists only behind the `sd-w
 ## Integrated device diagnostic image
 
 ```bash
-scripts/build-integrated-device-app1.sh
+BREWTHINK_DIAGNOSTIC_STAGE=integrated-device scripts/build-app1-image.sh artifacts/brewthink-integrated-device-app1.bin
 ```
 
 This read-only stage uses one SPI2 owner to initialize and fingerprint microSD sector zero, switch the bus to the SSD1677 for a checkerboard full refresh, then reinitialize the card and verify that sector zero is unchanged. After both chip selects return high, it samples buttons, battery voltage, and USB state every 20 ms. The stage contains no SD write capability because it is built without `sd-write-diagnostic`.
@@ -97,7 +99,7 @@ This read-only stage uses one SPI2 owner to initialize and fingerprint microSD s
 ## Display and ESP32-C3 sleep/wake image
 
 ```bash
-scripts/build-sleep-wake-app1.sh
+BREWTHINK_DIAGNOSTIC_STAGE=sleep-wake scripts/build-app1-image.sh artifacts/brewthink-sleep-wake-app1.bin
 ```
 
 On an ordinary boot, this stage refreshes the orientation pattern, sends the SSD1677 deep-sleep command and check code, verifies both shared-SPI chip selects high, then enters ESP32-C3 deep sleep with active-low GPIO3 as the only wake source. Waking with the power button causes a fresh boot, hardware-resets the display out of deep sleep, refreshes it white, and holds without sleeping again. GPIO13 is not initialized. The stage has no SD write capability.

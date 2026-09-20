@@ -1,6 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
 import path from "node:path";
-import { captureFrame } from "./capture-frame";
 
 async function framePng(page: Page): Promise<string> {
   return page.locator("#display").evaluate((element) => {
@@ -72,39 +71,5 @@ test("shows every native cover pixel without chrome and reuses it for sleep", as
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
   await page.keyboard.press("Escape");
   await page.keyboard.press("Enter");
-  await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
-});
-
-test("previews named chapters and moves to either end of the book", async ({ page }) => {
-  await openFixture(page);
-  await page.keyboard.press("Enter");
-  const directory = process.env.BREWTHINK_WALKTHROUGH_DIR;
-  if (directory !== undefined) await captureFrame(page, path.join(directory, "10-reader.png"));
-  await page.keyboard.press("Enter");
-  await page.keyboard.press("ArrowDown");
-  await expect(page.locator("#selected-creator")).toHaveText("Chapter: A quiet morning");
-  await page.keyboard.press("ArrowRight");
-  await expect(page.locator("#selected-creator")).toHaveText("Chapter: Along the river");
-  if (directory !== undefined) await captureFrame(page, path.join(directory, "09-named-chapter.png"));
-  await page.keyboard.press("Enter");
-  await expect(page.locator("#selection-position")).toHaveText("Chapter 2 / 3");
-  await page.keyboard.press("Enter");
-  for (let step = 0; step < 20; step += 1) await page.keyboard.press("ArrowRight");
-  await expect(page.locator("#selected-creator")).toHaveText("Book position: 100%");
-  await page.keyboard.press("Enter");
-  await expect(page.locator("#selection-position")).toHaveText("Chapter 3 / 3");
-  const lastPage = await page.locator("#view-position").textContent();
-  const [current, count] = (lastPage ?? "").split(" / ");
-  expect(current).toBe(count);
-  await page.keyboard.press("Enter");
-  for (let step = 0; step < 20; step += 1) await page.keyboard.press("ArrowLeft");
-  await expect(page.locator("#selected-creator")).toHaveText("Book position: 0%");
-  await page.keyboard.press("Enter");
-  await expect(page.locator("#selection-position")).toHaveText("Chapter 1 / 3");
-  await expect(page.locator("#view-position")).toHaveText(/^1 \/ /);
-});
-
-test("skips a corrupt optional cover rather than rejecting readable text", async ({ page }) => {
-  await openFixture(page, "invalid-cover.epub");
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
 });

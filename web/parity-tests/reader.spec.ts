@@ -121,7 +121,7 @@ for (const variant of [0, 1]) {
   });
 }
 
-for (const fixture of ["text", "jpeg", "frame-limit"]) {
+for (const fixture of ["text", "jpeg"]) {
   test(`${fixture} keeps native original-resolution opening and sleep pixels`, async ({ page }) => {
     await loadShelf(page, fixture);
     await page.keyboard.press("Enter");
@@ -145,7 +145,7 @@ for (const fixture of ["text", "jpeg", "frame-limit"]) {
   });
 }
 
-for (const fixture of ["text", "ncx", "malformed-nav", "no-nav"]) {
+for (const fixture of ["text", "malformed-nav"]) {
   test(`${fixture} matches native drawer drafts, cancel, jumps, endpoints, reflow and wake`, async ({ page }) => {
     const warnings: string[] = [];
     page.on("console", (entry) => { if (entry.type() === "warning") warnings.push(entry.text()); });
@@ -176,7 +176,7 @@ for (const fixture of ["text", "ncx", "malformed-nav", "no-nav"]) {
       await expectFrame(page, fixture, name);
       if (name === "chapter-row" || name === "chapter-next") {
         const index = name === "chapter-row" ? 0 : 1;
-        const label = fixture === "text" || fixture === "ncx"
+        const label = fixture === "text"
           ? (index === 0 ? "Opening" : "Closing") : `Chapter ${index + 1}`;
         await expect(page.locator("#selected-creator")).toHaveText(`Chapter: ${label}`);
       }
@@ -189,7 +189,7 @@ for (const fixture of ["text", "ncx", "malformed-nav", "no-nav"]) {
   });
 }
 
-for (const fixture of ["shelf-only-cover", "shelf-limit"]) {
+for (const fixture of ["shelf-only-cover"]) {
   test(`${fixture} preserves the shelf image but skips opening and uses native sleep fallback`, async ({ page }) => {
     await loadShelf(page, "text");
     const shelf = await packedFrame(page);
@@ -207,8 +207,6 @@ for (const fixture of ["shelf-only-cover", "shelf-limit"]) {
 
 for (const { fixture, reason } of [
   { fixture: "malformed", reason: "Malformed" },
-  { fixture: "oversized-chapter", reason: "ResourceTooLarge" },
-  { fixture: "too-many-chapters", reason: "TooManySpineItems" },
 ]) {
   test(`rejects ${fixture} at the device boundary`, async ({ page }) => {
     await ready(page);
@@ -220,7 +218,7 @@ for (const { fixture, reason } of [
   });
 }
 
-for (const fixture of ["no-cover", "oversized-cover", "compressed-oversized-cover", "unsupported-cover", "broken-cover", "broken-jpeg"]) {
+for (const fixture of ["no-cover", "broken-cover"]) {
   test(`${fixture} leaves the book readable with native fallback pixels`, async ({ page }) => {
     await openReader(page, fixture, false);
     await expectFrame(page, fixture, `opening-${defaultPreferences}`);

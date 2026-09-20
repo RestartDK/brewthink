@@ -28,12 +28,9 @@ def main() -> None:
     for index, name in enumerate(["one", "two", "three"], 1):
         text = f"<html><body><h1>Section {index}</h1>" + "".join(f"<p>Passage {n}: The path follows the river, past the old bridge and into the quiet woods.</p>" for n in range(60)) + "</body></html>"
         entries[f"OPS/{name}.xhtml"] = text.encode()
-    for name, invalid_cover in [("navigation-cover.epub", False), ("invalid-cover.epub", True)]:
-        with zipfile.ZipFile(ROOT / "web/tests/fixtures" / name, "w") as archive:
-            for path, data in entries.items():
-                if invalid_cover and path == "OPS/cover.png":
-                    data = b"not a PNG"
-                archive.writestr(zipfile.ZipInfo(path, (2020, 1, 1, 0, 0, 0)), data)
+    with zipfile.ZipFile(ROOT / "web/tests/fixtures/navigation-cover.epub", "w") as archive:
+        for path, data in entries.items():
+            archive.writestr(zipfile.ZipInfo(path, (2020, 1, 1, 0, 0, 0)), data)
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ Keep raw captures under ignored `backup/`. They can contain books, personal imag
 1. Build the read-only USB diagnostic locally:
 
    ```bash
-   scripts/build-storage-usb-app1.sh
+   BREWTHINK_DIAGNOSTIC_STAGE=storage-usb BREWTHINK_CARGO_FEATURES=sd-diagnostic scripts/build-app1-image.sh artifacts/brewthink-storage-usb-app1.bin
    ```
 
 2. Review the generated image, byte count, `app1` write range, and sector range. Flash only after approval, using `scripts/flash-app1-and-readback.sh`. Reset the processor after readback to leave the flashing stub.

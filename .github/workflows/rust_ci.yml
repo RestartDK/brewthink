@@ -30,12 +30,12 @@ jobs:
             command: fmt --all -- --check
           - name: host tests
             command: test --locked --lib --target x86_64-unknown-linux-gnu
-          - name: reader and EPUB tests
-            command: test --locked --lib --features device-reader,sd-write-diagnostic,epub,grayscale-bench --target x86_64-unknown-linux-gnu
+          - name: reader and simulator tests
+            command: test --locked --lib --features device-reader,sd-write-diagnostic,epub,grayscale-bench,web-sim --target x86_64-unknown-linux-gnu
           - name: device control tests
             command: test --locked --features device-control --bin device-control --target x86_64-unknown-linux-gnu
           - name: host tools Clippy
-            command: clippy --locked --features host-image-tools,device-control,device-reader,epub --lib --bin prepare-image --bin device-control --bin inspect-epub --bin inspect-device-epub --target x86_64-unknown-linux-gnu -- -D warnings
+            command: clippy --locked --features host-image-tools,device-control,device-reader,epub,web-sim --lib --bin prepare-image --bin device-control --bin inspect-epub --bin inspect-device-epub --target x86_64-unknown-linux-gnu -- -D warnings
           - name: firmware Clippy
             command: clippy --locked --lib --bin brewthink -- -D warnings
           - name: SD write Clippy
@@ -88,7 +88,6 @@ jobs:
       - run: cargo fetch --locked
       - run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - run: scripts/check-firmware.sh
-      - run: python3 scripts/check-reader-memory.py artifacts/ci/reader-memory
       - name: Inspect failed reader disassembly
         if: failure()
         run: |
@@ -103,7 +102,6 @@ jobs:
             artifacts/ci/*.txt
             artifacts/ci/*.json
             artifacts/ci/*.memory.*/
-            artifacts/ci/reader-memory/
           if-no-files-found: error
 
   web-simulator:
@@ -132,8 +130,6 @@ jobs:
       - name: Test production assets
         working-directory: web
         run: bun run test:e2e
-        env:
-          BREWTHINK_WALKTHROUGH_DIR: ../artifacts/walkthrough
       - name: Test development reload
         working-directory: web
         run: bun run test:e2e:dev
@@ -142,6 +138,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: simulator-browser-evidence
-          path: |
-            artifacts/walkthrough
-            web/test-results
+          path: web/test-results

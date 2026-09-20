@@ -24,14 +24,16 @@ bash scripts/check-simulator-parity.sh
 
 The script regenerates 17 deterministic synthetic EPUBs and compares them byte-for-byte with the committed fixtures. `simulator-oracle` runs without `web-sim`: it reads through the device APIs, applies each cover budget independently, and renders references with `App` and the native renderer. It never calls `simulator::Book` or `Cover`. Playwright imports the same inputs into the production WASM build and compares all 96,000 framebuffer bytes across both bitplanes.
 
-Coverage includes:
+Host Rust tests run through `scripts/check.sh host` and the main Rust CI job. The parity script keeps the full native fixture matrix but sends only representative cases through Chromium.
+
+Coverage across these layers includes:
 
 - Ten reader pages across two typography configurations and two chapters; host tests cover all 27 font/size/spacing combinations.
 - Native drawer frames for staged chapter changes, cancellation, applied jumps, 0%/100% endpoints, staged/applied typography, and sleep/wake restoration.
 - Named EPUB 3/NCX navigation and missing/malformed navigation fallback.
 - PNG/JPEG opening and sleep frames, plus the existing full-resolution cover fixture that detects thumbnail enlargement.
-- Exact 96 KiB, 96 KiB + 1, 128 KiB, and 128 KiB + 1 inputs; a valid DEFLATE entry whose compressed size alone exceeds the shelf limit.
-- Native CLI and browser rejection of malformed XML, oversized chapters, and too many spine items; readable books with missing, oversized, unsupported, or corrupt covers.
+- Host checks for exact 96 KiB, 96 KiB + 1, 128 KiB, and 128 KiB + 1 inputs, plus a valid DEFLATE entry whose compressed size alone exceeds the shelf limit. The browser checks a shelf-only cover and its full-frame fallback.
+- Native CLI rejection of malformed XML, oversized chapters, and too many spine items. Browser checks cover malformed input and readable books with missing or corrupt covers.
 - Every one of the 256 four-shade, two-by-two shelf pixel patterns, including rounding ties.
 
 These native browser captures match the oracle byte-for-byte. Literal `&amp;` in the fixture is intentional CDATA content.
