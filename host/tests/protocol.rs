@@ -49,6 +49,7 @@ struct Pty {
 }
 impl Pty {
     fn new() -> Self {
+        let _creation = PROCESS_CREATION.lock().unwrap();
         let (mut master, mut slave) = (-1, -1);
         // SAFETY: openpty receives valid descriptor outputs; null pointers request default terminal settings.
         assert_eq!(
@@ -66,6 +67,14 @@ impl Pty {
         // SAFETY: successful openpty returned two distinct, newly owned descriptors.
         let (master, slave) =
             unsafe { (fs::File::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
+        for fd in [master.as_raw_fd(), slave.as_raw_fd()] {
+            // SAFETY: these descriptors are owned here; concurrent command creation is locked out until CLOEXEC is set.
+            unsafe {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                assert!(flags >= 0);
+                assert_eq!(libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC), 0);
+            }
+        }
         let mut name = [0; 1024];
         // SAFETY: the live slave and writable buffer remain valid throughout ttyname_r.
         assert_eq!(
@@ -90,6 +99,22 @@ impl Pty {
         }
     }
 }
+#[test]
+fn pty_descriptors_do_not_cross_exec() {
+    let pty = Pty::new();
+    let duplicate = pty.master.try_clone().unwrap();
+    for fd in [
+        pty.master.as_raw_fd(),
+        pty.slave.as_raw_fd(),
+        duplicate.as_raw_fd(),
+    ] {
+        // SAFETY: all three descriptors remain owned and open during the query.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        assert!(flags >= 0);
+        assert_ne!(flags & libc::FD_CLOEXEC, 0);
+    }
+}
+
 struct Peer {
     file: fs::File,
     buffer: Vec<u8>,
@@ -214,7 +239,8 @@ fn client(args: &[&str], serve: impl FnOnce(&mut Peer) + Send + 'static) -> Outp
     let binary = tools().join("device-control");
     let pty = Pty::new();
     let original = settings(&pty.slave);
-    let server = thread::spawn(move || serve(&mut Peer::new(pty.master)));
+    let peer_master = pty.master.try_clone().unwrap();
+    let server = thread::spawn(move || serve(&mut Peer::new(peer_master)));
     let result = run(
         Command::new(binary)
             .args(["--port", pty.path.to_str().unwrap(), "--timeout", "10"])
@@ -356,8 +382,9 @@ fn exchange(reply: &[u8], command: &str) -> Output {
     let command = command.to_string();
     let expected = format!("BREWGRAY/1 {command}\n");
     let reply = reply.to_vec();
+    let peer_master = pty.master.try_clone().unwrap();
     let server = thread::spawn(move || {
-        let mut peer = Peer::new(pty.master);
+        let mut peer = Peer::new(peer_master);
         assert_eq!(peer.line(), expected.as_bytes());
         peer.write(&reply);
     });

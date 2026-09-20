@@ -3,9 +3,12 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
+    sync::Mutex,
     thread,
     time::{Duration, Instant},
 };
+pub static PROCESS_CREATION: Mutex<()> = Mutex::new(());
+
 pub fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -18,9 +21,12 @@ pub fn run(command: &mut Command, timeout: Duration) -> Output {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0);
-    let mut child = command
-        .spawn()
-        .unwrap_or_else(|e| panic!("{command:?}: {e}"));
+    let mut child = {
+        let _creation = PROCESS_CREATION.lock().unwrap();
+        command
+            .spawn()
+            .unwrap_or_else(|e| panic!("{command:?}: {e}"))
+    };
     let read = |mut pipe: Box<dyn Read + Send>| {
         thread::spawn(move || {
             let mut bytes = vec![];
