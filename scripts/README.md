@@ -112,9 +112,9 @@ scripts/build-reader-app1.sh
 
 This builds the normal X4 reader behind `device-reader`. It scans up to sixteen DRM-free EPUBs from `/books`, validates each package with bounded fixed-memory ZIP/XML parsing, renders PNG or baseline-JPEG covers, paginates XHTML, handles all seven controls, and retains a checksummed book/chapter/page resume record in RTC fast memory across GPIO3 deep sleep. Book access remains read-only. Firmware creates the 8.3-compatible `/brew`, `/brew/cache`, `/brew/bookmark`, and `/files` directories. Fixed application records live under `/brew`; transactional image uploads install named files under `/files`. The decoder workspace is statically allocated and phase-overlaid to preserve the runtime stack reserve. Building the image is local and does not touch hardware; copying a book to microSD and flashing the guarded `app1` image each require separate explicit approval.
 
-The reader build checks selected compiled frames and direct-call paths with `check-reader-stack.py`. A pass is `PASS_LIMITED`, not a whole-program stack bound. Its JSON report lists unmeasured callees, unresolved register transfers, disconnected selected functions, and the unchanged reserve. The development shell provides Python and LLVM for this check.
+The reader build checks selected compiled frames and direct-call paths with `scripts/host-tool.sh stack`. A pass is `PASS_LIMITED`, not a whole-program stack bound. Its JSON report lists unmeasured callees, unresolved register transfers, disconnected selected functions, and the unchanged reserve. The development shell provides Rust and LLVM for this check.
 
-`python3 scripts/check-reader-memory.py artifacts/reader-memory-01` produces fresh, byte-identical release links with separate compiler frame and final machine-code diagnostics. Use a new gitignored or external directory; existing evidence is never overwritten. It honors `CARGO_TARGET_DIR`, binds sources, dependencies, generated inputs and the exact ELF, and retains the pinned decompressor contract. Reader image builders package that frozen, proved ELF and recheck its completed evidence rather than rebuilding afterward. Rerun after runtime integration or input changes. See [reader memory evidence](../docs/reader-memory.md) for coverage, artifact verification and unsafe initialization contracts; [SD recovery](../docs/sd-recovery.md) covers read-only USB sector exports.
+`scripts/host-tool.sh memory artifacts/reader-memory-01` produces fresh, byte-identical release links with separate compiler frame and final machine-code diagnostics. Use a new gitignored or external directory; existing evidence is never overwritten. It honors `CARGO_TARGET_DIR`, binds sources, dependencies, generated inputs and the exact ELF, and retains the pinned decompressor contract. Reader image builders package that frozen, proved ELF and recheck its completed evidence rather than rebuilding afterward. Rerun after runtime integration or input changes. See [reader memory evidence](../docs/reader-memory.md) for coverage, artifact verification and unsafe initialization contracts; [SD recovery](../docs/sd-recovery.md) covers read-only USB sector exports.
 
 ### USB reader control
 
@@ -242,7 +242,8 @@ Flash erasure is prohibited by `AGENTS.md`. `erase-app1.sh` always refuses witho
 ## Test the scripts without hardware
 
 ```bash
-python3 -m unittest discover -s scripts -p 'test_*.py'
+HOST_TARGET="$(rustc -vV | awk '/^host:/ { print $2 }')"
+cargo test --locked --manifest-path host/Cargo.toml --target "$HOST_TARGET" --test shell
 ```
 
-`test_flash_safety.py` copies the scripts into temporary directories and replaces both hardware tools with fakes. Synthetic flash bytes exercise write ranges, ordering, concurrent image replacement, backup integrity, OTA selection, and failure paths. These tests do not establish physical power-loss recovery or replace a reviewed hardware procedure.
+`host/tests/shell.rs` copies the scripts into temporary directories and replaces both hardware tools with Rust fakes. Synthetic flash bytes exercise write ranges, ordering, concurrent image replacement, backup integrity, OTA selection, and failure paths. These tests do not establish physical power-loss recovery or replace a reviewed hardware procedure.

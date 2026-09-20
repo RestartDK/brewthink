@@ -1,0 +1,6401 @@
+[
+  {
+    "args": [
+      "1000 <outer>:\n1000: nop\n1004 <inner>:\n1004: ret\n",
+      {
+        "4096": 8,
+        "4100": 4
+      }
+    ],
+    "kwargs": {},
+    "op": "stack.functions_from",
+    "result": {
+      "inner": [
+        "1004: ret"
+      ],
+      "outer": [
+        "1000: nop"
+      ]
+    },
+    "test": "test_reader_stack.FunctionBoundaryTests.test_a_real_function_inside_an_extent_is_not_discarded_as_a_label"
+  },
+  {
+    "args": [
+      [
+        "1000: nop"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.instructions",
+    "result": [
+      [
+        4096,
+        "nop",
+        [
+          ""
+        ],
+        null
+      ]
+    ],
+    "test": "test_reader_stack.FunctionBoundaryTests.test_a_real_function_inside_an_extent_is_not_discarded_as_a_label"
+  },
+  {
+    "args": [
+      "1000 <brewthink::bounded_layout::layout>:\n1000: addi sp, sp, -16\n1004 <.L0 >:\n1004: addi sp, sp, 16\n1008 <another_local_label>:\n1008: ret\n100c <next>:\n100c: ret\n",
+      {
+        "4096": 12,
+        "4108": 4
+      }
+    ],
+    "kwargs": {},
+    "op": "stack.functions_from",
+    "result": {
+      "brewthink::bounded_layout::layout": [
+        "1000: addi sp, sp, -16",
+        "1004: addi sp, sp, 16",
+        "1008: ret"
+      ],
+      "next": [
+        "100c: ret"
+      ]
+    },
+    "test": "test_reader_stack.FunctionBoundaryTests.test_debug_labels_do_not_split_an_emitted_function"
+  },
+  {
+    "args": [
+      [
+        "1000: addi sp, sp, -16",
+        "1004: addi sp, sp, 16",
+        "1008: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.instructions",
+    "result": [
+      [
+        4096,
+        "addi",
+        [
+          "sp",
+          "sp",
+          "-16"
+        ],
+        null
+      ],
+      [
+        4100,
+        "addi",
+        [
+          "sp",
+          "sp",
+          "16"
+        ],
+        null
+      ],
+      [
+        4104,
+        "ret",
+        [
+          ""
+        ],
+        null
+      ]
+    ],
+    "test": "test_reader_stack.FunctionBoundaryTests.test_debug_labels_do_not_split_an_emitted_function"
+  },
+  {
+    "args": [
+      [
+        "1000: addi sp, sp, -16",
+        "1004: addi sp, sp, 16",
+        "1008: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "result": 16,
+    "test": "test_reader_stack.FunctionBoundaryTests.test_debug_labels_do_not_split_an_emitted_function"
+  },
+  {
+    "args": [
+      {
+        "caller": [
+          "1000: addi sp, sp, -16",
+          "1004: jal 0x1000 <.L0 >"
+        ]
+      },
+      [
+        "caller"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.direct_graph",
+    "result": [
+      {
+        "caller": [
+          "caller"
+        ]
+      },
+      []
+    ],
+    "test": "test_reader_stack.FunctionBoundaryTests.test_direct_call_to_self_stays_recursive_with_a_debug_label"
+  },
+  {
+    "args": [
+      "caller",
+      {
+        "caller": [
+          "caller"
+        ]
+      },
+      {
+        "caller": 16
+      }
+    ],
+    "error": "recursive selected call graph: caller",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "stack.longest_path",
+    "test": "test_reader_stack.FunctionBoundaryTests.test_direct_call_to_self_stays_recursive_with_a_debug_label"
+  },
+  {
+    "args": [
+      {
+        "callee": [
+          "2000: addi sp, sp, -400",
+          "2004: ret"
+        ],
+        "caller": [
+          "1000: addi sp, sp, -16",
+          "1004: j 0x2000 <.L0 >"
+        ]
+      },
+      [
+        "callee",
+        "caller"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.direct_graph",
+    "result": [
+      {
+        "callee": [],
+        "caller": [
+          "callee"
+        ]
+      },
+      []
+    ],
+    "test": "test_reader_stack.FunctionBoundaryTests.test_direct_selected_edges_use_addresses_not_debug_label_names"
+  },
+  {
+    "args": [
+      "caller",
+      {
+        "callee": [],
+        "caller": [
+          "callee"
+        ]
+      },
+      {
+        "callee": 400,
+        "caller": 16
+      }
+    ],
+    "kwargs": {},
+    "op": "stack.longest_path",
+    "result": [
+      416,
+      [
+        "caller",
+        "callee"
+      ]
+    ],
+    "test": "test_reader_stack.FunctionBoundaryTests.test_direct_selected_edges_use_addresses_not_debug_label_names"
+  },
+  {
+    "args": [
+      "1000 <owner>:\n1000: ret\n1004 <.L0 >:\n1004: nop\n",
+      {
+        "4096": 4
+      }
+    ],
+    "kwargs": {},
+    "op": "stack.functions_from",
+    "result": {
+      ".L0 ": [
+        "1004: nop"
+      ],
+      "owner": [
+        "1000: ret"
+      ]
+    },
+    "test": "test_reader_stack.FunctionBoundaryTests.test_labels_at_an_extent_end_do_not_extend_its_body"
+  },
+  {
+    "args": [
+      [
+        "1000: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.instructions",
+    "result": [
+      [
+        4096,
+        "ret",
+        [
+          ""
+        ],
+        null
+      ]
+    ],
+    "test": "test_reader_stack.FunctionBoundaryTests.test_labels_at_an_extent_end_do_not_extend_its_body"
+  },
+  {
+    "args": [
+      {
+        "bytes": "7f454c460101010000000000000000000000f30000000000000000000000000034000000000000000000000000002800040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000200000000200000d4000000040000000000000000000000040000000000000000000000010000000600000000100000d8000000080000000000000000000000040000000000000000000000020000000000000000000000e0000000100000000000000000000000040000000f00000000000000000000000000000000000000001000000800000002000200"
+      }
+    ],
+    "error": "malformed ELF symbol table",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "stack.function_extents",
+    "test": "test_reader_stack.FunctionBoundaryTests.test_malformed_function_metadata_fails_closed"
+  },
+  {
+    "args": [
+      {
+        "bytes": "7f454c460101010000000000000000000000f30000000000000000000000000034000000000000000000000000002800040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000200000000200000d4000000040000000000000000000000040000000000000000000000010000000600000000100000d8000000080000000000000000000000040000000000000000000000020000000000000000000000e00000001000000000000000000000000400000010000000000000000000000000000000000000000010000008000000020002"
+      }
+    ],
+    "error": "malformed ELF symbol table",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "stack.function_extents",
+    "test": "test_reader_stack.FunctionBoundaryTests.test_malformed_function_metadata_fails_closed"
+  },
+  {
+    "args": [
+      {
+        "bytes": "7f454c460101010000000000000000000000f30000000000000000000000000034000000000000000000000000002800040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000200000000200000d4000000040000000000000000000000040000000000000000000000010000000600000000100000d8000000080000000000000000000000040000000000000000000000020000000000000000000000e0000000100000000000000000000000040000001000000000000000000000000000000000000000001000000c00000002000200"
+      }
+    ],
+    "error": "function exceeds its executable section",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "stack.function_extents",
+    "test": "test_reader_stack.FunctionBoundaryTests.test_malformed_function_metadata_fails_closed"
+  },
+  {
+    "args": [
+      {
+        "bytes": "7f454c460101010000000000000000000000f30000000000000000000000000034000000000000000000000000002800040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000200000000200000d4000000040000000000000000000000040000000000000000000000010000000600000000100000d8000000080000000000000000000000040000000000000000000000020000000000000000000000e000000020000000000000000000000004000000100000000000000000000000000000000000000000100000080000000200020000000000001000000400000002000200"
+      }
+    ],
+    "error": "conflicting function extents at one address",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "stack.function_extents",
+    "test": "test_reader_stack.FunctionBoundaryTests.test_malformed_function_metadata_fails_closed"
+  },
+  {
+    "args": [
+      {
+        "bytes": "7f454c460101010000000000000000000000f30000000000000000000000000034000000000000000000000000002800040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000200000000200000d4000000040000000000000000000000040000000000000000000000010000000600000000100000d8000000080000000000000000000000040000000000000000000000020000000000000000000000e0000000100000000000000000000000040000001000000000000000000000000000000000000000001000000000000000000200"
+      }
+    ],
+    "error": "ELF has no defined function symbols",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "stack.function_extents",
+    "test": "test_reader_stack.FunctionBoundaryTests.test_malformed_function_metadata_fails_closed"
+  },
+  {
+    "args": [
+      {
+        "bytes": "7f454c460101010000000000000000000000f30000000000000000000000000034000000000000000000000000002800040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000200000000200000d4000000040000000000000000000000040000000000000000000000010000000600000000100000d8000000080000000000000000000000040000000000000000000000020000000000000000000000e000000020000000000000000000000004000000100000000000000000000000000000000000000000100000080000000200020000000000041000000000000000000200"
+      }
+    ],
+    "kwargs": {},
+    "op": "stack.function_extents",
+    "result": {
+      "4096": 8
+    },
+    "test": "test_reader_stack.FunctionBoundaryTests.test_only_function_symbols_define_function_boundaries"
+  },
+  {
+    "args": [
+      {
+        "bytes": "7f454c460101010000000000000000000000f30000000000000000000000000034000000000000000000000000002800040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000200000000200000d4000000040000000000000000000000040000000000000000000000010000000600000000100000d8000000080000000000000000000000040000000000000000000000020000000000000000000000e000000020000000000000000000000004000000100000000000000000000000000000000000000000100000080000000200020000000000041000000000000002000200"
+      }
+    ],
+    "kwargs": {},
+    "op": "stack.function_extents",
+    "result": {
+      "4096": 8,
+      "4100": 0
+    },
+    "test": "test_reader_stack.FunctionBoundaryTests.test_only_function_symbols_define_function_boundaries"
+  },
+  {
+    "args": [
+      {
+        "bytes": "7f454c460101010000000000000000000000f30000000000000000000000000034000000000000000000000000002800040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000200000000200000d4000000040000000000000000000000040000000000000000000000010000000600000000100000d8000000080000000000000000000000040000000000000000000000020000000000000000000000e000000020000000000000000000000004000000100000000000000000000000000000000000000000100000080000000200020000000000001000000000000002000200"
+      }
+    ],
+    "kwargs": {},
+    "op": "stack.function_extents",
+    "result": {
+      "4096": 8
+    },
+    "test": "test_reader_stack.FunctionBoundaryTests.test_zero_sized_aliases_do_not_discard_the_known_function_extent"
+  },
+  {
+    "args": [
+      {
+        "bytes": "7f454c460101010000000000000000000000f30000000000000000000000000034000000000000000000000000002800040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000200000000200000d4000000040000000000000000000000040000000000000000000000010000000600000000100000d8000000080000000000000000000000040000000000000000000000020000000000000000000000e000000020000000000000000000000004000000100000000000000000000000000000000000000000100000000000000200020000000000001000000800000002000200"
+      }
+    ],
+    "kwargs": {},
+    "op": "stack.function_extents",
+    "result": {
+      "4096": 8
+    },
+    "test": "test_reader_stack.FunctionBoundaryTests.test_zero_sized_aliases_do_not_discard_the_known_function_extent"
+  },
+  {
+    "args": [
+      "1000 <owner>:\n1000 <alias>:\n1000: ret\n",
+      {
+        "4096": 8
+      }
+    ],
+    "kwargs": {},
+    "op": "stack.functions_from",
+    "result": {
+      "alias": [
+        "1000: ret"
+      ],
+      "owner": []
+    },
+    "test": "test_reader_stack.FunctionBoundaryTests.test_zero_sized_aliases_do_not_discard_the_known_function_extent"
+  },
+  {
+    "args": [
+      [
+        "100: li sp, -16",
+        "104: ret"
+      ]
+    ],
+    "error": "unknown stack adjustment at 100",
+    "error_pattern": "unknown stack adjustment",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_absolute_and_dynamic_sp_assignments_are_not_entry_offsets"
+  },
+  {
+    "args": [
+      [
+        "100: mv sp, a0",
+        "104: ret"
+      ]
+    ],
+    "error": "unknown stack adjustment at 100",
+    "error_pattern": "unknown stack adjustment",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_absolute_and_dynamic_sp_assignments_are_not_entry_offsets"
+  },
+  {
+    "args": [
+      [
+        "100: and sp, sp, a0",
+        "104: ret"
+      ]
+    ],
+    "error": "unknown stack adjustment at 100",
+    "error_pattern": "unknown stack adjustment",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_absolute_and_dynamic_sp_assignments_are_not_entry_offsets"
+  },
+  {
+    "args": [
+      [
+        "100: lw sp, 0(a0)",
+        "104: ret"
+      ]
+    ],
+    "error": "unknown stack adjustment at 100",
+    "error_pattern": "unknown stack adjustment",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_absolute_and_dynamic_sp_assignments_are_not_entry_offsets"
+  },
+  {
+    "args": [
+      [
+        "100: addi x2, x2, -16",
+        "104: ret"
+      ]
+    ],
+    "error": "unknown stack adjustment at 100",
+    "error_pattern": "unknown stack adjustment",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_absolute_and_dynamic_sp_assignments_are_not_entry_offsets"
+  },
+  {
+    "args": [
+      {
+        "effects": 37504,
+        "library": 41872,
+        "task": 1104
+      },
+      62280
+    ],
+    "kwargs": {},
+    "op": "stack.check",
+    "result": 51168,
+    "test": "test_reader_stack.ReaderStackTests.test_accepts_separate_entry_frames"
+  },
+  {
+    "args": [
+      [
+        "100: addi sp, sp, -16",
+        "104: jalr a0",
+        "108: bnez a0, 0x104",
+        "10c: addi sp, sp, 16",
+        "110: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "result": 16,
+    "test": "test_reader_stack.ReaderStackTests.test_balanced_call_inside_a_loop_preserves_frame"
+  },
+  {
+    "args": [
+      [
+        "100: addi sp, sp, -16",
+        "104: addi sp, sp, 16",
+        "108: jr a0"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "result": 16,
+    "test": "test_reader_stack.ReaderStackTests.test_balanced_indirect_tail_call_stays_on_frontier"
+  },
+  {
+    "args": [
+      {
+        "a": [
+          "100: addi sp, sp, -16",
+          "104: addi sp, sp, 16",
+          "108: jr a0"
+        ]
+      },
+      [
+        "a"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.direct_graph",
+    "result": [
+      {
+        "a": []
+      },
+      [
+        {
+          "address": "0x108",
+          "caller": "a",
+          "instruction": "jr a0",
+          "kind": "unresolved-transfer"
+        }
+      ]
+    ],
+    "test": "test_reader_stack.ReaderStackTests.test_balanced_indirect_tail_call_stays_on_frontier"
+  },
+  {
+    "args": [
+      [
+        "100: addi sp, sp, -16",
+        "104: addi sp, sp, 16",
+        "108: bnez a0, 0x100",
+        "10c: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "result": 16,
+    "test": "test_reader_stack.ReaderStackTests.test_balanced_stack_allocation_cycle_has_finite_peak"
+  },
+  {
+    "args": [
+      [
+        "100: addi sp, sp, -16",
+        "104: beqz a0, 0x110",
+        "108: addi sp, sp, -4096",
+        "110: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "result": 4112,
+    "test": "test_reader_stack.ReaderStackTests.test_bounded_allocation_after_branch_is_included"
+  },
+  {
+    "args": [
+      [
+        "100: addi sp, sp, -16",
+        "104: beqz a0, 0x10c",
+        "108: auipc t1, 0x1",
+        "10c: jr 0x0(t1) <outside>"
+      ]
+    ],
+    "error": "unresolved in-frame transfer at 10c; internal targets require proof",
+    "error_pattern": "unresolved in-frame transfer",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_branch_cannot_bypass_pc_relative_target_definition"
+  },
+  {
+    "args": [
+      [
+        "100: beqz a0, 0x102",
+        "104: ret"
+      ]
+    ],
+    "error": "branch into an unparsed instruction at 100",
+    "error_pattern": "unparsed instruction",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_branch_into_missing_instruction_is_rejected"
+  },
+  {
+    "args": [
+      [
+        "100: addi sp, sp, -16",
+        "104: beqz a0, 0x110 <f+0x10>",
+        "108: li a2, 16",
+        "110: add sp, sp, a2",
+        "114: ret"
+      ]
+    ],
+    "error": "unknown stack adjustment at 110",
+    "error_pattern": "unknown stack adjustment",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_branch_target_invalidates_linear_register_assumptions"
+  },
+  {
+    "args": [
+      [
+        "100: li a2, 16",
+        "104: jalr a0",
+        "108: sub sp, sp, a2",
+        "10c: ret"
+      ]
+    ],
+    "error": "unknown stack adjustment at 108",
+    "error_pattern": "unknown stack adjustment",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_call_clobbers_a_previously_known_adjustment"
+  },
+  {
+    "args": [
+      [
+        "100: beqz a0, 0x10c",
+        "104: addi sp, sp, -16",
+        "108: j 0x100",
+        "10c: ret"
+      ]
+    ],
+    "error": "unbounded or inconsistent stack-depth cycle",
+    "error_pattern": "stack-depth cycle",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_conditional_allocating_cycle_is_rejected"
+  },
+  {
+    "args": [
+      [
+        "100: beqz a0, 0x110",
+        "104: li a2, 16",
+        "108: j 0x114",
+        "110: li a2, 32",
+        "114: sub sp, sp, a2",
+        "118: ret"
+      ]
+    ],
+    "error": "unknown stack adjustment at 114",
+    "error_pattern": "unknown stack adjustment",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_conflicting_branch_constants_are_not_combined"
+  },
+  {
+    "args": [
+      "100 <f>:\n100: ret\n200 <f>:\n200: ret"
+    ],
+    "kwargs": {},
+    "op": "stack.functions_from",
+    "result": {
+      "f [0x100]": [
+        "100: ret"
+      ],
+      "f [0x200]": [
+        "200: ret"
+      ]
+    },
+    "test": "test_reader_stack.ReaderStackTests.test_duplicate_symbols_are_not_overwritten"
+  },
+  {
+    "args": [
+      "100 <f>:\n100: ret\n100 <f>:\n100: ret\n100 <f>:\n100: ret"
+    ],
+    "error": "duplicate symbol and address: f [0x100]",
+    "error_pattern": "duplicate symbol and address",
+    "kwargs": {},
+    "op": "stack.functions_from",
+    "test": "test_reader_stack.ReaderStackTests.test_duplicate_symbols_are_not_overwritten"
+  },
+  {
+    "args": [
+      [
+        "100: addi sp, sp, -16",
+        "104: unimp"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "result": 16,
+    "test": "test_reader_stack.ReaderStackTests.test_emitted_illegal_instruction_ends_path_but_not_exception_evidence"
+  },
+  {
+    "args": [
+      {
+        "a": [
+          "100: addi sp, sp, -16",
+          "104: unimp"
+        ]
+      },
+      [
+        "a"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.direct_graph",
+    "result": [
+      {
+        "a": []
+      },
+      [
+        {
+          "address": "0x104",
+          "caller": "a",
+          "instruction": "unimp ",
+          "kind": "exception-transfer"
+        }
+      ]
+    ],
+    "test": "test_reader_stack.ReaderStackTests.test_emitted_illegal_instruction_ends_path_but_not_exception_evidence"
+  },
+  {
+    "args": [
+      [
+        "100: addi sp, sp, -16",
+        "104: unimp",
+        "108: sub sp, sp, a0"
+      ]
+    ],
+    "error": "unreachable stack write has no frame proof at 108",
+    "error_pattern": "unreachable stack write",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_emitted_illegal_instruction_ends_path_but_not_exception_evidence"
+  },
+  {
+    "args": [
+      [
+        "",
+        "42077b96: lbu a2, 0x0(a0)",
+        "42077b9a: sltiu a3, a2, 0x5",
+        "42077b9e: addi a2, a2, -0x4",
+        "42077ba0: addi a3, a3, -0x1",
+        "42077ba2: and a2, a2, a3",
+        "42077ba4: beqz a2, 0x42077bbe <<brewthink::bounded_layout::LayoutError as core::fmt::Debug>::fmt+0x28>",
+        "42077ba6: li a0, 0x1",
+        "42077ba8: bne a2, a0, 0x42077bf4 <<brewthink::bounded_layout::LayoutError as core::fmt::Debug>::fmt+0x5e>",
+        "42077bac: lw a2, 0x4(a1)",
+        "42077bae: lw a0, 0x0(a1)",
+        "42077bb0: lw a5, 0xc(a2)",
+        "42077bb2: lui a1, 0x3c044",
+        "42077bb6: addi a1, a1, 0x53f",
+        "42077bba: li a2, 0xf",
+        "42077bbc: jr a5",
+        "42077bbe: addi sp, sp, -0x10",
+        "42077bc0: sw ra, 0xc(sp)",
+        "42077bc2: sw s0, 0x8(sp)",
+        "42077bc4: addi s0, sp, 0x10",
+        "42077bc6: sw a0, -0xc(s0)",
+        "42077bca: lui a5, 0x3c044",
+        "42077bce: addi a5, a5, 0x33f",
+        "42077bd2: lui a4, 0x4206c",
+        "42077bd6: addi a4, a4, 0x2f0",
+        "42077bda: li a2, 0x3",
+        "42077bdc: addi a3, s0, -0xc",
+        "42077be0: mv a0, a1",
+        "42077be2: mv a1, a5",
+        "42077be4: auipc ra, 0xe",
+        "42077be8: jalr -0x298(ra) <<core::fmt::Formatter>::debug_tuple_field1_finish>",
+        "42077bec: lw ra, 0xc(sp)",
+        "42077bee: lw s0, 0x8(sp)",
+        "42077bf0: addi sp, sp, 0x10",
+        "42077bf2: ret",
+        "42077bf4: lw a2, 0x4(a1)",
+        "42077bf6: lw a0, 0x0(a1)",
+        "42077bf8: lw a5, 0xc(a2)",
+        "42077bfa: lui a1, 0x3c044",
+        "42077bfe: addi a1, a1, 0x54e",
+        "42077c02: li a2, 0xc",
+        "42077c04: jr a5"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "result": 16,
+    "test": "test_reader_stack.ReaderStackTests.test_emitted_layout_error_formatter_conditional_frame"
+  },
+  {
+    "args": [
+      [
+        "100: beqz a0, 0x108",
+        "104: addi sp, sp, -16",
+        "108: addi sp, sp, 16",
+        "10c: ret"
+      ]
+    ],
+    "error": "stack depth outside supported entry-relative range at 108",
+    "error_pattern": "outside supported entry-relative range",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_epilogue_cannot_release_an_unallocated_frame"
+  },
+  {
+    "args": [
+      [
+        "100: addi sp, sp, -16",
+        "104: beqz a0, 0x114",
+        "108: addi sp, sp, 16",
+        "10c: j 0x118",
+        "114: addi sp, sp, -32",
+        "118: addi sp, sp, -64",
+        "11c: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "result": 112,
+    "test": "test_reader_stack.ReaderStackTests.test_epilogue_on_one_branch_cannot_cancel_another_allocation"
+  },
+  {
+    "args": [
+      [
+        "100: beqz a0, 0x110",
+        "104: li a2, 32",
+        "108: j 0x114",
+        "110: li a2, 32",
+        "114: sub sp, sp, a2",
+        "118: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "result": 32,
+    "test": "test_reader_stack.ReaderStackTests.test_equal_constants_survive_a_join"
+  },
+  {
+    "args": [
+      {
+        "child": [
+          "200: ret"
+        ],
+        "root": [
+          "100: jalr a0",
+          "104: jal 0x300 <outside>",
+          "108: jalr 0x10(ra) <child>",
+          "10c: ret"
+        ]
+      },
+      [
+        "child",
+        "root"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.direct_graph",
+    "result": [
+      {
+        "child": [],
+        "root": [
+          "child"
+        ]
+      },
+      [
+        {
+          "address": "0x100",
+          "caller": "root",
+          "instruction": "jalr a0",
+          "kind": "unresolved-transfer"
+        },
+        {
+          "address": "0x104",
+          "caller": "root",
+          "kind": "unmeasured-target",
+          "target": "outside"
+        }
+      ]
+    ],
+    "test": "test_reader_stack.ReaderStackTests.test_indirect_and_unmeasured_calls_are_visible"
+  },
+  {
+    "args": [
+      "1000 <TaskStorage<brewthink::x4::reader_app::__reader_app_task_task::__reader_app_task_task_inner_function::{closure#0}>::poll>:\n 1000: addi sp, sp, -48\n 1004: jal 0x3000 <brewthink::x4::reader_app::run_effect>\n 1008: ret\n2000 <brewthink::x4::reader_app::load_library>:\n 2000: addi sp, sp, -16\n 2008: ret\n3000 <brewthink::x4::reader_app::run_effect>:\n 3000: addi sp, sp, -64\n 3004: jal 0x4000 <brewthink::reader_orchestration::drive_effect>\n 3008: ret\n4000 <brewthink::reader_orchestration::drive_effect>:\n 4000: addi sp, sp, -32\n 4004: jal 0x5000 <brewthink::storage::book_resume::SavedResume::decode>\n 4008: ret\n5000 <brewthink::storage::book_resume::SavedResume::decode>:\n 5000: addi sp, sp, -80\n 5008: ret",
+      20000
+    ],
+    "kwargs": {},
+    "op": "stack.analyze",
+    "result": {
+      "accounted_bytes_with_reserve": 8416,
+      "available_bytes": 20000,
+      "compiler_local_dispatches": {},
+      "computed_transfers": {},
+      "discovered_transfer_candidates": {},
+      "edges": {
+        "TaskStorage<brewthink::x4::reader_app::__reader_app_task_task::__reader_app_task_task_inner_function::{closure#0}>::poll": [
+          "brewthink::x4::reader_app::run_effect"
+        ],
+        "brewthink::reader_orchestration::drive_effect": [
+          "brewthink::storage::book_resume::SavedResume::decode"
+        ],
+        "brewthink::storage::book_resume::SavedResume::decode": [],
+        "brewthink::x4::reader_app::load_library": [],
+        "brewthink::x4::reader_app::run_effect": [
+          "brewthink::reader_orchestration::drive_effect"
+        ]
+      },
+      "entry_frames": {
+        "effects": 64,
+        "library": 16,
+        "task": 48
+      },
+      "entry_required_bytes": 8304,
+      "frames": {
+        "TaskStorage<brewthink::x4::reader_app::__reader_app_task_task::__reader_app_task_task_inner_function::{closure#0}>::poll": 48,
+        "brewthink::reader_orchestration::drive_effect": 32,
+        "brewthink::storage::book_resume::SavedResume::decode": 80,
+        "brewthink::x4::reader_app::load_library": 16,
+        "brewthink::x4::reader_app::run_effect": 64
+      },
+      "frontier": [],
+      "limitations": [
+        "Only emitted symbols in SCOPES and the reader task poll are selected.",
+        "Direct edges stop at unmeasured callees; paths through them back into selected code are not followed.",
+        "Calls assume ABI-balanced SP. Frame propagation discards constants across calls; target inference retains ABI-saved values. Unresolved external calls/tails remain unmeasured.",
+        "Illegal-instruction and breakpoint traps end local paths; their exception handlers remain unmeasured.",
+        "Local dispatch relies on pinned, same-artifact compiler provenance and well-defined source execution, not corrupted coroutine state. Unknown assembly and non-immediate SP changes are rejected.",
+        "Recursion is rejected only inside the selected direct graph; recursion beyond its frontier is unmeasured.",
+        "Interrupt nesting, executor callers, other tasks, assembly/ROM and dynamic stack use are not bounded.",
+        "Absent/inlined symbols have no independent frame measurement; no absence is treated as proof of inlining.",
+        "Duplicate demangled names are address-qualified; ambiguous call targets stay on the unmeasured frontier.",
+        "Selected direct paths sum full frames, including tail transfers, and can overcount mutually exclusive work.",
+        "The 8192-byte reserve is an unchanged allowance, not a measurement of omitted paths."
+      ],
+      "reserve_bytes": 8192,
+      "scopes": [
+        "brewthink::x4::reader_app::",
+        "brewthink::reader_orchestration::",
+        "brewthink::storage::book_resume::",
+        "brewthink::device_epub::",
+        "brewthink::zip_stream::",
+        "brewthink::scratch::",
+        "brewthink::bounded_layout::"
+      ],
+      "selected_not_reached_by_direct_edges": [
+        "brewthink::x4::reader_app::load_library"
+      ],
+      "selected_path": [
+        "TaskStorage<brewthink::x4::reader_app::__reader_app_task_task::__reader_app_task_task_inner_function::{closure#0}>::poll",
+        "brewthink::x4::reader_app::run_effect",
+        "brewthink::reader_orchestration::drive_effect",
+        "brewthink::storage::book_resume::SavedResume::decode"
+      ],
+      "selected_path_bytes": 224,
+      "selected_symbol_count": 5,
+      "task_body_symbol": "absent; no independent measurement",
+      "unselected_symbol_count": 0,
+      "unsupported_frames": {},
+      "verdict": "PASS_LIMITED",
+      "whole_program_bound": false
+    },
+    "test": "test_reader_stack.ReaderStackTests.test_integrated_orchestration_and_identity_frames_are_selected"
+  },
+  {
+    "args": [
+      {
+        "a": [
+          "100: j 0x100 <a>",
+          "104: jal 0x100 <a>"
+        ]
+      },
+      [
+        "a"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.direct_graph",
+    "result": [
+      {
+        "a": [
+          "a"
+        ]
+      },
+      []
+    ],
+    "test": "test_reader_stack.ReaderStackTests.test_internal_branch_is_not_recursion_but_self_call_is"
+  },
+  {
+    "args": [
+      [
+        "100: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "result": 0,
+    "test": "test_reader_stack.ReaderStackTests.test_leaf_zero_is_measured_not_missing"
+  },
+  {
+    "args": [
+      [
+        "100: addi sp, sp, -16",
+        "104: j 0x100 <f>"
+      ]
+    ],
+    "error": "unbounded or inconsistent stack-depth cycle",
+    "error_pattern": "stack-depth cycle",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_loop_cannot_reenter_an_allocating_prologue"
+  },
+  {
+    "args": [
+      [
+        "100: li a2, 16",
+        "104: addi a2, a2, 16",
+        "108: bnez a0, 0x104",
+        "10c: sub sp, sp, a2",
+        "110: ret"
+      ]
+    ],
+    "error": "unknown stack adjustment at 10c",
+    "error_pattern": "unknown stack adjustment",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_loop_varying_adjustment_is_unknown"
+  },
+  {
+    "args": [
+      {
+        "TaskStorage<brewthink::x4::reader_app::__reader_app_task_task::__reader_app_task_task_inner_function::{closure#0}>::poll": [],
+        "brewthink::x4::reader_app::load_library": []
+      }
+    ],
+    "error": "required symbol missing; review coverage rather than assuming inlining: brewthink::x4::reader_app::run_effect",
+    "error_pattern": "required symbol missing",
+    "kwargs": {},
+    "op": "stack.reader_symbols",
+    "test": "test_reader_stack.ReaderStackTests.test_missing_effect_is_not_assumed_inlined"
+  },
+  {
+    "args": [
+      [
+        "100: beqz a0, 0x110",
+        "104: addi sp, sp, -16",
+        "108: j 0x114",
+        "110: addi sp, sp, -32",
+        "114: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "result": 32,
+    "test": "test_reader_stack.ReaderStackTests.test_mutually_exclusive_allocations_take_maximum_not_sum"
+  },
+  {
+    "args": [
+      "a",
+      {
+        "a": [
+          "b"
+        ],
+        "b": [
+          "c"
+        ],
+        "c": []
+      },
+      {
+        "a": 16,
+        "b": 32,
+        "c": 64
+      }
+    ],
+    "kwargs": {},
+    "op": "stack.longest_path",
+    "result": [
+      112,
+      [
+        "a",
+        "b",
+        "c"
+      ]
+    ],
+    "test": "test_reader_stack.ReaderStackTests.test_nested_frames_are_added_not_maximized_individually"
+  },
+  {
+    "args": [
+      "100 <TaskStorage<brewthink::x4::reader_app::__reader_app_task_task::__reader_app_task_task_inner_function::{closure#0}>::poll>:\n100: addi sp, sp, -16\n104: jal 0x300 <brewthink::x4::reader_app::run_effect>\n108: ret\n200 <brewthink::x4::reader_app::load_library>:\n200: ret\n300 <brewthink::x4::reader_app::run_effect>:\n300: addi sp, sp, -32\n304: ret",
+      8200
+    ],
+    "kwargs": {},
+    "op": "stack.analyze",
+    "result": {
+      "accounted_bytes_with_reserve": 8240,
+      "available_bytes": 8200,
+      "compiler_local_dispatches": {},
+      "computed_transfers": {},
+      "discovered_transfer_candidates": {},
+      "edges": {
+        "TaskStorage<brewthink::x4::reader_app::__reader_app_task_task::__reader_app_task_task_inner_function::{closure#0}>::poll": [
+          "brewthink::x4::reader_app::run_effect"
+        ],
+        "brewthink::x4::reader_app::load_library": [],
+        "brewthink::x4::reader_app::run_effect": []
+      },
+      "entry_frames": {
+        "effects": 32,
+        "library": 0,
+        "task": 16
+      },
+      "entry_required_bytes": 8240,
+      "frames": {
+        "TaskStorage<brewthink::x4::reader_app::__reader_app_task_task::__reader_app_task_task_inner_function::{closure#0}>::poll": 16,
+        "brewthink::x4::reader_app::load_library": 0,
+        "brewthink::x4::reader_app::run_effect": 32
+      },
+      "frontier": [],
+      "limitations": [
+        "Only emitted symbols in SCOPES and the reader task poll are selected.",
+        "Direct edges stop at unmeasured callees; paths through them back into selected code are not followed.",
+        "Calls assume ABI-balanced SP. Frame propagation discards constants across calls; target inference retains ABI-saved values. Unresolved external calls/tails remain unmeasured.",
+        "Illegal-instruction and breakpoint traps end local paths; their exception handlers remain unmeasured.",
+        "Local dispatch relies on pinned, same-artifact compiler provenance and well-defined source execution, not corrupted coroutine state. Unknown assembly and non-immediate SP changes are rejected.",
+        "Recursion is rejected only inside the selected direct graph; recursion beyond its frontier is unmeasured.",
+        "Interrupt nesting, executor callers, other tasks, assembly/ROM and dynamic stack use are not bounded.",
+        "Absent/inlined symbols have no independent frame measurement; no absence is treated as proof of inlining.",
+        "Duplicate demangled names are address-qualified; ambiguous call targets stay on the unmeasured frontier.",
+        "Selected direct paths sum full frames, including tail transfers, and can overcount mutually exclusive work.",
+        "The 8192-byte reserve is an unchanged allowance, not a measurement of omitted paths."
+      ],
+      "reserve_bytes": 8192,
+      "scopes": [
+        "brewthink::x4::reader_app::",
+        "brewthink::reader_orchestration::",
+        "brewthink::storage::book_resume::",
+        "brewthink::device_epub::",
+        "brewthink::zip_stream::",
+        "brewthink::scratch::",
+        "brewthink::bounded_layout::"
+      ],
+      "selected_not_reached_by_direct_edges": [
+        "brewthink::x4::reader_app::load_library"
+      ],
+      "selected_path": [
+        "TaskStorage<brewthink::x4::reader_app::__reader_app_task_task::__reader_app_task_task_inner_function::{closure#0}>::poll",
+        "brewthink::x4::reader_app::run_effect"
+      ],
+      "selected_path_bytes": 48,
+      "selected_symbol_count": 3,
+      "task_body_symbol": "absent; no independent measurement",
+      "unselected_symbol_count": 0,
+      "unsupported_frames": {},
+      "verdict": "BLOCKED_BUDGET",
+      "whole_program_bound": false
+    },
+    "test": "test_reader_stack.ReaderStackTests.test_over_budget_measurements_are_preserved"
+  },
+  {
+    "args": [
+      [
+        "100: addi sp, sp, -16",
+        "104: jalr a0",
+        "108: addi sp, sp, 16",
+        "10c: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "result": 16,
+    "test": "test_reader_stack.ReaderStackTests.test_positive_epilogue_after_control_flow"
+  },
+  {
+    "args": [
+      "a",
+      {
+        "a": [
+          "a"
+        ]
+      },
+      {
+        "a": 16
+      }
+    ],
+    "error": "recursive selected call graph: a",
+    "error_pattern": "recursive",
+    "kwargs": {},
+    "op": "stack.longest_path",
+    "test": "test_reader_stack.ReaderStackTests.test_recursive_and_disconnected_cycles_fail_closed"
+  },
+  {
+    "args": [
+      "a",
+      {
+        "a": [],
+        "b": [
+          "c"
+        ],
+        "c": [
+          "b"
+        ]
+      },
+      {
+        "a": 16,
+        "b": 16,
+        "c": 16
+      }
+    ],
+    "error": "recursive selected call graph: b",
+    "error_pattern": "recursive",
+    "kwargs": {},
+    "op": "stack.longest_path",
+    "test": "test_reader_stack.ReaderStackTests.test_recursive_and_disconnected_cycles_fail_closed"
+  },
+  {
+    "args": [
+      {
+        "effects": 0,
+        "library": 41872,
+        "task": 37536
+      },
+      62280
+    ],
+    "error": "reader stack budget exceeded: frames={'task': 37536, 'library': 41872, 'effects': 0}, required=87600, available=62280",
+    "error_pattern": "budget exceeded",
+    "kwargs": {},
+    "op": "stack.check",
+    "test": "test_reader_stack.ReaderStackTests.test_rejects_the_measured_startup_overflow"
+  },
+  {
+    "args": [
+      [
+        "4204e38a: addi sp, sp, -0x100",
+        "4204e38c: sw ra, 0xfc(sp)",
+        "4204e3a8: lui a2, 0x9",
+        "4204e3aa: addi a2, a2, 0x190",
+        "4204e3ae: sub sp, sp, a2",
+        "4204e3ee: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "result": 37520,
+    "test": "test_reader_stack.ReaderStackTests.test_two_part_riscv_prologue"
+  },
+  {
+    "args": [
+      [
+        "4204e3ae: sub sp, sp, a2"
+      ]
+    ],
+    "error": "unknown stack adjustment at 4204e3ae",
+    "error_pattern": "unknown stack adjustment",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_unknown_stack_adjustments_fail_closed"
+  },
+  {
+    "args": [
+      []
+    ],
+    "error": "empty disassembly body",
+    "error_pattern": "empty disassembly",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_unknown_stack_adjustments_fail_closed"
+  },
+  {
+    "args": [
+      [
+        "100: addi sp, sp, -16",
+        "104: jalr a0",
+        "108: sub sp, sp, a2"
+      ]
+    ],
+    "error": "unknown stack adjustment at 108",
+    "error_pattern": "unknown stack adjustment",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_unknown_stack_write_after_call_is_not_ignored"
+  },
+  {
+    "args": [
+      [
+        "100: jr a0",
+        "104: sub sp, sp, a2",
+        "108: ret"
+      ]
+    ],
+    "error": "unreachable stack write has no frame proof at 104",
+    "error_pattern": "unreachable stack write",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_unknown_transfer_does_not_hide_a_stack_write"
+  },
+  {
+    "args": [
+      [
+        "100: <unknown>"
+      ]
+    ],
+    "error": "unparsed instruction: 100: <unknown>",
+    "error_pattern": "unparsed instruction",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_unparsed_opcode_fails_instead_of_disappearing"
+  },
+  {
+    "args": [
+      [
+        "100: addi sp, sp, -16",
+        "104: jr a0"
+      ]
+    ],
+    "error": "unresolved in-frame transfer at 104; internal targets require proof",
+    "error_pattern": "unresolved in-frame transfer",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_unresolved_live_frame_transfer_is_not_assumed_to_exit"
+  },
+  {
+    "args": [
+      [
+        "100: addi sp, sp, -16",
+        "104: jalr zero, a0, 0x0"
+      ]
+    ],
+    "error": "unresolved in-frame transfer at 104; internal targets require proof",
+    "error_pattern": "unresolved in-frame transfer",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_unresolved_live_frame_transfer_is_not_assumed_to_exit"
+  },
+  {
+    "args": [
+      [
+        "100: c.addi16sp -16",
+        "104: ret"
+      ]
+    ],
+    "error": "unsupported instruction at 100: c.addi16sp",
+    "error_pattern": "unsupported instruction",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_unsupported_mnemonic_cannot_hide_implicit_stack_writes"
+  },
+  {
+    "args": [
+      [
+        "100: unknown a0",
+        "104: ret"
+      ]
+    ],
+    "error": "unsupported instruction at 100: unknown",
+    "error_pattern": "unsupported instruction",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_unsupported_mnemonic_cannot_hide_implicit_stack_writes"
+  },
+  {
+    "args": [
+      [
+        "100: mret",
+        "104: ret"
+      ]
+    ],
+    "error": "unsupported instruction at 100: mret",
+    "error_pattern": "unsupported instruction",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_unsupported_mnemonic_cannot_hide_implicit_stack_writes"
+  },
+  {
+    "args": [
+      "100 <TaskStorage<brewthink::x4::reader_app::__reader_app_task_task::__reader_app_task_task_inner_function::{closure#0}>::poll>:\n100: ret\n200 <brewthink::x4::reader_app::load_library>:\n200: sub sp, sp, a0\n204: ret\n300 <brewthink::x4::reader_app::run_effect>:\n300: ret",
+      20000
+    ],
+    "kwargs": {},
+    "op": "stack.analyze",
+    "result": {
+      "accounted_bytes_with_reserve": null,
+      "available_bytes": 20000,
+      "compiler_local_dispatches": {},
+      "computed_transfers": {},
+      "discovered_transfer_candidates": {},
+      "edges": {
+        "TaskStorage<brewthink::x4::reader_app::__reader_app_task_task::__reader_app_task_task_inner_function::{closure#0}>::poll": [],
+        "brewthink::x4::reader_app::load_library": [],
+        "brewthink::x4::reader_app::run_effect": []
+      },
+      "entry_frames": null,
+      "entry_required_bytes": null,
+      "frames": {
+        "TaskStorage<brewthink::x4::reader_app::__reader_app_task_task::__reader_app_task_task_inner_function::{closure#0}>::poll": 0,
+        "brewthink::x4::reader_app::run_effect": 0
+      },
+      "frontier": [],
+      "limitations": [
+        "Only emitted symbols in SCOPES and the reader task poll are selected.",
+        "Direct edges stop at unmeasured callees; paths through them back into selected code are not followed.",
+        "Calls assume ABI-balanced SP. Frame propagation discards constants across calls; target inference retains ABI-saved values. Unresolved external calls/tails remain unmeasured.",
+        "Illegal-instruction and breakpoint traps end local paths; their exception handlers remain unmeasured.",
+        "Local dispatch relies on pinned, same-artifact compiler provenance and well-defined source execution, not corrupted coroutine state. Unknown assembly and non-immediate SP changes are rejected.",
+        "Recursion is rejected only inside the selected direct graph; recursion beyond its frontier is unmeasured.",
+        "Interrupt nesting, executor callers, other tasks, assembly/ROM and dynamic stack use are not bounded.",
+        "Absent/inlined symbols have no independent frame measurement; no absence is treated as proof of inlining.",
+        "Duplicate demangled names are address-qualified; ambiguous call targets stay on the unmeasured frontier.",
+        "Selected direct paths sum full frames, including tail transfers, and can overcount mutually exclusive work.",
+        "The 8192-byte reserve is an unchanged allowance, not a measurement of omitted paths."
+      ],
+      "reserve_bytes": 8192,
+      "scopes": [
+        "brewthink::x4::reader_app::",
+        "brewthink::reader_orchestration::",
+        "brewthink::storage::book_resume::",
+        "brewthink::device_epub::",
+        "brewthink::zip_stream::",
+        "brewthink::scratch::",
+        "brewthink::bounded_layout::"
+      ],
+      "selected_not_reached_by_direct_edges": [
+        "brewthink::x4::reader_app::load_library",
+        "brewthink::x4::reader_app::run_effect"
+      ],
+      "selected_path": null,
+      "selected_path_bytes": null,
+      "selected_symbol_count": 3,
+      "task_body_symbol": "absent; no independent measurement",
+      "unselected_symbol_count": 0,
+      "unsupported_frames": {
+        "brewthink::x4::reader_app::load_library": "unknown stack adjustment at 200"
+      },
+      "verdict": "BLOCKED_UNPROVEN",
+      "whole_program_bound": false
+    },
+    "test": "test_reader_stack.ReaderStackTests.test_unsupported_selected_frame_is_reported_not_zero"
+  },
+  {
+    "args": [
+      [
+        "100: addi sp, sp, -16",
+        "104: jal zero, 0x100 <f>"
+      ]
+    ],
+    "error": "unbounded or inconsistent stack-depth cycle",
+    "error_pattern": "stack-depth cycle",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_zero_link_jal_and_pc_relative_jr_are_internal_edges"
+  },
+  {
+    "args": [
+      [
+        "100: addi sp, sp, -16",
+        "104: auipc t1, 0x0",
+        "108: jr -0x4(t1) <f>"
+      ]
+    ],
+    "error": "unbounded or inconsistent stack-depth cycle",
+    "error_pattern": "stack-depth cycle",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_zero_link_jal_and_pc_relative_jr_are_internal_edges"
+  },
+  {
+    "args": [
+      [
+        "100: li x0, 16",
+        "104: sub sp, sp, x0",
+        "108: ret"
+      ]
+    ],
+    "error": "unknown stack adjustment at 104",
+    "error_pattern": "unknown stack adjustment",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.ReaderStackTests.test_zero_register_alias_cannot_create_a_false_constant"
+  },
+  {
+    "args": [
+      [
+        "1000: li a0, 7",
+        "1004: li a1, 3",
+        "1008: bltu a1, a0, 0x100c",
+        "100c: jr a0"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.instructions",
+    "result": [
+      [
+        4096,
+        "li",
+        [
+          "a0",
+          "7"
+        ],
+        null
+      ],
+      [
+        4100,
+        "li",
+        [
+          "a1",
+          "3"
+        ],
+        null
+      ],
+      [
+        4104,
+        "bltu",
+        [
+          "a1",
+          "a0",
+          "0x100c"
+        ],
+        null
+      ],
+      [
+        4108,
+        "jr",
+        [
+          "a0"
+        ],
+        null
+      ]
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_branch_to_following_instruction_does_not_drop_taken_values"
+  },
+  {
+    "args": [
+      [
+        [
+          4096,
+          "li",
+          [
+            "a0",
+            "7"
+          ],
+          null
+        ],
+        [
+          4100,
+          "li",
+          [
+            "a1",
+            "3"
+          ],
+          null
+        ],
+        [
+          4104,
+          "bltu",
+          [
+            "a1",
+            "a0",
+            "0x100c"
+          ],
+          null
+        ],
+        [
+          4108,
+          "jr",
+          [
+            "a0"
+          ],
+          null
+        ]
+      ],
+      []
+    ],
+    "kwargs": {},
+    "op": "stack.resolve_transfers",
+    "result": [
+      {
+        "4108": [
+          6
+        ]
+      },
+      {
+        "4108": [
+          6
+        ]
+      }
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_branch_to_following_instruction_does_not_drop_taken_values"
+  },
+  {
+    "args": [
+      [
+        "1000: addi sp, sp, -16",
+        "1004: lbu a0, 0x0(a1)",
+        "1008: slli a0, a0, 2",
+        "100c: li a2, 0x2000",
+        "1010: add a0, a0, a2",
+        "1014: lw a0, 0x0(a0)",
+        "1018: jr a0",
+        "101c: addi sp, sp, 16",
+        "1020: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.instructions",
+    "result": [
+      [
+        4096,
+        "addi",
+        [
+          "sp",
+          "sp",
+          "-16"
+        ],
+        null
+      ],
+      [
+        4100,
+        "lbu",
+        [
+          "a0",
+          "0x0(a1)"
+        ],
+        null
+      ],
+      [
+        4104,
+        "slli",
+        [
+          "a0",
+          "a0",
+          "2"
+        ],
+        null
+      ],
+      [
+        4108,
+        "li",
+        [
+          "a2",
+          "0x2000"
+        ],
+        null
+      ],
+      [
+        4112,
+        "add",
+        [
+          "a0",
+          "a0",
+          "a2"
+        ],
+        null
+      ],
+      [
+        4116,
+        "lw",
+        [
+          "a0",
+          "0x0(a0)"
+        ],
+        null
+      ],
+      [
+        4120,
+        "jr",
+        [
+          "a0"
+        ],
+        null
+      ],
+      [
+        4124,
+        "addi",
+        [
+          "sp",
+          "sp",
+          "16"
+        ],
+        null
+      ],
+      [
+        4128,
+        "ret",
+        [
+          ""
+        ],
+        null
+      ]
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_byte_index_uses_every_possible_elf_word"
+  },
+  {
+    "args": [
+      [
+        [
+          4096,
+          "addi",
+          [
+            "sp",
+            "sp",
+            "-16"
+          ],
+          null
+        ],
+        [
+          4100,
+          "lbu",
+          [
+            "a0",
+            "0x0(a1)"
+          ],
+          null
+        ],
+        [
+          4104,
+          "slli",
+          [
+            "a0",
+            "a0",
+            "2"
+          ],
+          null
+        ],
+        [
+          4108,
+          "li",
+          [
+            "a2",
+            "0x2000"
+          ],
+          null
+        ],
+        [
+          4112,
+          "add",
+          [
+            "a0",
+            "a0",
+            "a2"
+          ],
+          null
+        ],
+        [
+          4116,
+          "lw",
+          [
+            "a0",
+            "0x0(a0)"
+          ],
+          null
+        ],
+        [
+          4120,
+          "jr",
+          [
+            "a0"
+          ],
+          null
+        ],
+        [
+          4124,
+          "addi",
+          [
+            "sp",
+            "sp",
+            "16"
+          ],
+          null
+        ],
+        [
+          4128,
+          "ret",
+          [
+            ""
+          ],
+          null
+        ]
+      ],
+      [
+        [
+          8192,
+          {
+            "bytes": "1c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c10000000300000"
+          }
+        ]
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.resolve_transfers",
+    "result": [
+      {
+        "4120": [
+          4124,
+          12288
+        ]
+      },
+      {
+        "4120": [
+          4124,
+          12288
+        ]
+      }
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_byte_index_uses_every_possible_elf_word"
+  },
+  {
+    "args": [
+      [
+        "1000: addi sp, sp, -16",
+        "1004: lbu a0, 0x0(a1)",
+        "1008: slli a0, a0, 2",
+        "100c: li a2, 0x2000",
+        "1010: add a0, a0, a2",
+        "1014: lw a0, 0x0(a0)",
+        "1018: jr a0",
+        "101c: addi sp, sp, 16",
+        "1020: ret"
+      ],
+      {
+        "4120": [
+          4124,
+          12288
+        ]
+      }
+    ],
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "result": 16,
+    "test": "test_reader_stack.TableTransferTests.test_byte_index_uses_every_possible_elf_word"
+  },
+  {
+    "args": [
+      [
+        "1000: addi sp, sp, -16",
+        "1004: lbu a0, 0x0(a1)",
+        "1008: slli a0, a0, 2",
+        "100c: li a2, 0x2000",
+        "1010: add a0, a0, a2",
+        "1014: lw a0, 0x0(a0)",
+        "1016: call 0x4000 <external>",
+        "1018: jr a0",
+        "101c: addi sp, sp, 16",
+        "1020: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.instructions",
+    "result": [
+      [
+        4096,
+        "addi",
+        [
+          "sp",
+          "sp",
+          "-16"
+        ],
+        null
+      ],
+      [
+        4100,
+        "lbu",
+        [
+          "a0",
+          "0x0(a1)"
+        ],
+        null
+      ],
+      [
+        4104,
+        "slli",
+        [
+          "a0",
+          "a0",
+          "2"
+        ],
+        null
+      ],
+      [
+        4108,
+        "li",
+        [
+          "a2",
+          "0x2000"
+        ],
+        null
+      ],
+      [
+        4112,
+        "add",
+        [
+          "a0",
+          "a0",
+          "a2"
+        ],
+        null
+      ],
+      [
+        4116,
+        "lw",
+        [
+          "a0",
+          "0x0(a0)"
+        ],
+        null
+      ],
+      [
+        4118,
+        "call",
+        [
+          "0x4000"
+        ],
+        "external"
+      ],
+      [
+        4120,
+        "jr",
+        [
+          "a0"
+        ],
+        null
+      ],
+      [
+        4124,
+        "addi",
+        [
+          "sp",
+          "sp",
+          "16"
+        ],
+        null
+      ],
+      [
+        4128,
+        "ret",
+        [
+          ""
+        ],
+        null
+      ]
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_call_clobbers_a_computed_target"
+  },
+  {
+    "args": [
+      [
+        [
+          4096,
+          "addi",
+          [
+            "sp",
+            "sp",
+            "-16"
+          ],
+          null
+        ],
+        [
+          4100,
+          "lbu",
+          [
+            "a0",
+            "0x0(a1)"
+          ],
+          null
+        ],
+        [
+          4104,
+          "slli",
+          [
+            "a0",
+            "a0",
+            "2"
+          ],
+          null
+        ],
+        [
+          4108,
+          "li",
+          [
+            "a2",
+            "0x2000"
+          ],
+          null
+        ],
+        [
+          4112,
+          "add",
+          [
+            "a0",
+            "a0",
+            "a2"
+          ],
+          null
+        ],
+        [
+          4116,
+          "lw",
+          [
+            "a0",
+            "0x0(a0)"
+          ],
+          null
+        ],
+        [
+          4118,
+          "call",
+          [
+            "0x4000"
+          ],
+          "external"
+        ],
+        [
+          4120,
+          "jr",
+          [
+            "a0"
+          ],
+          null
+        ],
+        [
+          4124,
+          "addi",
+          [
+            "sp",
+            "sp",
+            "16"
+          ],
+          null
+        ],
+        [
+          4128,
+          "ret",
+          [
+            ""
+          ],
+          null
+        ]
+      ],
+      [
+        [
+          8192,
+          {
+            "bytes": "1c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c100000"
+          }
+        ]
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.resolve_transfers",
+    "result": [
+      {},
+      {}
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_call_clobbers_a_computed_target"
+  },
+  {
+    "args": [
+      [
+        "1000: addi sp, sp, -16",
+        "1004: lbu a0, 0x0(a1)",
+        "1008: slli a0, a0, 2",
+        "100c: li a2, 0x2000",
+        "1010: add a0, a0, a2",
+        "1014: lw a0, 0x0(a0)",
+        "1018: jr a0",
+        "101c: addi sp, sp, 16",
+        "1020: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.instructions",
+    "result": [
+      [
+        4096,
+        "addi",
+        [
+          "sp",
+          "sp",
+          "-16"
+        ],
+        null
+      ],
+      [
+        4100,
+        "lbu",
+        [
+          "a0",
+          "0x0(a1)"
+        ],
+        null
+      ],
+      [
+        4104,
+        "slli",
+        [
+          "a0",
+          "a0",
+          "2"
+        ],
+        null
+      ],
+      [
+        4108,
+        "li",
+        [
+          "a2",
+          "0x2000"
+        ],
+        null
+      ],
+      [
+        4112,
+        "add",
+        [
+          "a0",
+          "a0",
+          "a2"
+        ],
+        null
+      ],
+      [
+        4116,
+        "lw",
+        [
+          "a0",
+          "0x0(a0)"
+        ],
+        null
+      ],
+      [
+        4120,
+        "jr",
+        [
+          "a0"
+        ],
+        null
+      ],
+      [
+        4124,
+        "addi",
+        [
+          "sp",
+          "sp",
+          "16"
+        ],
+        null
+      ],
+      [
+        4128,
+        "ret",
+        [
+          ""
+        ],
+        null
+      ]
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_computed_allocating_cycle_is_rejected"
+  },
+  {
+    "args": [
+      [
+        [
+          4096,
+          "addi",
+          [
+            "sp",
+            "sp",
+            "-16"
+          ],
+          null
+        ],
+        [
+          4100,
+          "lbu",
+          [
+            "a0",
+            "0x0(a1)"
+          ],
+          null
+        ],
+        [
+          4104,
+          "slli",
+          [
+            "a0",
+            "a0",
+            "2"
+          ],
+          null
+        ],
+        [
+          4108,
+          "li",
+          [
+            "a2",
+            "0x2000"
+          ],
+          null
+        ],
+        [
+          4112,
+          "add",
+          [
+            "a0",
+            "a0",
+            "a2"
+          ],
+          null
+        ],
+        [
+          4116,
+          "lw",
+          [
+            "a0",
+            "0x0(a0)"
+          ],
+          null
+        ],
+        [
+          4120,
+          "jr",
+          [
+            "a0"
+          ],
+          null
+        ],
+        [
+          4124,
+          "addi",
+          [
+            "sp",
+            "sp",
+            "16"
+          ],
+          null
+        ],
+        [
+          4128,
+          "ret",
+          [
+            ""
+          ],
+          null
+        ]
+      ],
+      [
+        [
+          8192,
+          {
+            "bytes": "1c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c10000000100000"
+          }
+        ]
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.resolve_transfers",
+    "result": [
+      {
+        "4120": [
+          4096,
+          4124
+        ]
+      },
+      {
+        "4120": [
+          4096,
+          4124
+        ]
+      }
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_computed_allocating_cycle_is_rejected"
+  },
+  {
+    "args": [
+      [
+        "1000: addi sp, sp, -16",
+        "1004: lbu a0, 0x0(a1)",
+        "1008: slli a0, a0, 2",
+        "100c: li a2, 0x2000",
+        "1010: add a0, a0, a2",
+        "1014: lw a0, 0x0(a0)",
+        "1018: jr a0",
+        "101c: addi sp, sp, 16",
+        "1020: ret"
+      ],
+      {
+        "4120": [
+          4096,
+          4124
+        ]
+      }
+    ],
+    "error": "unbounded or inconsistent stack-depth cycle",
+    "error_pattern": "cycle",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.TableTransferTests.test_computed_allocating_cycle_is_rejected"
+  },
+  {
+    "args": [
+      "1000 <TaskStorage<brewthink::x4::reader_app::__reader_app_task_task::__reader_app_task_task_inner_function::{closure#0}>::poll>:\n1000: addi sp, sp, -16\n1004: lbu a0, 0x0(a1)\n1008: slli a0, a0, 2\n100c: li a2, 0x2000\n1010: add a0, a0, a2\n1014: lw a0, 0x0(a0)\n1018: jr a0\n3000 <brewthink::x4::reader_app::load_library>:\n3000: ret\n4000 <brewthink::x4::reader_app::run_effect>:\n4000: addi sp, sp, -32\n4004: ret\n5000 <external_data>:\n5000: 00 00 00 00 ....",
+      20000,
+      [
+        [
+          8192,
+          {
+            "bytes": "00400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000004000000040000000400000"
+          }
+        ]
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.analyze",
+    "result": {
+      "accounted_bytes_with_reserve": 8240,
+      "available_bytes": 20000,
+      "compiler_local_dispatches": {},
+      "computed_transfers": {
+        "TaskStorage<brewthink::x4::reader_app::__reader_app_task_task::__reader_app_task_task_inner_function::{closure#0}>::poll": {
+          "0x1018": [
+            "0x4000"
+          ]
+        }
+      },
+      "discovered_transfer_candidates": {
+        "TaskStorage<brewthink::x4::reader_app::__reader_app_task_task::__reader_app_task_task_inner_function::{closure#0}>::poll": {
+          "0x1018": [
+            "0x4000"
+          ]
+        }
+      },
+      "edges": {
+        "TaskStorage<brewthink::x4::reader_app::__reader_app_task_task::__reader_app_task_task_inner_function::{closure#0}>::poll": [
+          "brewthink::x4::reader_app::run_effect"
+        ],
+        "brewthink::x4::reader_app::load_library": [],
+        "brewthink::x4::reader_app::run_effect": []
+      },
+      "entry_frames": {
+        "effects": 32,
+        "library": 0,
+        "task": 16
+      },
+      "entry_required_bytes": 8240,
+      "frames": {
+        "TaskStorage<brewthink::x4::reader_app::__reader_app_task_task::__reader_app_task_task_inner_function::{closure#0}>::poll": 16,
+        "brewthink::x4::reader_app::load_library": 0,
+        "brewthink::x4::reader_app::run_effect": 32
+      },
+      "frontier": [],
+      "limitations": [
+        "Only emitted symbols in SCOPES and the reader task poll are selected.",
+        "Direct edges stop at unmeasured callees; paths through them back into selected code are not followed.",
+        "Calls assume ABI-balanced SP. Frame propagation discards constants across calls; target inference retains ABI-saved values. Unresolved external calls/tails remain unmeasured.",
+        "Illegal-instruction and breakpoint traps end local paths; their exception handlers remain unmeasured.",
+        "Local dispatch relies on pinned, same-artifact compiler provenance and well-defined source execution, not corrupted coroutine state. Unknown assembly and non-immediate SP changes are rejected.",
+        "Recursion is rejected only inside the selected direct graph; recursion beyond its frontier is unmeasured.",
+        "Interrupt nesting, executor callers, other tasks, assembly/ROM and dynamic stack use are not bounded.",
+        "Absent/inlined symbols have no independent frame measurement; no absence is treated as proof of inlining.",
+        "Duplicate demangled names are address-qualified; ambiguous call targets stay on the unmeasured frontier.",
+        "Selected direct paths sum full frames, including tail transfers, and can overcount mutually exclusive work.",
+        "The 8192-byte reserve is an unchanged allowance, not a measurement of omitted paths."
+      ],
+      "reserve_bytes": 8192,
+      "scopes": [
+        "brewthink::x4::reader_app::",
+        "brewthink::reader_orchestration::",
+        "brewthink::storage::book_resume::",
+        "brewthink::device_epub::",
+        "brewthink::zip_stream::",
+        "brewthink::scratch::",
+        "brewthink::bounded_layout::"
+      ],
+      "selected_not_reached_by_direct_edges": [
+        "brewthink::x4::reader_app::load_library"
+      ],
+      "selected_path": [
+        "TaskStorage<brewthink::x4::reader_app::__reader_app_task_task::__reader_app_task_task_inner_function::{closure#0}>::poll",
+        "brewthink::x4::reader_app::run_effect"
+      ],
+      "selected_path_bytes": 48,
+      "selected_symbol_count": 3,
+      "task_body_symbol": "absent; no independent measurement",
+      "unselected_symbol_count": 1,
+      "unsupported_frames": {},
+      "verdict": "PASS_LIMITED",
+      "whole_program_bound": false
+    },
+    "test": "test_reader_stack.TableTransferTests.test_computed_selected_callee_keeps_full_frame_accounting"
+  },
+  {
+    "args": [
+      [
+        "1000: addi sp, sp, -16",
+        "1004: lbu a0, 0x0(a1)",
+        "1008: slli a0, a0, 2",
+        "100c: li a2, 0x2000",
+        "1010: add a0, a0, a2",
+        "1014: lw a0, 0x0(a0)",
+        "1018: jr a0",
+        "101c: addi sp, sp, 16",
+        "1020: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.instructions",
+    "result": [
+      [
+        4096,
+        "addi",
+        [
+          "sp",
+          "sp",
+          "-16"
+        ],
+        null
+      ],
+      [
+        4100,
+        "lbu",
+        [
+          "a0",
+          "0x0(a1)"
+        ],
+        null
+      ],
+      [
+        4104,
+        "slli",
+        [
+          "a0",
+          "a0",
+          "2"
+        ],
+        null
+      ],
+      [
+        4108,
+        "li",
+        [
+          "a2",
+          "0x2000"
+        ],
+        null
+      ],
+      [
+        4112,
+        "add",
+        [
+          "a0",
+          "a0",
+          "a2"
+        ],
+        null
+      ],
+      [
+        4116,
+        "lw",
+        [
+          "a0",
+          "0x0(a0)"
+        ],
+        null
+      ],
+      [
+        4120,
+        "jr",
+        [
+          "a0"
+        ],
+        null
+      ],
+      [
+        4124,
+        "addi",
+        [
+          "sp",
+          "sp",
+          "16"
+        ],
+        null
+      ],
+      [
+        4128,
+        "ret",
+        [
+          ""
+        ],
+        null
+      ]
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_corrupt_internal_table_target_is_rejected"
+  },
+  {
+    "args": [
+      [
+        [
+          4096,
+          "addi",
+          [
+            "sp",
+            "sp",
+            "-16"
+          ],
+          null
+        ],
+        [
+          4100,
+          "lbu",
+          [
+            "a0",
+            "0x0(a1)"
+          ],
+          null
+        ],
+        [
+          4104,
+          "slli",
+          [
+            "a0",
+            "a0",
+            "2"
+          ],
+          null
+        ],
+        [
+          4108,
+          "li",
+          [
+            "a2",
+            "0x2000"
+          ],
+          null
+        ],
+        [
+          4112,
+          "add",
+          [
+            "a0",
+            "a0",
+            "a2"
+          ],
+          null
+        ],
+        [
+          4116,
+          "lw",
+          [
+            "a0",
+            "0x0(a0)"
+          ],
+          null
+        ],
+        [
+          4120,
+          "jr",
+          [
+            "a0"
+          ],
+          null
+        ],
+        [
+          4124,
+          "addi",
+          [
+            "sp",
+            "sp",
+            "16"
+          ],
+          null
+        ],
+        [
+          4128,
+          "ret",
+          [
+            ""
+          ],
+          null
+        ]
+      ],
+      [
+        [
+          8192,
+          {
+            "bytes": "1e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e1000001e100000"
+          }
+        ]
+      ]
+    ],
+    "error": "branch into an unparsed instruction at 1018",
+    "error_pattern": "unparsed instruction",
+    "kwargs": {},
+    "op": "stack.resolve_transfers",
+    "test": "test_reader_stack.TableTransferTests.test_corrupt_internal_table_target_is_rejected"
+  },
+  {
+    "args": [
+      [
+        "1000: beqz a0, 0x1010",
+        "1002: li a5, 0x2000",
+        "1004: j 0x1030",
+        "1010: li t0, 0x1020",
+        "1012: jr t0",
+        "1020: mv a5, a1",
+        "1022: j 0x1030",
+        "1030: jr a5"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.instructions",
+    "result": [
+      [
+        4096,
+        "beqz",
+        [
+          "a0",
+          "0x1010"
+        ],
+        null
+      ],
+      [
+        4098,
+        "li",
+        [
+          "a5",
+          "0x2000"
+        ],
+        null
+      ],
+      [
+        4100,
+        "j",
+        [
+          "0x1030"
+        ],
+        null
+      ],
+      [
+        4112,
+        "li",
+        [
+          "t0",
+          "0x1020"
+        ],
+        null
+      ],
+      [
+        4114,
+        "jr",
+        [
+          "t0"
+        ],
+        null
+      ],
+      [
+        4128,
+        "mv",
+        [
+          "a5",
+          "a1"
+        ],
+        null
+      ],
+      [
+        4130,
+        "j",
+        [
+          "0x1030"
+        ],
+        null
+      ],
+      [
+        4144,
+        "jr",
+        [
+          "a5"
+        ],
+        null
+      ]
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_discovered_selected_edge_survives_later_unknown_predecessor"
+  },
+  {
+    "args": [
+      [
+        [
+          4096,
+          "beqz",
+          [
+            "a0",
+            "0x1010"
+          ],
+          null
+        ],
+        [
+          4098,
+          "li",
+          [
+            "a5",
+            "0x2000"
+          ],
+          null
+        ],
+        [
+          4100,
+          "j",
+          [
+            "0x1030"
+          ],
+          null
+        ],
+        [
+          4112,
+          "li",
+          [
+            "t0",
+            "0x1020"
+          ],
+          null
+        ],
+        [
+          4114,
+          "jr",
+          [
+            "t0"
+          ],
+          null
+        ],
+        [
+          4128,
+          "mv",
+          [
+            "a5",
+            "a1"
+          ],
+          null
+        ],
+        [
+          4130,
+          "j",
+          [
+            "0x1030"
+          ],
+          null
+        ],
+        [
+          4144,
+          "jr",
+          [
+            "a5"
+          ],
+          null
+        ]
+      ],
+      []
+    ],
+    "kwargs": {},
+    "op": "stack.resolve_transfers",
+    "result": [
+      {
+        "4114": [
+          4128
+        ]
+      },
+      {
+        "4114": [
+          4128
+        ],
+        "4144": [
+          8192
+        ]
+      }
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_discovered_selected_edge_survives_later_unknown_predecessor"
+  },
+  {
+    "args": [
+      {
+        "A": [
+          "1000: beqz a0, 0x1010",
+          "1002: li a5, 0x2000",
+          "1004: j 0x1030",
+          "1010: li t0, 0x1020",
+          "1012: jr t0",
+          "1020: mv a5, a1",
+          "1022: j 0x1030",
+          "1030: jr a5"
+        ],
+        "B": [
+          "2000: ret"
+        ]
+      },
+      [
+        "A",
+        "B"
+      ],
+      {
+        "A": {
+          "4114": [
+            4128
+          ]
+        }
+      },
+      {
+        "A": {
+          "4114": [
+            4128
+          ],
+          "4144": [
+            8192
+          ]
+        }
+      }
+    ],
+    "kwargs": {},
+    "op": "stack.direct_graph",
+    "result": [
+      {
+        "A": [
+          "B"
+        ],
+        "B": []
+      },
+      [
+        {
+          "address": "0x1030",
+          "caller": "A",
+          "instruction": "jr a5",
+          "kind": "unresolved-transfer"
+        }
+      ]
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_discovered_selected_edge_survives_later_unknown_predecessor"
+  },
+  {
+    "args": [
+      "A",
+      {
+        "A": [
+          "B"
+        ],
+        "B": []
+      },
+      {
+        "A": 16,
+        "B": 400
+      }
+    ],
+    "kwargs": {},
+    "op": "stack.longest_path",
+    "result": [
+      416,
+      [
+        "A",
+        "B"
+      ]
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_discovered_selected_edge_survives_later_unknown_predecessor"
+  },
+  {
+    "args": [
+      [
+        "1000: addi sp, sp, -16",
+        "1004: lbu a0, 0x0(a1)",
+        "1008: slli a0, a0, 2",
+        "100c: li a2, 0x2000",
+        "1010: add a0, a0, a2",
+        "1014: lw a0, 0x0(a0)",
+        "1018: jr a0",
+        "101c: sub sp, sp, a3",
+        "1020: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.instructions",
+    "result": [
+      [
+        4096,
+        "addi",
+        [
+          "sp",
+          "sp",
+          "-16"
+        ],
+        null
+      ],
+      [
+        4100,
+        "lbu",
+        [
+          "a0",
+          "0x0(a1)"
+        ],
+        null
+      ],
+      [
+        4104,
+        "slli",
+        [
+          "a0",
+          "a0",
+          "2"
+        ],
+        null
+      ],
+      [
+        4108,
+        "li",
+        [
+          "a2",
+          "0x2000"
+        ],
+        null
+      ],
+      [
+        4112,
+        "add",
+        [
+          "a0",
+          "a0",
+          "a2"
+        ],
+        null
+      ],
+      [
+        4116,
+        "lw",
+        [
+          "a0",
+          "0x0(a0)"
+        ],
+        null
+      ],
+      [
+        4120,
+        "jr",
+        [
+          "a0"
+        ],
+        null
+      ],
+      [
+        4124,
+        "sub",
+        [
+          "sp",
+          "sp",
+          "a3"
+        ],
+        null
+      ],
+      [
+        4128,
+        "ret",
+        [
+          ""
+        ],
+        null
+      ]
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_dynamic_sp_behind_a_table_is_not_a_zero_frame"
+  },
+  {
+    "args": [
+      [
+        [
+          4096,
+          "addi",
+          [
+            "sp",
+            "sp",
+            "-16"
+          ],
+          null
+        ],
+        [
+          4100,
+          "lbu",
+          [
+            "a0",
+            "0x0(a1)"
+          ],
+          null
+        ],
+        [
+          4104,
+          "slli",
+          [
+            "a0",
+            "a0",
+            "2"
+          ],
+          null
+        ],
+        [
+          4108,
+          "li",
+          [
+            "a2",
+            "0x2000"
+          ],
+          null
+        ],
+        [
+          4112,
+          "add",
+          [
+            "a0",
+            "a0",
+            "a2"
+          ],
+          null
+        ],
+        [
+          4116,
+          "lw",
+          [
+            "a0",
+            "0x0(a0)"
+          ],
+          null
+        ],
+        [
+          4120,
+          "jr",
+          [
+            "a0"
+          ],
+          null
+        ],
+        [
+          4124,
+          "sub",
+          [
+            "sp",
+            "sp",
+            "a3"
+          ],
+          null
+        ],
+        [
+          4128,
+          "ret",
+          [
+            ""
+          ],
+          null
+        ]
+      ],
+      [
+        [
+          8192,
+          {
+            "bytes": "1c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c1000001c100000"
+          }
+        ]
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.resolve_transfers",
+    "result": [
+      {
+        "4120": [
+          4124
+        ]
+      },
+      {
+        "4120": [
+          4124
+        ]
+      }
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_dynamic_sp_behind_a_table_is_not_a_zero_frame"
+  },
+  {
+    "args": [
+      [
+        "1000: addi sp, sp, -16",
+        "1004: lbu a0, 0x0(a1)",
+        "1008: slli a0, a0, 2",
+        "100c: li a2, 0x2000",
+        "1010: add a0, a0, a2",
+        "1014: lw a0, 0x0(a0)",
+        "1018: jr a0",
+        "101c: sub sp, sp, a3",
+        "1020: ret"
+      ],
+      {
+        "4120": [
+          4124
+        ]
+      }
+    ],
+    "error": "unknown stack adjustment at 101c",
+    "error_pattern": "unknown stack adjustment",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.TableTransferTests.test_dynamic_sp_behind_a_table_is_not_a_zero_frame"
+  },
+  {
+    "args": [
+      [
+        "1000: beqz a1, 0x100c",
+        "1004: li a0, 0x1014",
+        "1008: j 0x1010",
+        "100c: li a0, 0x1018",
+        "1010: jr a0",
+        "1014: ret",
+        "1018: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.instructions",
+    "result": [
+      [
+        4096,
+        "beqz",
+        [
+          "a1",
+          "0x100c"
+        ],
+        null
+      ],
+      [
+        4100,
+        "li",
+        [
+          "a0",
+          "0x1014"
+        ],
+        null
+      ],
+      [
+        4104,
+        "j",
+        [
+          "0x1010"
+        ],
+        null
+      ],
+      [
+        4108,
+        "li",
+        [
+          "a0",
+          "0x1018"
+        ],
+        null
+      ],
+      [
+        4112,
+        "jr",
+        [
+          "a0"
+        ],
+        null
+      ],
+      [
+        4116,
+        "ret",
+        [
+          ""
+        ],
+        null
+      ],
+      [
+        4120,
+        "ret",
+        [
+          ""
+        ],
+        null
+      ]
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_join_unions_computed_targets"
+  },
+  {
+    "args": [
+      [
+        [
+          4096,
+          "beqz",
+          [
+            "a1",
+            "0x100c"
+          ],
+          null
+        ],
+        [
+          4100,
+          "li",
+          [
+            "a0",
+            "0x1014"
+          ],
+          null
+        ],
+        [
+          4104,
+          "j",
+          [
+            "0x1010"
+          ],
+          null
+        ],
+        [
+          4108,
+          "li",
+          [
+            "a0",
+            "0x1018"
+          ],
+          null
+        ],
+        [
+          4112,
+          "jr",
+          [
+            "a0"
+          ],
+          null
+        ],
+        [
+          4116,
+          "ret",
+          [
+            ""
+          ],
+          null
+        ],
+        [
+          4120,
+          "ret",
+          [
+            ""
+          ],
+          null
+        ]
+      ],
+      []
+    ],
+    "kwargs": {},
+    "op": "stack.resolve_transfers",
+    "result": [
+      {
+        "4112": [
+          4116,
+          4120
+        ]
+      },
+      {
+        "4112": [
+          4116,
+          4120
+        ]
+      }
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_join_unions_computed_targets"
+  },
+  {
+    "args": [
+      [
+        "1000: addi sp, sp, -16",
+        "1004: lbu a0, 0x0(a1)",
+        "1008: slli a0, a0, 2",
+        "100c: li a2, 0x2000",
+        "1010: add a0, a0, a2",
+        "1014: lw a0, 0x0(a0)",
+        "1018: jr a0",
+        "101c: addi sp, sp, 16",
+        "1020: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.instructions",
+    "result": [
+      [
+        4096,
+        "addi",
+        [
+          "sp",
+          "sp",
+          "-16"
+        ],
+        null
+      ],
+      [
+        4100,
+        "lbu",
+        [
+          "a0",
+          "0x0(a1)"
+        ],
+        null
+      ],
+      [
+        4104,
+        "slli",
+        [
+          "a0",
+          "a0",
+          "2"
+        ],
+        null
+      ],
+      [
+        4108,
+        "li",
+        [
+          "a2",
+          "0x2000"
+        ],
+        null
+      ],
+      [
+        4112,
+        "add",
+        [
+          "a0",
+          "a0",
+          "a2"
+        ],
+        null
+      ],
+      [
+        4116,
+        "lw",
+        [
+          "a0",
+          "0x0(a0)"
+        ],
+        null
+      ],
+      [
+        4120,
+        "jr",
+        [
+          "a0"
+        ],
+        null
+      ],
+      [
+        4124,
+        "addi",
+        [
+          "sp",
+          "sp",
+          "16"
+        ],
+        null
+      ],
+      [
+        4128,
+        "ret",
+        [
+          ""
+        ],
+        null
+      ]
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_missing_or_partial_table_cannot_prove_a_live_frame"
+  },
+  {
+    "args": [
+      [
+        [
+          4096,
+          "addi",
+          [
+            "sp",
+            "sp",
+            "-16"
+          ],
+          null
+        ],
+        [
+          4100,
+          "lbu",
+          [
+            "a0",
+            "0x0(a1)"
+          ],
+          null
+        ],
+        [
+          4104,
+          "slli",
+          [
+            "a0",
+            "a0",
+            "2"
+          ],
+          null
+        ],
+        [
+          4108,
+          "li",
+          [
+            "a2",
+            "0x2000"
+          ],
+          null
+        ],
+        [
+          4112,
+          "add",
+          [
+            "a0",
+            "a0",
+            "a2"
+          ],
+          null
+        ],
+        [
+          4116,
+          "lw",
+          [
+            "a0",
+            "0x0(a0)"
+          ],
+          null
+        ],
+        [
+          4120,
+          "jr",
+          [
+            "a0"
+          ],
+          null
+        ],
+        [
+          4124,
+          "addi",
+          [
+            "sp",
+            "sp",
+            "16"
+          ],
+          null
+        ],
+        [
+          4128,
+          "ret",
+          [
+            ""
+          ],
+          null
+        ]
+      ],
+      []
+    ],
+    "kwargs": {},
+    "op": "stack.resolve_transfers",
+    "result": [
+      {},
+      {}
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_missing_or_partial_table_cannot_prove_a_live_frame"
+  },
+  {
+    "args": [
+      [
+        "1000: addi sp, sp, -16",
+        "1004: lbu a0, 0x0(a1)",
+        "1008: slli a0, a0, 2",
+        "100c: li a2, 0x2000",
+        "1010: add a0, a0, a2",
+        "1014: lw a0, 0x0(a0)",
+        "1018: jr a0",
+        "101c: addi sp, sp, 16",
+        "1020: ret"
+      ],
+      {}
+    ],
+    "error": "unreachable stack write has no frame proof at 101c",
+    "error_pattern": "no frame proof",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.TableTransferTests.test_missing_or_partial_table_cannot_prove_a_live_frame"
+  },
+  {
+    "args": [
+      [
+        "1000: addi sp, sp, -16",
+        "1004: lbu a0, 0x0(a1)",
+        "1008: slli a0, a0, 2",
+        "100c: li a2, 0x2000",
+        "1010: add a0, a0, a2",
+        "1014: lw a0, 0x0(a0)",
+        "1018: jr a0",
+        "101c: addi sp, sp, 16",
+        "1020: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.instructions",
+    "result": [
+      [
+        4096,
+        "addi",
+        [
+          "sp",
+          "sp",
+          "-16"
+        ],
+        null
+      ],
+      [
+        4100,
+        "lbu",
+        [
+          "a0",
+          "0x0(a1)"
+        ],
+        null
+      ],
+      [
+        4104,
+        "slli",
+        [
+          "a0",
+          "a0",
+          "2"
+        ],
+        null
+      ],
+      [
+        4108,
+        "li",
+        [
+          "a2",
+          "0x2000"
+        ],
+        null
+      ],
+      [
+        4112,
+        "add",
+        [
+          "a0",
+          "a0",
+          "a2"
+        ],
+        null
+      ],
+      [
+        4116,
+        "lw",
+        [
+          "a0",
+          "0x0(a0)"
+        ],
+        null
+      ],
+      [
+        4120,
+        "jr",
+        [
+          "a0"
+        ],
+        null
+      ],
+      [
+        4124,
+        "addi",
+        [
+          "sp",
+          "sp",
+          "16"
+        ],
+        null
+      ],
+      [
+        4128,
+        "ret",
+        [
+          ""
+        ],
+        null
+      ]
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_missing_or_partial_table_cannot_prove_a_live_frame"
+  },
+  {
+    "args": [
+      [
+        [
+          4096,
+          "addi",
+          [
+            "sp",
+            "sp",
+            "-16"
+          ],
+          null
+        ],
+        [
+          4100,
+          "lbu",
+          [
+            "a0",
+            "0x0(a1)"
+          ],
+          null
+        ],
+        [
+          4104,
+          "slli",
+          [
+            "a0",
+            "a0",
+            "2"
+          ],
+          null
+        ],
+        [
+          4108,
+          "li",
+          [
+            "a2",
+            "0x2000"
+          ],
+          null
+        ],
+        [
+          4112,
+          "add",
+          [
+            "a0",
+            "a0",
+            "a2"
+          ],
+          null
+        ],
+        [
+          4116,
+          "lw",
+          [
+            "a0",
+            "0x0(a0)"
+          ],
+          null
+        ],
+        [
+          4120,
+          "jr",
+          [
+            "a0"
+          ],
+          null
+        ],
+        [
+          4124,
+          "addi",
+          [
+            "sp",
+            "sp",
+            "16"
+          ],
+          null
+        ],
+        [
+          4128,
+          "ret",
+          [
+            ""
+          ],
+          null
+        ]
+      ],
+      [
+        [
+          8192,
+          {
+            "bytes": "1c100000"
+          }
+        ]
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.resolve_transfers",
+    "result": [
+      {},
+      {}
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_missing_or_partial_table_cannot_prove_a_live_frame"
+  },
+  {
+    "args": [
+      [
+        "1000: addi sp, sp, -16",
+        "1004: lbu a0, 0x0(a1)",
+        "1008: slli a0, a0, 2",
+        "100c: li a2, 0x2000",
+        "1010: add a0, a0, a2",
+        "1014: lw a0, 0x0(a0)",
+        "1018: jr a0",
+        "101c: addi sp, sp, 16",
+        "1020: ret"
+      ],
+      {}
+    ],
+    "error": "unreachable stack write has no frame proof at 101c",
+    "error_pattern": "no frame proof",
+    "kwargs": {},
+    "op": "stack.stack_frame",
+    "test": "test_reader_stack.TableTransferTests.test_missing_or_partial_table_cannot_prove_a_live_frame"
+  },
+  {
+    "args": [
+      {
+        "bytes": "7f454c460101010000000000000000000000f3000000000000000000000000003400000000000000000000000000280001000000000000000100000002000000002000005c00000004000000000000000000000004000000000000001c100000"
+      }
+    ],
+    "kwargs": {},
+    "op": "stack.readonly_sections",
+    "result": [
+      [
+        8192,
+        {
+          "bytes": "1c100000"
+        }
+      ]
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_only_immutable_allocated_elf_bytes_can_resolve_loads"
+  },
+  {
+    "args": [
+      {
+        "bytes": "7f454c460101010000000000000000000000f3000000000000000000000000003400000000000000000000000000280001000000000000000100000000000000002000005c00000004000000000000000000000004000000000000001c100000"
+      }
+    ],
+    "error": "ELF has no immutable allocated data",
+    "error_pattern": "no immutable",
+    "kwargs": {},
+    "op": "stack.readonly_sections",
+    "test": "test_reader_stack.TableTransferTests.test_only_immutable_allocated_elf_bytes_can_resolve_loads"
+  },
+  {
+    "args": [
+      {
+        "bytes": "7f454c460101010000000000000000000000f3000000000000000000000000003400000000000000000000000000280001000000000000000100000001000000002000005c00000004000000000000000000000004000000000000001c100000"
+      }
+    ],
+    "error": "ELF has no immutable allocated data",
+    "error_pattern": "no immutable",
+    "kwargs": {},
+    "op": "stack.readonly_sections",
+    "test": "test_reader_stack.TableTransferTests.test_only_immutable_allocated_elf_bytes_can_resolve_loads"
+  },
+  {
+    "args": [
+      {
+        "bytes": "7f454c460101010000000000000000000000f3000000000000000000000000003400000000000000000000000000280001000000000000000100000003000000002000005c00000004000000000000000000000004000000000000001c100000"
+      }
+    ],
+    "error": "ELF has no immutable allocated data",
+    "error_pattern": "no immutable",
+    "kwargs": {},
+    "op": "stack.readonly_sections",
+    "test": "test_reader_stack.TableTransferTests.test_only_immutable_allocated_elf_bytes_can_resolve_loads"
+  },
+  {
+    "args": [
+      {
+        "bytes": "7f454c460101010000000000000000000000f3000000000000000000000000003400000000000000000000000000280001000000000000000100000006000000002000005c00000004000000000000000000000004000000000000001c100000"
+      }
+    ],
+    "error": "ELF has no immutable allocated data",
+    "error_pattern": "no immutable",
+    "kwargs": {},
+    "op": "stack.readonly_sections",
+    "test": "test_reader_stack.TableTransferTests.test_only_immutable_allocated_elf_bytes_can_resolve_loads"
+  },
+  {
+    "args": [
+      [
+        "1000: li a0, 0x1008",
+        "1004: jr a0",
+        "1008: li a0, 0x1010",
+        "100c: jr a0",
+        "1010: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.instructions",
+    "result": [
+      [
+        4096,
+        "li",
+        [
+          "a0",
+          "0x1008"
+        ],
+        null
+      ],
+      [
+        4100,
+        "jr",
+        [
+          "a0"
+        ],
+        null
+      ],
+      [
+        4104,
+        "li",
+        [
+          "a0",
+          "0x1010"
+        ],
+        null
+      ],
+      [
+        4108,
+        "jr",
+        [
+          "a0"
+        ],
+        null
+      ],
+      [
+        4112,
+        "ret",
+        [
+          ""
+        ],
+        null
+      ]
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_second_dispatch_is_discovered_after_first"
+  },
+  {
+    "args": [
+      [
+        [
+          4096,
+          "li",
+          [
+            "a0",
+            "0x1008"
+          ],
+          null
+        ],
+        [
+          4100,
+          "jr",
+          [
+            "a0"
+          ],
+          null
+        ],
+        [
+          4104,
+          "li",
+          [
+            "a0",
+            "0x1010"
+          ],
+          null
+        ],
+        [
+          4108,
+          "jr",
+          [
+            "a0"
+          ],
+          null
+        ],
+        [
+          4112,
+          "ret",
+          [
+            ""
+          ],
+          null
+        ]
+      ],
+      []
+    ],
+    "kwargs": {},
+    "op": "stack.resolve_transfers",
+    "result": [
+      {
+        "4100": [
+          4104
+        ],
+        "4108": [
+          4112
+        ]
+      },
+      {
+        "4100": [
+          4104
+        ],
+        "4108": [
+          4112
+        ]
+      }
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_second_dispatch_is_discovered_after_first"
+  },
+  {
+    "args": [
+      {
+        "bytes": ""
+      }
+    ],
+    "error": "expected a complete little-endian ELF32 RISC-V header",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "stack.readonly_sections",
+    "test": "test_reader_stack.TableTransferTests.test_truncated_or_wrong_elf_is_rejected"
+  },
+  {
+    "args": [
+      {
+        "bytes": "7f454c460101010000000000000000000000f30000000000000000000000000034000000000000000000000000002800010000"
+      }
+    ],
+    "error": "expected a complete little-endian ELF32 RISC-V header",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "stack.readonly_sections",
+    "test": "test_reader_stack.TableTransferTests.test_truncated_or_wrong_elf_is_rejected"
+  },
+  {
+    "args": [
+      {
+        "bytes": "7f454c460101010000000000000000000000f3000000000000000000000000003400000000000000000000000000280001000000000000000100000002000000002000005c00000004000000000000000000000004000000000000001c1000"
+      }
+    ],
+    "error": "truncated or overflowing readonly ELF section",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "stack.readonly_sections",
+    "test": "test_reader_stack.TableTransferTests.test_truncated_or_wrong_elf_is_rejected"
+  },
+  {
+    "args": [
+      {
+        "bytes": "58454c460101010000000000000000000000f3000000000000000000000000003400000000000000000000000000280001000000000000000100000002000000002000005c00000004000000000000000000000004000000000000001c100000"
+      }
+    ],
+    "error": "expected a complete little-endian ELF32 RISC-V header",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "stack.readonly_sections",
+    "test": "test_reader_stack.TableTransferTests.test_truncated_or_wrong_elf_is_rejected"
+  },
+  {
+    "args": [
+      "bltu",
+      [
+        "a1",
+        "a0"
+      ],
+      {
+        "a1": [
+          3
+        ],
+        "zero": [
+          0
+        ]
+      },
+      false
+    ],
+    "kwargs": {},
+    "op": "stack.branch_values",
+    "result": {
+      "a0": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "a1": [
+        3
+      ],
+      "zero": [
+        0
+      ]
+    },
+    "test": "test_reader_stack.TableTransferTests.test_unsigned_guard_bounds_unknown_word_indices"
+  },
+  {
+    "args": [
+      [
+        "1000: li a1, 3",
+        "1004: bltu a1, a0, 0x1010",
+        "1008: jr a0",
+        "1010: ret"
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.instructions",
+    "result": [
+      [
+        4096,
+        "li",
+        [
+          "a1",
+          "3"
+        ],
+        null
+      ],
+      [
+        4100,
+        "bltu",
+        [
+          "a1",
+          "a0",
+          "0x1010"
+        ],
+        null
+      ],
+      [
+        4104,
+        "jr",
+        [
+          "a0"
+        ],
+        null
+      ],
+      [
+        4112,
+        "ret",
+        [
+          ""
+        ],
+        null
+      ]
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_unsigned_guard_bounds_unknown_word_indices"
+  },
+  {
+    "args": [
+      [
+        [
+          4096,
+          "li",
+          [
+            "a1",
+            "3"
+          ],
+          null
+        ],
+        [
+          4100,
+          "bltu",
+          [
+            "a1",
+            "a0",
+            "0x1010"
+          ],
+          null
+        ],
+        [
+          4104,
+          "jr",
+          [
+            "a0"
+          ],
+          null
+        ],
+        [
+          4112,
+          "ret",
+          [
+            ""
+          ],
+          null
+        ]
+      ],
+      []
+    ],
+    "kwargs": {},
+    "op": "stack.resolve_transfers",
+    "result": [
+      {
+        "4104": [
+          0,
+          2
+        ]
+      },
+      {
+        "4104": [
+          0,
+          2
+        ]
+      }
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_unsigned_guard_bounds_unknown_word_indices"
+  },
+  {
+    "args": [
+      [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72,
+        73,
+        74,
+        75,
+        76,
+        77,
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92,
+        93,
+        94,
+        95,
+        96,
+        97,
+        98,
+        99,
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108,
+        109,
+        110,
+        111,
+        112,
+        113,
+        114,
+        115,
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        125,
+        126,
+        127,
+        128,
+        129,
+        130,
+        131,
+        132,
+        133,
+        134,
+        135,
+        136,
+        137,
+        138,
+        139,
+        140,
+        141,
+        142,
+        143,
+        144,
+        145,
+        146,
+        147,
+        148,
+        149,
+        150,
+        151,
+        152,
+        153,
+        154,
+        155,
+        156,
+        157,
+        158,
+        159,
+        160,
+        161,
+        162,
+        163,
+        164,
+        165,
+        166,
+        167,
+        168,
+        169,
+        170,
+        171,
+        172,
+        173,
+        174,
+        175,
+        176,
+        177,
+        178,
+        179,
+        180,
+        181,
+        182,
+        183,
+        184,
+        185,
+        186,
+        187,
+        188,
+        189,
+        190,
+        191,
+        192,
+        193,
+        194,
+        195,
+        196,
+        197,
+        198,
+        199,
+        200,
+        201,
+        202,
+        203,
+        204,
+        205,
+        206,
+        207,
+        208,
+        209,
+        210,
+        211,
+        212,
+        213,
+        214,
+        215,
+        216,
+        217,
+        218,
+        219,
+        220,
+        221,
+        222,
+        223,
+        224,
+        225,
+        226,
+        227,
+        228,
+        229,
+        230,
+        231,
+        232,
+        233,
+        234,
+        235,
+        236,
+        237,
+        238,
+        239,
+        240,
+        241,
+        242,
+        243,
+        244,
+        245,
+        246,
+        247,
+        248,
+        249,
+        250,
+        251,
+        252,
+        253,
+        254,
+        255,
+        256,
+        257,
+        258,
+        259,
+        260,
+        261,
+        262,
+        263,
+        264,
+        265,
+        266,
+        267,
+        268,
+        269,
+        270,
+        271,
+        272,
+        273,
+        274,
+        275,
+        276,
+        277,
+        278,
+        279,
+        280,
+        281,
+        282,
+        283,
+        284,
+        285,
+        286,
+        287,
+        288,
+        289,
+        290,
+        291,
+        292,
+        293,
+        294,
+        295,
+        296,
+        297,
+        298,
+        299,
+        300,
+        301,
+        302,
+        303,
+        304,
+        305,
+        306,
+        307,
+        308,
+        309,
+        310,
+        311,
+        312,
+        313,
+        314,
+        315,
+        316,
+        317,
+        318,
+        319,
+        320,
+        321,
+        322,
+        323,
+        324,
+        325,
+        326,
+        327,
+        328,
+        329,
+        330,
+        331,
+        332,
+        333,
+        334,
+        335,
+        336,
+        337,
+        338,
+        339,
+        340,
+        341,
+        342,
+        343,
+        344,
+        345,
+        346,
+        347,
+        348,
+        349,
+        350,
+        351,
+        352,
+        353,
+        354,
+        355,
+        356,
+        357,
+        358,
+        359,
+        360,
+        361,
+        362,
+        363,
+        364,
+        365,
+        366,
+        367,
+        368,
+        369,
+        370,
+        371,
+        372,
+        373,
+        374,
+        375,
+        376,
+        377,
+        378,
+        379,
+        380,
+        381,
+        382,
+        383,
+        384,
+        385,
+        386,
+        387,
+        388,
+        389,
+        390,
+        391,
+        392,
+        393,
+        394,
+        395,
+        396,
+        397,
+        398,
+        399,
+        400,
+        401,
+        402,
+        403,
+        404,
+        405,
+        406,
+        407,
+        408,
+        409,
+        410,
+        411,
+        412,
+        413,
+        414,
+        415,
+        416,
+        417,
+        418,
+        419,
+        420,
+        421,
+        422,
+        423,
+        424,
+        425,
+        426,
+        427,
+        428,
+        429,
+        430,
+        431,
+        432,
+        433,
+        434,
+        435,
+        436,
+        437,
+        438,
+        439,
+        440,
+        441,
+        442,
+        443,
+        444,
+        445,
+        446,
+        447,
+        448,
+        449,
+        450,
+        451,
+        452,
+        453,
+        454,
+        455,
+        456,
+        457,
+        458,
+        459,
+        460,
+        461,
+        462,
+        463,
+        464,
+        465,
+        466,
+        467,
+        468,
+        469,
+        470,
+        471,
+        472,
+        473,
+        474,
+        475,
+        476,
+        477,
+        478,
+        479,
+        480,
+        481,
+        482,
+        483,
+        484,
+        485,
+        486,
+        487,
+        488,
+        489,
+        490,
+        491,
+        492,
+        493,
+        494,
+        495,
+        496,
+        497,
+        498,
+        499,
+        500,
+        501,
+        502,
+        503,
+        504,
+        505,
+        506,
+        507,
+        508,
+        509,
+        510,
+        511,
+        512,
+        513,
+        514,
+        515,
+        516,
+        517,
+        518,
+        519,
+        520,
+        521,
+        522,
+        523,
+        524,
+        525,
+        526,
+        527,
+        528,
+        529,
+        530,
+        531,
+        532,
+        533,
+        534,
+        535,
+        536,
+        537,
+        538,
+        539,
+        540,
+        541,
+        542,
+        543,
+        544,
+        545,
+        546,
+        547,
+        548,
+        549,
+        550,
+        551,
+        552,
+        553,
+        554,
+        555,
+        556,
+        557,
+        558,
+        559,
+        560,
+        561,
+        562,
+        563,
+        564,
+        565,
+        566,
+        567,
+        568,
+        569,
+        570,
+        571,
+        572,
+        573,
+        574,
+        575,
+        576,
+        577,
+        578,
+        579,
+        580,
+        581,
+        582,
+        583,
+        584,
+        585,
+        586,
+        587,
+        588,
+        589,
+        590,
+        591,
+        592,
+        593,
+        594,
+        595,
+        596,
+        597,
+        598,
+        599,
+        600,
+        601,
+        602,
+        603,
+        604,
+        605,
+        606,
+        607,
+        608,
+        609,
+        610,
+        611,
+        612,
+        613,
+        614,
+        615,
+        616,
+        617,
+        618,
+        619,
+        620,
+        621,
+        622,
+        623,
+        624,
+        625,
+        626,
+        627,
+        628,
+        629,
+        630,
+        631,
+        632,
+        633,
+        634,
+        635,
+        636,
+        637,
+        638,
+        639,
+        640,
+        641,
+        642,
+        643,
+        644,
+        645,
+        646,
+        647,
+        648,
+        649,
+        650,
+        651,
+        652,
+        653,
+        654,
+        655,
+        656,
+        657,
+        658,
+        659,
+        660,
+        661,
+        662,
+        663,
+        664,
+        665,
+        666,
+        667,
+        668,
+        669,
+        670,
+        671,
+        672,
+        673,
+        674,
+        675,
+        676,
+        677,
+        678,
+        679,
+        680,
+        681,
+        682,
+        683,
+        684,
+        685,
+        686,
+        687,
+        688,
+        689,
+        690,
+        691,
+        692,
+        693,
+        694,
+        695,
+        696,
+        697,
+        698,
+        699,
+        700,
+        701,
+        702,
+        703,
+        704,
+        705,
+        706,
+        707,
+        708,
+        709,
+        710,
+        711,
+        712,
+        713,
+        714,
+        715,
+        716,
+        717,
+        718,
+        719,
+        720,
+        721,
+        722,
+        723,
+        724,
+        725,
+        726,
+        727,
+        728,
+        729,
+        730,
+        731,
+        732,
+        733,
+        734,
+        735,
+        736,
+        737,
+        738,
+        739,
+        740,
+        741,
+        742,
+        743,
+        744,
+        745,
+        746,
+        747,
+        748,
+        749,
+        750,
+        751,
+        752,
+        753,
+        754,
+        755,
+        756,
+        757,
+        758,
+        759,
+        760,
+        761,
+        762,
+        763,
+        764,
+        765,
+        766,
+        767,
+        768,
+        769,
+        770,
+        771,
+        772,
+        773,
+        774,
+        775,
+        776,
+        777,
+        778,
+        779,
+        780,
+        781,
+        782,
+        783,
+        784,
+        785,
+        786,
+        787,
+        788,
+        789,
+        790,
+        791,
+        792,
+        793,
+        794,
+        795,
+        796,
+        797,
+        798,
+        799,
+        800,
+        801,
+        802,
+        803,
+        804,
+        805,
+        806,
+        807,
+        808,
+        809,
+        810,
+        811,
+        812,
+        813,
+        814,
+        815,
+        816,
+        817,
+        818,
+        819,
+        820,
+        821,
+        822,
+        823,
+        824,
+        825,
+        826,
+        827,
+        828,
+        829,
+        830,
+        831,
+        832,
+        833,
+        834,
+        835,
+        836,
+        837,
+        838,
+        839,
+        840,
+        841,
+        842,
+        843,
+        844,
+        845,
+        846,
+        847,
+        848,
+        849,
+        850,
+        851,
+        852,
+        853,
+        854,
+        855,
+        856,
+        857,
+        858,
+        859,
+        860,
+        861,
+        862,
+        863,
+        864,
+        865,
+        866,
+        867,
+        868,
+        869,
+        870,
+        871,
+        872,
+        873,
+        874,
+        875,
+        876,
+        877,
+        878,
+        879,
+        880,
+        881,
+        882,
+        883,
+        884,
+        885,
+        886,
+        887,
+        888,
+        889,
+        890,
+        891,
+        892,
+        893,
+        894,
+        895,
+        896,
+        897,
+        898,
+        899,
+        900,
+        901,
+        902,
+        903,
+        904,
+        905,
+        906,
+        907,
+        908,
+        909,
+        910,
+        911,
+        912,
+        913,
+        914,
+        915,
+        916,
+        917,
+        918,
+        919,
+        920,
+        921,
+        922,
+        923,
+        924,
+        925,
+        926,
+        927,
+        928,
+        929,
+        930,
+        931,
+        932,
+        933,
+        934,
+        935,
+        936,
+        937,
+        938,
+        939,
+        940,
+        941,
+        942,
+        943,
+        944,
+        945,
+        946,
+        947,
+        948,
+        949,
+        950,
+        951,
+        952,
+        953,
+        954,
+        955,
+        956,
+        957,
+        958,
+        959,
+        960,
+        961,
+        962,
+        963,
+        964,
+        965,
+        966,
+        967,
+        968,
+        969,
+        970,
+        971,
+        972,
+        973,
+        974,
+        975,
+        976,
+        977,
+        978,
+        979,
+        980,
+        981,
+        982,
+        983,
+        984,
+        985,
+        986,
+        987,
+        988,
+        989,
+        990,
+        991,
+        992,
+        993,
+        994,
+        995,
+        996,
+        997,
+        998,
+        999,
+        1000,
+        1001,
+        1002,
+        1003,
+        1004,
+        1005,
+        1006,
+        1007,
+        1008,
+        1009,
+        1010,
+        1011,
+        1012,
+        1013,
+        1014,
+        1015,
+        1016,
+        1017,
+        1018,
+        1019,
+        1020,
+        1021,
+        1022,
+        1023,
+        1024
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.finite",
+    "result": null,
+    "test": "test_reader_stack.TableTransferTests.test_value_limit_degrades_to_unknown_not_an_empty_set"
+  },
+  {
+    "args": [
+      [
+        -1,
+        4294967296
+      ]
+    ],
+    "kwargs": {},
+    "op": "stack.finite",
+    "result": [
+      0,
+      4294967295
+    ],
+    "test": "test_reader_stack.TableTransferTests.test_value_limit_degrades_to_unknown_not_an_empty_set"
+  },
+  {
+    "args": [
+      [
+        "bb.0:",
+        "  $x2 = frame-setup ADDI $x2, -16",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET"
+      ],
+      {
+        "size": 16,
+        "slots": [
+          [
+            -4,
+            "Variable",
+            4,
+            4
+          ]
+        ]
+      }
+    ],
+    "kwargs": {},
+    "op": "machine.machine_frame",
+    "result": {
+      "assembly": {},
+      "blocks": 1,
+      "calls": [],
+      "indirect": [],
+      "size": 16,
+      "sp_writes": {
+        "-16": 1,
+        "16": 1
+      }
+    },
+    "test": "test_reader_frame_evidence.EmittedCorroborationTests.test_actual_sp_sites_and_compiler_frame_must_agree"
+  },
+  {
+    "args": [
+      {
+        "module": "stack"
+      },
+      [
+        " 1000: addi sp, sp, -0x10",
+        " 1002: addi sp, sp, 0x10",
+        " 1004: ret"
+      ],
+      {
+        "assembly": {},
+        "blocks": 1,
+        "calls": [],
+        "indirect": [],
+        "size": 16,
+        "sp_writes": {
+          "-16": 1,
+          "16": 1
+        }
+      }
+    ],
+    "kwargs": {},
+    "op": "machine.corroborate",
+    "result": [],
+    "test": "test_reader_frame_evidence.EmittedCorroborationTests.test_actual_sp_sites_and_compiler_frame_must_agree"
+  },
+  {
+    "args": [
+      {
+        "module": "stack"
+      },
+      [
+        " 1000: mv sp, a0",
+        " 1002: addi sp, sp, 0x10",
+        " 1004: ret"
+      ],
+      {
+        "assembly": {},
+        "blocks": 1,
+        "calls": [],
+        "indirect": [],
+        "size": 16,
+        "sp_writes": {
+          "-16": 1,
+          "16": 1
+        }
+      }
+    ],
+    "error": "unproved emitted SP adjustment at 1000",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.corroborate",
+    "test": "test_reader_frame_evidence.EmittedCorroborationTests.test_actual_sp_sites_and_compiler_frame_must_agree"
+  },
+  {
+    "args": [
+      {
+        "module": "stack"
+      },
+      [
+        " 1000: cm.push sp",
+        " 1002: addi sp, sp, 0x10",
+        " 1004: ret"
+      ],
+      {
+        "assembly": {},
+        "blocks": 1,
+        "calls": [],
+        "indirect": [],
+        "size": 16,
+        "sp_writes": {
+          "-16": 1,
+          "16": 1
+        }
+      }
+    ],
+    "error": "unsupported instruction at 1000: cm.push",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.corroborate",
+    "test": "test_reader_frame_evidence.EmittedCorroborationTests.test_actual_sp_sites_and_compiler_frame_must_agree"
+  },
+  {
+    "args": [
+      {
+        "module": "stack"
+      },
+      [
+        " 1000: addi x2, x2, -0x20",
+        " 1002: addi sp, sp, 0x10",
+        " 1004: ret"
+      ],
+      {
+        "assembly": {},
+        "blocks": 1,
+        "calls": [],
+        "indirect": [],
+        "size": 16,
+        "sp_writes": {
+          "-16": 1,
+          "16": 1
+        }
+      }
+    ],
+    "error": "emitted SP writes contradict compiler provenance: Counter({-32: 1, 16: 1}) != Counter({-16: 1, 16: 1})",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.corroborate",
+    "test": "test_reader_frame_evidence.EmittedCorroborationTests.test_actual_sp_sites_and_compiler_frame_must_agree"
+  },
+  {
+    "args": [
+      {
+        "module": "stack"
+      },
+      [
+        " 1000: addi sp, sp, -0x10",
+        " 1002: addi sp, sp, 0x10",
+        " 1004: ret"
+      ],
+      {
+        "assembly": {},
+        "blocks": 1,
+        "calls": [],
+        "indirect": [],
+        "size": 32,
+        "sp_writes": {
+          "-16": 1,
+          "16": 1
+        }
+      }
+    ],
+    "error": "successful disassembly frame contradicts compiler size",
+    "error_pattern": "contradicts compiler size",
+    "kwargs": {},
+    "op": "machine.corroborate",
+    "test": "test_reader_frame_evidence.EmittedCorroborationTests.test_actual_sp_sites_and_compiler_frame_must_agree"
+  },
+  {
+    "args": [
+      {
+        "module": "stack"
+      },
+      [
+        " 1000: addi sp, sp, -0x10",
+        " 1002: j 0x1000"
+      ],
+      {
+        "indirect": [],
+        "size": 16,
+        "sp_writes": {
+          "-16": 1
+        }
+      }
+    ],
+    "error": "unbounded or inconsistent stack-depth cycle",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.corroborate",
+    "test": "test_reader_frame_evidence.EmittedCorroborationTests.test_compiler_record_cannot_override_a_known_allocating_cycle"
+  },
+  {
+    "args": [
+      {
+        "module": "stack"
+      },
+      [
+        "1000: addi sp, sp, -0x10",
+        "1002: li a0, 0x1000",
+        "1004: jr a0"
+      ],
+      {
+        "indirect": [
+          [
+            "PseudoBRIND",
+            "a0"
+          ]
+        ],
+        "size": 16,
+        "sp_writes": {
+          "-16": 1
+        }
+      },
+      {
+        "4100": [
+          4096
+        ]
+      }
+    ],
+    "error": "unbounded or inconsistent stack-depth cycle",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.corroborate",
+    "test": "test_reader_frame_evidence.EmittedCorroborationTests.test_known_computed_allocating_cycle_is_not_overridden"
+  },
+  {
+    "args": [
+      [
+        "note: source.rs:1:0 prologepilog (analysis): 16 stack bytes in function 'reader'",
+        "note: source.rs:1:0 stack-frame-layout (analysis):",
+        "Function: reader",
+        "Offset: [SP-4], Type: Variable, Align: 4, Size: 4",
+        ""
+      ],
+      [
+        "reader"
+      ]
+    ],
+    "kwargs": {},
+    "op": "machine.frame_records",
+    "result": {
+      "reader": {
+        "size": 16,
+        "slots": [
+          [
+            -4,
+            "Variable",
+            4,
+            4
+          ]
+        ]
+      }
+    },
+    "test": "test_reader_frame_evidence.FrameRecordTests.test_explicit_zero_and_fixed_variable_slot"
+  },
+  {
+    "args": [
+      [
+        "note: source.rs:1:0 prologepilog (analysis): 0 stack bytes in function 'reader'",
+        "note: source.rs:1:0 stack-frame-layout (analysis):",
+        "Function: reader",
+        ""
+      ],
+      [
+        "reader"
+      ]
+    ],
+    "kwargs": {},
+    "op": "machine.frame_records",
+    "result": {
+      "reader": {
+        "size": 0,
+        "slots": []
+      }
+    },
+    "test": "test_reader_frame_evidence.FrameRecordTests.test_explicit_zero_and_fixed_variable_slot"
+  },
+  {
+    "args": [
+      [],
+      [
+        "reader"
+      ]
+    ],
+    "error": "missing explicit frame/layout record: reader",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.frame_records",
+    "test": "test_reader_frame_evidence.FrameRecordTests.test_missing_and_duplicate_records_are_not_zero"
+  },
+  {
+    "args": [
+      [
+        "note: source.rs:1:0 prologepilog (analysis): 16 stack bytes in function 'reader'"
+      ],
+      [
+        "reader"
+      ]
+    ],
+    "error": "missing explicit frame/layout record: reader",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.frame_records",
+    "test": "test_reader_frame_evidence.FrameRecordTests.test_missing_and_duplicate_records_are_not_zero"
+  },
+  {
+    "args": [
+      [
+        "note: source.rs:1:0 prologepilog (analysis): 16 stack bytes in function 'reader'",
+        "note: source.rs:1:0 stack-frame-layout (analysis):",
+        "Function: reader",
+        "Offset: [SP-4], Type: Variable, Align: 4, Size: 4",
+        "",
+        "note: source.rs:1:0 prologepilog (analysis): 16 stack bytes in function 'reader'",
+        "note: source.rs:1:0 stack-frame-layout (analysis):",
+        "Function: reader",
+        "Offset: [SP-4], Type: Variable, Align: 4, Size: 4",
+        ""
+      ],
+      [
+        "reader"
+      ]
+    ],
+    "error": "duplicate compiler record: reader",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.frame_records",
+    "test": "test_reader_frame_evidence.FrameRecordTests.test_missing_and_duplicate_records_are_not_zero"
+  },
+  {
+    "args": [
+      [
+        "note: source.rs:1:0 prologepilog (analysis): 16 stack bytes in function 'reader'",
+        "note: source.rs:1:0 stack-frame-layout (analysis):",
+        "Function: reader",
+        "Offset: [SP-4], Type: VariableSized, Align: 4, Size: 4",
+        ""
+      ],
+      [
+        "reader"
+      ]
+    ],
+    "error": "unsupported frame slot: Offset: [SP-4], Type: VariableSized, Align: 4, Size: 4",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.frame_records",
+    "test": "test_reader_frame_evidence.FrameRecordTests.test_reject_dynamic_scalable_and_overaligned_slots"
+  },
+  {
+    "args": [
+      [
+        "note: source.rs:1:0 prologepilog (analysis): 16 stack bytes in function 'reader'",
+        "note: source.rs:1:0 stack-frame-layout (analysis):",
+        "Function: reader",
+        "Offset: [SP-4], Type: Variable, Align: 4, Size: scalable 4",
+        ""
+      ],
+      [
+        "reader"
+      ]
+    ],
+    "error": "unsupported frame slot: Offset: [SP-4], Type: Variable, Align: 4, Size: scalable 4",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.frame_records",
+    "test": "test_reader_frame_evidence.FrameRecordTests.test_reject_dynamic_scalable_and_overaligned_slots"
+  },
+  {
+    "args": [
+      [
+        "note: source.rs:1:0 prologepilog (analysis): 16 stack bytes in function 'reader'",
+        "note: source.rs:1:0 stack-frame-layout (analysis):",
+        "Function: reader",
+        "Offset: [SP-4], Type: Variable, Align: 32, Size: 4",
+        ""
+      ],
+      [
+        "reader"
+      ]
+    ],
+    "error": "unsupported slot alignment/extent: reader",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.frame_records",
+    "test": "test_reader_frame_evidence.FrameRecordTests.test_reject_dynamic_scalable_and_overaligned_slots"
+  },
+  {
+    "args": [
+      [
+        "note: source.rs:1:0 prologepilog (analysis): 16 stack bytes in function 'reader'",
+        "note: source.rs:1:0 stack-frame-layout (analysis):",
+        "Function: reader",
+        "Offset: [SP-32], Type: Variable, Align: 4, Size: 4",
+        ""
+      ],
+      [
+        "reader"
+      ]
+    ],
+    "error": "unsupported slot alignment/extent: reader",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.frame_records",
+    "test": "test_reader_frame_evidence.FrameRecordTests.test_reject_dynamic_scalable_and_overaligned_slots"
+  },
+  {
+    "args": [
+      [
+        "note: source.rs:1:0 prologepilog (analysis): 16 stack bytes in function 'reader'",
+        "note: source.rs:1:0 stack-frame-layout (analysis):",
+        "Function: reader",
+        "Offset: [SP-4], Type: Variable, Align: 4, Size: unknown",
+        ""
+      ],
+      [
+        "reader"
+      ]
+    ],
+    "error": "unsupported frame slot: Offset: [SP-4], Type: Variable, Align: 4, Size: unknown",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.frame_records",
+    "test": "test_reader_frame_evidence.FrameRecordTests.test_reject_missing_slot_size_and_malformed_record"
+  },
+  {
+    "args": [
+      [
+        "note: source.rs:1:0 prologepilog (analysis): 15 stack bytes in function 'reader'",
+        "note: source.rs:1:0 stack-frame-layout (analysis):",
+        "Function: reader",
+        "Offset: [SP-4], Type: Variable, Align: 4, Size: 4",
+        ""
+      ],
+      [
+        "reader"
+      ]
+    ],
+    "error": "unsupported fixed scalar frame size",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.frame_records",
+    "test": "test_reader_frame_evidence.FrameRecordTests.test_reject_missing_slot_size_and_malformed_record"
+  },
+  {
+    "args": [
+      [
+        "note: source.rs:1:0 prologepilog (analysis): -16 stack bytes in function 'reader'",
+        "note: source.rs:1:0 stack-frame-layout (analysis):",
+        "Function: reader",
+        "Offset: [SP-4], Type: Variable, Align: 4, Size: 4",
+        ""
+      ],
+      [
+        "reader"
+      ]
+    ],
+    "error": "malformed fixed-frame record",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.frame_records",
+    "test": "test_reader_frame_evidence.FrameRecordTests.test_reject_missing_slot_size_and_malformed_record"
+  },
+  {
+    "args": [
+      [
+        "# *** IR Dump Before RISC-V Assembly Printer (riscv-asm-printer) ***:",
+        "# Machine code for function reader: NoPHIs, TracksLiveness, NoVRegs, TiedOpsRewritten, TracksDebugUserValues",
+        "bb.0:",
+        "  $x2 = frame-setup ADDI $x2, -16",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET",
+        "# End machine code for function reader."
+      ],
+      [
+        "reader"
+      ]
+    ],
+    "kwargs": {},
+    "op": "machine.machine_records",
+    "result": {
+      "reader": [
+        "bb.0:",
+        "  $x2 = frame-setup ADDI $x2, -16",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET"
+      ]
+    },
+    "test": "test_reader_frame_evidence.FrameRecordTests.test_terminal_phase_complete_unique_machine_record"
+  },
+  {
+    "args": [
+      [
+        "bb.0:",
+        "  $x2 = frame-setup ADDI $x2, -16",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET"
+      ],
+      {
+        "size": 16,
+        "slots": [
+          [
+            -4,
+            "Variable",
+            4,
+            4
+          ]
+        ]
+      }
+    ],
+    "kwargs": {},
+    "op": "machine.machine_frame",
+    "result": {
+      "assembly": {},
+      "blocks": 1,
+      "calls": [],
+      "indirect": [],
+      "size": 16,
+      "sp_writes": {
+        "-16": 1,
+        "16": 1
+      }
+    },
+    "test": "test_reader_frame_evidence.FrameRecordTests.test_terminal_phase_complete_unique_machine_record"
+  },
+  {
+    "args": [
+      [
+        "# *** IR Dump Before RISC-V Assembly Printer (riscv-asm-printer) ***:",
+        "# Machine code for function reader: NoPHIs, TracksLiveness, NoVRegs, TiedOpsRewritten, TracksDebugUserValues",
+        "bb.0:",
+        "  $x2 = frame-setup ADDI $x2, -16",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET",
+        "# End machine code for function reader.",
+        "# *** IR Dump Before RISC-V Assembly Printer (riscv-asm-printer) ***:",
+        "# Machine code for function reader: NoPHIs, TracksLiveness, NoVRegs, TiedOpsRewritten, TracksDebugUserValues",
+        "bb.0:",
+        "  $x2 = frame-setup ADDI $x2, -16",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET",
+        "# End machine code for function reader."
+      ],
+      [
+        "reader"
+      ]
+    ],
+    "error": "duplicate compiler record: reader",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.machine_records",
+    "test": "test_reader_frame_evidence.FrameRecordTests.test_terminal_phase_complete_unique_machine_record"
+  },
+  {
+    "args": [
+      [
+        "# *** IR Dump Before RISC-V Assembly Printer (riscv-asm-printer) ***:",
+        "# Machine code for function reader: NoPHIs, TracksLiveness, NoVRegs, TiedOpsRewritten, TracksDebugUserValues",
+        "bb.0:",
+        "  $x2 = frame-setup ADDI $x2, -16",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET",
+        "# Missing machine code for function reader."
+      ],
+      [
+        "reader"
+      ]
+    ],
+    "error": "missing/truncated selected machine record",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.machine_records",
+    "test": "test_reader_frame_evidence.FrameRecordTests.test_terminal_phase_complete_unique_machine_record"
+  },
+  {
+    "args": [
+      [
+        "# *** IR Dump After Prologue/Epilogue Insertion & Frame Finalization (prologepilog) ***:",
+        "# Machine code for function reader: NoPHIs, TracksLiveness, NoVRegs, TiedOpsRewritten, TracksDebugUserValues",
+        "bb.0:",
+        "  $x2 = frame-setup ADDI $x2, -16",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET",
+        "# End machine code for function reader."
+      ],
+      [
+        "reader"
+      ]
+    ],
+    "error": "malformed/unbound machine header",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.machine_records",
+    "test": "test_reader_frame_evidence.FrameRecordTests.test_terminal_phase_complete_unique_machine_record"
+  },
+  {
+    "args": [
+      [
+        "# *** IR Dump Before RISC-V Assembly Printer (riscv-asm-printer) ***:",
+        "# Machine code for function reader: NoPHIs, TracksLiveness, HasVRegs, TiedOpsRewritten, TracksDebugUserValues",
+        "bb.0:",
+        "  $x2 = frame-setup ADDI $x2, -16",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET",
+        "# End machine code for function reader."
+      ],
+      [
+        "reader"
+      ]
+    ],
+    "error": "unsupported machine function properties",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.machine_records",
+    "test": "test_reader_frame_evidence.FrameRecordTests.test_terminal_phase_complete_unique_machine_record"
+  },
+  {
+    "args": [
+      [
+        "bb.0:",
+        "  successors: %bb.0(0x80000000)",
+        "  $x2 = frame-setup ADDI $x2, -16",
+        "  PseudoBR %bb.0"
+      ],
+      {
+        "size": 16,
+        "slots": [
+          [
+            -4,
+            "Variable",
+            4,
+            4
+          ]
+        ]
+      }
+    ],
+    "error": "allocating/inconsistent machine stack-depth cycle or join",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.machine_frame",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_allocating_cycle_and_unreachable_stack_write_are_rejected"
+  },
+  {
+    "args": [
+      [
+        "bb.0:",
+        "  $x2 = frame-setup ADDI $x2, -16",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET",
+        "bb.1:",
+        "  $x2 = frame-setup ADDI $x2, -16",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET"
+      ],
+      {
+        "size": 16,
+        "slots": [
+          [
+            -4,
+            "Variable",
+            4,
+            4
+          ]
+        ]
+      }
+    ],
+    "error": "unreachable machine blocks or contradicting frame size",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.machine_frame",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_allocating_cycle_and_unreachable_stack_write_are_rejected"
+  },
+  {
+    "args": [
+      "INLINEASM &\"csrrci ${0}, mstatus, 8\" [sideeffect] [attdialect], $0:[regdef-ec:GPRNoX0], def early-clobber renamable $x10"
+    ],
+    "kwargs": {},
+    "op": "machine.benign_assembly",
+    "result": "csrrci ${0}, mstatus, 8",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_csr_template_is_admitted_but_stack_memory_and_jumps_are_not"
+  },
+  {
+    "args": [
+      "INLINEASM &\"sw x0, -32(sp)\" [sideeffect] [attdialect], $0:[regdef-ec:GPRNoX0], def early-clobber renamable $x10"
+    ],
+    "error": "opaque inline assembly is not a fixed-frame proof",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.benign_assembly",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_csr_template_is_admitted_but_stack_memory_and_jumps_are_not"
+  },
+  {
+    "args": [
+      "INLINEASM &\"jr x10\" [sideeffect] [attdialect], $0:[regdef-ec:GPRNoX0], def early-clobber renamable $x10"
+    ],
+    "error": "opaque inline assembly is not a fixed-frame proof",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.benign_assembly",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_csr_template_is_admitted_but_stack_memory_and_jumps_are_not"
+  },
+  {
+    "args": [
+      "INLINEASM &\"addi sp, sp, -16\" [sideeffect] [attdialect], $0:[regdef-ec:GPRNoX0], def early-clobber renamable $x10"
+    ],
+    "error": "opaque inline assembly is not a fixed-frame proof",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.benign_assembly",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_csr_template_is_admitted_but_stack_memory_and_jumps_are_not"
+  },
+  {
+    "args": [
+      "INLINEASM &\"csrrci ${0}, mstatus, 8; sw x0, -32(sp)\" [sideeffect] [attdialect], $0:[regdef-ec:GPRNoX0], def early-clobber renamable $x10"
+    ],
+    "error": "opaque inline assembly is not a fixed-frame proof",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.benign_assembly",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_csr_template_is_admitted_but_stack_memory_and_jumps_are_not"
+  },
+  {
+    "args": [
+      [
+        "bb.0:",
+        "  $x2 = frame-setup ADDI $x2, -16",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET"
+      ],
+      {
+        "size": 16,
+        "slots": [
+          [
+            -4,
+            "Variable",
+            4,
+            4
+          ]
+        ]
+      }
+    ],
+    "kwargs": {},
+    "op": "machine.machine_frame",
+    "result": {
+      "assembly": {},
+      "blocks": 1,
+      "calls": [],
+      "indirect": [],
+      "size": 16,
+      "sp_writes": {
+        "-16": 1,
+        "16": 1
+      }
+    },
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_frame_and_explicit_zero"
+  },
+  {
+    "args": [
+      [
+        "bb.0:",
+        "  PseudoRET"
+      ],
+      {
+        "size": 0
+      }
+    ],
+    "kwargs": {},
+    "op": "machine.machine_frame",
+    "result": {
+      "assembly": {},
+      "blocks": 1,
+      "calls": [],
+      "indirect": [],
+      "size": 0,
+      "sp_writes": {}
+    },
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_frame_and_explicit_zero"
+  },
+  {
+    "args": [
+      [
+        "Jump Tables:",
+        "%jump-table.0: %bb.1 %bb.2",
+        "bb.0:",
+        "  successors: %bb.1(0x40000000), %bb.2(0x40000000)",
+        "  $x2 = frame-setup ADDI $x2, -16",
+        "  PseudoBRIND renamable $x10",
+        "bb.1:",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET",
+        "bb.2:",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET"
+      ],
+      {
+        "size": 16,
+        "slots": [
+          [
+            -4,
+            "Variable",
+            4,
+            4
+          ]
+        ]
+      }
+    ],
+    "kwargs": {},
+    "op": "machine.machine_frame",
+    "result": {
+      "assembly": {},
+      "blocks": 3,
+      "calls": [],
+      "indirect": [
+        [
+          "PseudoBRIND",
+          "a0"
+        ]
+      ],
+      "size": 16,
+      "sp_writes": {
+        "-16": 1,
+        "16": 2
+      }
+    },
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_local_dispatch_requires_closed_compiler_jump_table"
+  },
+  {
+    "args": [
+      [
+        "bb.0:",
+        "  successors: %bb.1(0x40000000), %bb.2(0x40000000)",
+        "  $x2 = frame-setup ADDI $x2, -16",
+        "  PseudoBRIND renamable $x10",
+        "bb.1:",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET",
+        "bb.2:",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET"
+      ],
+      {
+        "size": 16,
+        "slots": [
+          [
+            -4,
+            "Variable",
+            4,
+            4
+          ]
+        ]
+      }
+    ],
+    "error": "local dispatch lacks compiler jump-table provenance",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.machine_frame",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_local_dispatch_requires_closed_compiler_jump_table"
+  },
+  {
+    "args": [
+      [
+        "bb.0:",
+        "  $x2 = frame-setup ADDI $x2, -16",
+        "  PseudoCALL target-flags(riscv-call) &memcpy, <regmask >",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET"
+      ],
+      {
+        "size": 16,
+        "slots": [
+          [
+            -4,
+            "Variable",
+            4,
+            4
+          ]
+        ]
+      }
+    ],
+    "kwargs": {},
+    "op": "machine.machine_frame",
+    "result": {
+      "assembly": {},
+      "blocks": 1,
+      "calls": [
+        "memcpy"
+      ],
+      "indirect": [],
+      "size": 16,
+      "sp_writes": {
+        "-16": 1,
+        "16": 1
+      }
+    },
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_ordinary_external_call_and_nonreturning_block"
+  },
+  {
+    "args": [
+      [
+        "bb.0:",
+        "  $x2 = frame-setup ADDI $x2, -16",
+        "  PseudoCALL target-flags(riscv-call) @panic, <regmask >"
+      ],
+      {
+        "size": 16,
+        "slots": [
+          [
+            -4,
+            "Variable",
+            4,
+            4
+          ]
+        ]
+      }
+    ],
+    "kwargs": {},
+    "op": "machine.machine_frame",
+    "result": {
+      "assembly": {},
+      "blocks": 1,
+      "calls": [
+        "panic"
+      ],
+      "indirect": [],
+      "size": 16,
+      "sp_writes": {
+        "-16": 1
+      }
+    },
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_ordinary_external_call_and_nonreturning_block"
+  },
+  {
+    "args": [
+      [
+        "bb.0:",
+        "  $x2 = frame-setup ADD $x2, $x10",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET"
+      ],
+      {
+        "size": 16,
+        "slots": [
+          [
+            -4,
+            "Variable",
+            4,
+            4
+          ]
+        ]
+      }
+    ],
+    "error": "unproved machine SP adjustment",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.machine_frame",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_reject_nonconstant_absolute_untagged_and_aliased_sp"
+  },
+  {
+    "args": [
+      [
+        "bb.0:",
+        "  $x2 = COPY $x8",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET"
+      ],
+      {
+        "size": 16,
+        "slots": [
+          [
+            -4,
+            "Variable",
+            4,
+            4
+          ]
+        ]
+      }
+    ],
+    "error": "unproved machine SP adjustment",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.machine_frame",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_reject_nonconstant_absolute_untagged_and_aliased_sp"
+  },
+  {
+    "args": [
+      [
+        "bb.0:",
+        "  $x2 = ADDI $x2, -16",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET"
+      ],
+      {
+        "size": 16,
+        "slots": [
+          [
+            -4,
+            "Variable",
+            4,
+            4
+          ]
+        ]
+      }
+    ],
+    "error": "SP write lacks ordinary frame setup/destroy provenance",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.machine_frame",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_reject_nonconstant_absolute_untagged_and_aliased_sp"
+  },
+  {
+    "args": [
+      [
+        "bb.0:",
+        "  $sp = frame-setup ADDI $sp, -16",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET"
+      ],
+      {
+        "size": 16,
+        "slots": [
+          [
+            -4,
+            "Variable",
+            4,
+            4
+          ]
+        ]
+      }
+    ],
+    "error": "unsupported machine register definition",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.machine_frame",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_reject_nonconstant_absolute_untagged_and_aliased_sp"
+  },
+  {
+    "args": [
+      [
+        "bb.0:",
+        "  renamable $x2 = frame-setup ADDI $x2, -16",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET"
+      ],
+      {
+        "size": 16,
+        "slots": [
+          [
+            -4,
+            "Variable",
+            4,
+            4
+          ]
+        ]
+      }
+    ],
+    "error": "aliased SP write",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.machine_frame",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_reject_nonconstant_absolute_untagged_and_aliased_sp"
+  },
+  {
+    "args": [
+      [
+        "bb.0:",
+        "  $x2 = frame-setup ADDI $x2, -15",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET"
+      ],
+      {
+        "size": 16,
+        "slots": [
+          [
+            -4,
+            "Variable",
+            4,
+            4
+          ]
+        ]
+      }
+    ],
+    "error": "unsupported machine SP immediate",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.machine_frame",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_reject_nonconstant_absolute_untagged_and_aliased_sp"
+  },
+  {
+    "args": [
+      "INLINEASM &\"csrrci ${0}, mstatus, 8\" [sideeffect] [attdialect], $0:[regdef-ec:GPRNoX0], def early-clobber renamable $x10, implicit-def $sp"
+    ],
+    "error": "unknown inline assembly register or alias",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.benign_assembly",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_reserved_and_unknown_assembly_register_aliases_are_rejected"
+  },
+  {
+    "args": [
+      "INLINEASM &\"csrrci ${0}, mstatus, 8\" [sideeffect] [attdialect], $0:[regdef-ec:GPRNoX0], def early-clobber renamable $x10, implicit-def $x2"
+    ],
+    "error": "reserved register in inline assembly",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.benign_assembly",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_reserved_and_unknown_assembly_register_aliases_are_rejected"
+  },
+  {
+    "args": [
+      "INLINEASM &\"csrrci ${0}, mstatus, 8\" [sideeffect] [attdialect], $0:[regdef-ec:GPRNoX0], def early-clobber renamable $x10, implicit-def $x2_w"
+    ],
+    "error": "unknown inline assembly register or alias",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.benign_assembly",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_reserved_and_unknown_assembly_register_aliases_are_rejected"
+  },
+  {
+    "args": [
+      "INLINEASM &\"csrrci ${0}, mstatus, 8\" [sideeffect] [attdialect], $0:[regdef-ec:GPRNoX0], def early-clobber renamable $x10, implicit-def $fp"
+    ],
+    "error": "unknown inline assembly register or alias",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.benign_assembly",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_reserved_and_unknown_assembly_register_aliases_are_rejected"
+  },
+  {
+    "args": [
+      "INLINEASM &\"csrrci ${0}, mstatus, 8\" [sideeffect] [attdialect], $0:[regdef-ec:GPRNoX0], def early-clobber renamable $x10, implicit-def $x8"
+    ],
+    "error": "reserved register in inline assembly",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.benign_assembly",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_reserved_and_unknown_assembly_register_aliases_are_rejected"
+  },
+  {
+    "args": [
+      "INLINEASM &\"csrrci ${0}, mstatus, 8\" [sideeffect] [attdialect], $0:[regdef-ec:GPRNoX0], def early-clobber renamable $x10, implicit-def $x8_h"
+    ],
+    "error": "unknown inline assembly register or alias",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.benign_assembly",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_reserved_and_unknown_assembly_register_aliases_are_rejected"
+  },
+  {
+    "args": [
+      "INLINEASM &\"csrrci ${0}, mstatus, 8\" [sideeffect] [attdialect], $0:[regdef-ec:GPRNoX0], def early-clobber renamable $x10, implicit-def $ra"
+    ],
+    "error": "unknown inline assembly register or alias",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.benign_assembly",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_reserved_and_unknown_assembly_register_aliases_are_rejected"
+  },
+  {
+    "args": [
+      "INLINEASM &\"csrrci ${0}, mstatus, 8\" [sideeffect] [attdialect], $0:[regdef-ec:GPRNoX0], def early-clobber renamable $x10, implicit-def $s0"
+    ],
+    "error": "unknown inline assembly register or alias",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.benign_assembly",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_reserved_and_unknown_assembly_register_aliases_are_rejected"
+  },
+  {
+    "args": [
+      "INLINEASM &\"csrrci ${0}, mstatus, 8\" [sideeffect] [attdialect], $0:[regdef-ec:GPRNoX0], def early-clobber renamable $x10, implicit-def $v8"
+    ],
+    "error": "unknown inline assembly register or alias",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.benign_assembly",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_reserved_and_unknown_assembly_register_aliases_are_rejected"
+  },
+  {
+    "args": [
+      [
+        "bb.0:",
+        "  BEQ $x10, $x11, %bb.999",
+        "  PseudoRET"
+      ],
+      {
+        "size": 0
+      }
+    ],
+    "error": "explicit branch target is absent from compiler successors",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.machine_frame",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_terminal_instruction_cannot_hide_an_undeclared_branch"
+  },
+  {
+    "args": [
+      [
+        "Jump Tables:",
+        "%jump-table.0: %bb.1",
+        "bb.0:",
+        "  successors: %bb.1(0x80000000)",
+        "  BEQ $x10, $x11, %bb.999",
+        "  PseudoBRIND renamable $x10",
+        "bb.1:",
+        "  PseudoRET"
+      ],
+      {
+        "size": 0
+      }
+    ],
+    "error": "explicit branch target is absent from compiler successors",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.machine_frame",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_terminal_instruction_cannot_hide_an_undeclared_branch"
+  },
+  {
+    "args": [
+      [
+        "bb.0:",
+        "  $x2 = frame-setup ADDI $x2, -16",
+        "  STACK_SWITCH $x10",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET"
+      ],
+      {
+        "size": 16,
+        "slots": [
+          [
+            -4,
+            "Variable",
+            4,
+            4
+          ]
+        ]
+      }
+    ],
+    "error": "unsupported machine instruction: STACK_SWITCH $x10",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.machine_frame",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_unknown_instruction_and_nonstandard_helpers_are_rejected"
+  },
+  {
+    "args": [
+      [
+        "bb.0:",
+        "  $x2 = frame-setup ADDI $x2, -16",
+        "  PseudoCALL target-flags(riscv-call) &__riscv_save_12, <regmask >",
+        "  $x2 = frame-destroy ADDI $x2, 16",
+        "  PseudoRET"
+      ],
+      {
+        "size": 16,
+        "slots": [
+          [
+            -4,
+            "Variable",
+            4,
+            4
+          ]
+        ]
+      }
+    ],
+    "error": "nonstandard call/tail helper: target-flags(riscv-call) &__riscv_save_12, <regmask >",
+    "error_pattern": null,
+    "kwargs": {},
+    "op": "machine.machine_frame",
+    "test": "test_reader_frame_evidence.MachineFrameTests.test_unknown_instruction_and_nonstandard_helpers_are_rejected"
+  }
+]

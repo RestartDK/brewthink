@@ -208,7 +208,7 @@ The `grayscale-bench` Cargo feature and diagnostic stage isolate these experimen
 - [`src/display/grayscale_bench.rs`](../src/display/grayscale_bench.rs) owns the patterns and fixed command sequence.
 - [`src/x4/grayscale_bench.rs`](../src/x4/grayscale_bench.rs) owns explicit USB triggers, a five-second cooldown, a 32-attempt limit per boot, and fault latching. The `sixteen-probe` and `eight-repeat` commands share an additional one-attempt limit per boot, consumed before bus access. A failed paint blocks further paints until a deliberate reboot.
 - [`tools/grayscale-bench.py`](../tools/grayscale-bench.py) submits one command and requires its matching completion response. It does not retry or flash.
-- [`tools/test_grayscale_bench.py`](../tools/test_grayscale_bench.py) exercises the host CLI against a pseudo-terminal.
+- [`host/tests/protocol.rs`](../host/tests/protocol.rs) exercises the host CLI against a pseudo-terminal.
 
 The bench uses 20 MHz display SPI. Its four-state candidate uses a fixed 110-byte waveform-and-voltage record that matches a publicly available X4 reference and occurs verbatim in this unit's private stock backup. The record is not a waveform invented by this investigation. No private firmware dump is committed.
 

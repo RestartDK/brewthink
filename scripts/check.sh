@@ -15,12 +15,9 @@ host() {
     --features host-image-tools,device-control,device-reader,epub,web-sim \
     --lib --bin prepare-image --bin device-control --bin inspect-epub --bin inspect-device-epub \
     -- -D warnings
-  cargo build --locked --target "$HOST_TARGET" \
-    --features device-control,host-image-tools --bin device-control --bin prepare-image
-  DEVICE_CONTROL_BIN="target/$HOST_TARGET/debug/device-control" \
-  PREPARE_IMAGE_BIN="target/$HOST_TARGET/debug/prepare-image" \
-    python3 -m unittest discover -s tools -p 'test_*.py'
-  python3 -m unittest discover -s scripts -p 'test_*.py'
+  cargo fmt --manifest-path host/Cargo.toml -- --check
+  cargo test --locked --manifest-path host/Cargo.toml --target "$HOST_TARGET"
+  cargo clippy --locked --manifest-path host/Cargo.toml --target "$HOST_TARGET" --all-targets -- -D warnings
 }
 
 firmware() {

@@ -2,7 +2,7 @@
 
 ## Stack evidence is limited
 
-`scripts/check-reader-stack.py` is a regression gate for an ELF, not a whole-program worst-case stack proof. `PASS_LIMITED` means its selected frame sums fit the linked `.stack` section with the unchanged 8,192-byte allowance. The allowance does not prove that omitted work fits.
+`scripts/host-tool.sh stack` is a Rust regression gate for an ELF, not a whole-program worst-case stack proof. `PASS_LIMITED` means its selected frame sums fit the linked `.stack` section with the unchanged 8,192-byte allowance. The allowance does not prove that omitted work fits.
 
 The gate selects emitted reader-app, reader-orchestration, book-resume, device-EPUB, ZIP-stream, scratch, and bounded-layout functions, plus the reader task poll. It reports each frame, direct edge, longest selected path, and selected function not reached through those edges. The historical task/library/effect check and 4,096-byte task-frame limit remain enforced. Missing required entry symbols fail instead of silently becoming zero-byte frames.
 
@@ -35,9 +35,11 @@ Direct paths add full frames, including tail transfers, and can overcount mutual
 
 ### Fresh artifacts and image construction
 
-Run `python3 scripts/check-reader-memory.py artifacts/reader-memory-01` with a new, gitignored or external directory. The runner cleans only this package's release artifacts in the selected target directory before each link. It records source hashes, HEAD/diff, Cargo configuration, production commands, relevant environment, compiler identity, locked registry source contents, generated build/linker inputs, raw symbols/extents, complete diagnostic logs and both ELF hashes. Compiler, wrapper, and bootstrap overrides fail. Cargo configuration includes also fail rather than silently selecting an unrecorded tool. Cargo `[env]` supports only the recorded `DEFMT_LOG` setting, so configured rustup, path, and build overrides cannot change the compiler subprocess. `CARGO_HOME` must be absolute. Cached registry archives and vendored checksums are checked against `Cargo.lock`.
+Run `scripts/host-tool.sh memory artifacts/reader-memory-01` with a new, gitignored or external directory. The runner cleans only this package's release artifacts in the selected target directory before each link. It records source hashes, HEAD/diff, Cargo configuration, production commands, relevant environment, compiler identity, locked registry source contents, generated build/linker inputs, raw symbols/extents, complete diagnostic logs and both ELF hashes. Compiler, wrapper, and bootstrap overrides fail. Cargo configuration includes also fail rather than silently selecting an unrecorded tool. Cargo `[env]` supports only the recorded `DEFMT_LOG` setting, so configured rustup, path, and build overrides cannot change the compiler subprocess. `CARGO_HOME` must be absolute. Cached registry archives and vendored checksums are checked against `Cargo.lock`.
 
 The frozen `reader.elf` is read-only. After the gate passes, `verified.json` binds that ELF, `inputs.json` and `stack.json`. `--verify-elf PATH` checks this completed passing bundle without rebuilding. Missing completion, changed reports, mismatched ELFs or changed source/build inputs fail. Reusing a report directory is refused.
+
+The producer and analyzer live in the independent `host/` Cargo package. Its launcher builds only a native host executable, never the embedded runner. Evidence still binds the repository's firmware `Cargo.lock`, not the host package's dependency graph. The Rust migration changes input serialization; regenerate old evidence rather than reusing a Python-produced bundle.
 
 Both `build-reader-app1.sh` and the generic builder's `reader-app` path package this exact proved ELF, not a subsequent Cargo rebuild. They recheck the completed evidence after image generation and retain the stack report beside the image. No build command flashes hardware. Runtime integration, source changes or changed generated inputs require fresh evidence.
 
@@ -67,4 +69,4 @@ Host ZIP tests initialize poisoned storage and call `inflate` directly before th
 
 The ownership tests compile valid reuse and reject oversized, over-aligned, Drop-requiring, and overlapping-borrow examples. They never run invalid pointers or deliberately form invalid references. This is host evidence, not a Miri run or a device-stack measurement.
 
-The Python controls cover the emitted `LayoutError` formatter's conditional frame, historical overflow, exclusive branches, joins, balanced loops/calls, unknown and aliased SP writes, allocating cycles, explicit zero, malformed/duplicate records, hidden branch targets, stack-memory assembly, selected-edge retention, recursion and disconnected cycles. Producer controls reject stale/cross-ELF artifacts, altered sources, incomplete builds, changed reports, compiler-selection overrides and reused output directories.
+The Rust controls in `host/tests/` cover the emitted `LayoutError` formatter's conditional frame, historical overflow, exclusive branches, joins, balanced loops/calls, unknown and aliased SP writes, allocating cycles, explicit zero, malformed/duplicate records, hidden branch targets, stack-memory assembly, selected-edge retention, recursion and disconnected cycles. Producer controls reject stale/cross-ELF artifacts, altered sources, incomplete builds, changed reports, compiler-selection overrides and reused output directories.
