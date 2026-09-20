@@ -1,7 +1,112 @@
-use crate::{re, stack};
-use anyhow::{Result, bail, ensure};
+use crate::stack;
+use anyhow::{Context, Result, bail, ensure};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap as Map, BTreeSet as Set, VecDeque};
+use std::sync::LazyLock;
+
+static FRAME_RECORD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^note: .* prologepilog \(analysis\): (\d+) stack bytes in function '([^']+)'$")
+        .expect("valid FRAME_RECORD pattern")
+});
+static LAYOUT_HEADER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^note: .* stack-frame-layout \(analysis\):\s*$")
+        .expect("valid LAYOUT_HEADER pattern")
+});
+static LAYOUT_FUNCTION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^Function: ([^ ]+)$").expect("valid LAYOUT_FUNCTION pattern"));
+static SOURCE_LOCATION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s+[^\n]+ @ [^\n]+$").expect("valid SOURCE_LOCATION pattern"));
+static FRAME_SLOT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^Offset: \[SP([+-]\d+)\], Type: (Spill|Variable|Fixed), Align: (\d+), Size: (\d+)$",
+    )
+    .expect("valid FRAME_SLOT pattern")
+});
+static MACHINE_HEADER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^# Machine code for function ([^: ]+): (.+)$")
+        .expect("valid MACHINE_HEADER pattern")
+});
+static MACHINE_END: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^# End machine code for function ([^ ]+)\.$").expect("valid MACHINE_END pattern")
+});
+static INLINE_ASSEMBLY: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"^INLINEASM &"([^"\n]*)" (.+)$"#).expect("valid INLINE_ASSEMBLY pattern")
+});
+static ASSEMBLY_OPERAND: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\$0:\[([^]]+)\], ([^,]+)").expect("valid ASSEMBLY_OPERAND pattern")
+});
+static ASSEMBLY_REGISTER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\$([A-Za-z_][A-Za-z_0-9]*|\d+)").expect("valid ASSEMBLY_REGISTER pattern")
+});
+static GENERAL_REGISTER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^x(?:[0-9]|[12][0-9]|3[01])$").expect("valid GENERAL_REGISTER pattern")
+});
+static NUMBERED_REGISTER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\$x(\d+)\b").expect("valid NUMBERED_REGISTER pattern"));
+static RESERVED_ASSEMBLY_REGISTER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\$(?:sp|ra|fp|x2_\w+|x8_\w+)\b").expect("valid RESERVED_ASSEMBLY_REGISTER pattern")
+});
+static EXTRA_ASSEMBLY_OPERAND: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\$([1-9]\d*):\[([^]]*)\]").expect("valid EXTRA_ASSEMBLY_OPERAND pattern")
+});
+static ASSEMBLY_CLOBBER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[clobber\], implicit-def early-clobber (\$\w+)")
+        .expect("valid ASSEMBLY_CLOBBER pattern")
+});
+static BLOCK_TARGET: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"%bb\.(\d+)").expect("valid BLOCK_TARGET pattern"));
+static FUNCTION_LIVE_INS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^Function Live Ins: (?:\$x\d+(?: in %\d+)?(?:, )?)+$")
+        .expect("valid FUNCTION_LIVE_INS pattern")
+});
+static FRAME_OBJECT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^  fi#(-?\d+): (?:dead|size=(\d+), align=(\d+), at location \[SP([+-]\d+)\])$")
+        .expect("valid FRAME_OBJECT pattern")
+});
+static JUMP_TABLE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^%jump-table\.(\d+): ((?:%bb\.\d+ ?)+)$").expect("valid JUMP_TABLE pattern")
+});
+static BLOCK_HEADER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^bb\.(\d+)(?: \([^\n]+\))?:$").expect("valid BLOCK_HEADER pattern")
+});
+static BLOCK_LIVE_INS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^  liveins: \$x\d+(?:, \$x\d+)*$").expect("valid BLOCK_LIVE_INS pattern")
+});
+static BLOCK_SUCCESSORS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^  successors: %bb\.\d+\(0x[0-9a-f]+\)(?:, %bb\.\d+\(0x[0-9a-f]+\))*(?:;.*)?$")
+        .expect("valid BLOCK_SUCCESSORS pattern")
+});
+static MACHINE_INSTRUCTION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:(.*?) = )?((?:(?:frame-setup|frame-destroy|nuw|nsw|disjoint|exact|samesign) )*)(\w+)(?: (.*))?$").expect("valid MACHINE_INSTRUCTION pattern")
+});
+static REGISTER_DEFINITION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:renamable )?\$x(?:[0-9]|[12][0-9]|3[01])$")
+        .expect("valid REGISTER_DEFINITION pattern")
+});
+static STACK_ADJUSTMENT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\$x2, (-?\d+)$").expect("valid STACK_ADJUSTMENT pattern"));
+static STACK_POINTER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\$x2\b").expect("valid STACK_POINTER pattern"));
+static IMPLICIT_STACK_DEFINITION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?:implicit-def|\bdef\b)[^,]*\$(?:x2|sp)(?:\b|_)")
+        .expect("valid IMPLICIT_STACK_DEFINITION pattern")
+});
+static CALL_STACK_DEFINITION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"implicit-def[^,]*\$x2\b").expect("valid CALL_STACK_DEFINITION pattern")
+});
+static CALLEE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^target-flags\(riscv-call\) [@&]([^ ,]+), <regmask ")
+        .expect("valid CALLEE pattern")
+});
+static NONSTANDARD_CALLEE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?:__riscv_(?:save|restore)|morestack|longjmp|setjmp|swapcontext)")
+        .expect("valid NONSTANDARD_CALLEE pattern")
+});
+static INDIRECT_REGISTER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:killed )?(?:renamable )?\$x(\d+)(?:, |$)")
+        .expect("valid INDIRECT_REGISTER pattern")
+});
 
 pub const PROPERTIES: &str =
     "NoPHIs, TracksLiveness, NoVRegs, TiedOpsRewritten, TracksDebugUserValues";
@@ -36,6 +141,37 @@ pub struct Proof {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub callees: Vec<String>,
 }
+#[derive(Debug, Serialize)]
+pub struct FrameReport {
+    pub size: u64,
+    pub indirect: Vec<(String, String)>,
+    pub calls: Vec<String>,
+    pub blocks: usize,
+    pub assembly: Map<String, usize>,
+    pub callees: Vec<String>,
+}
+impl From<Proof> for FrameReport {
+    fn from(proof: Proof) -> Self {
+        let Proof {
+            size,
+            sp_writes: _,
+            indirect,
+            calls,
+            blocks,
+            assembly,
+            callees,
+        } = proof;
+        Self {
+            size,
+            indirect,
+            calls,
+            blocks,
+            assembly,
+            callees,
+        }
+    }
+}
+
 fn valid_lines(lines: &[String]) -> Result<()> {
     ensure!(
         lines
@@ -60,22 +196,19 @@ pub fn frame_records(source: &[String], selected: &Set<String>) -> Result<Map<St
         let line = line.trim_end_matches('\n');
         let stripped = line.trim();
         if line.contains("prologepilog (analysis)") {
-            let m = re(
-                r"^note: .* prologepilog \(analysis\): (\d+) stack bytes in function '([^']+)'$",
-            )
-            .captures(stripped)
-            .ok_or_else(|| anyhow::anyhow!("malformed fixed-frame record"))?;
+            let m = FRAME_RECORD
+                .captures(stripped)
+                .ok_or_else(|| anyhow::anyhow!("malformed fixed-frame record"))?;
             unique(&mut frames, m[2].to_owned(), m[1].parse::<u64>()?)?;
         } else if line.contains("stack-frame-layout (analysis)") {
             ensure!(
-                re(r"^note: .* stack-frame-layout \(analysis\):\s*$").is_match(stripped)
-                    && !awaiting,
+                LAYOUT_HEADER.is_match(stripped) && !awaiting,
                 "malformed layout record"
             );
             awaiting = true;
             layout = None;
         } else if awaiting {
-            let m = re(r"^Function: ([^ ]+)$")
+            let m = LAYOUT_FUNCTION
                 .captures(stripped)
                 .ok_or_else(|| anyhow::anyhow!("missing layout function"))?;
             layout = Some(m[1].into());
@@ -86,11 +219,13 @@ pub fn frame_records(source: &[String], selected: &Set<String>) -> Result<Map<St
                 layout = None;
             } else if line.starts_with("    ") && !line.contains("Offset:") {
                 ensure!(
-                    re(r"^\s+[^\n]+ @ [^\n]+$").is_match(line),
+                    SOURCE_LOCATION.is_match(line),
                     "malformed layout source location"
                 );
             } else {
-                let m=re(r"^Offset: \[SP([+-]\d+)\], Type: (Spill|Variable|Fixed), Align: (\d+), Size: (\d+)$").captures(stripped).ok_or_else(||anyhow::anyhow!("unsupported frame slot: {stripped}"))?;
+                let m = FRAME_SLOT
+                    .captures(stripped)
+                    .ok_or_else(|| anyhow::anyhow!("unsupported frame slot: {stripped}"))?;
                 layouts.get_mut(&name).unwrap().push((
                     m[1].parse()?,
                     m[2].into(),
@@ -142,7 +277,7 @@ pub fn machine_records(
             ensure!(name.is_none(), "interleaved machine records");
             marker = true;
         } else if line.starts_with("# Machine code for function ") {
-            let m = re(r"^# Machine code for function ([^: ]+): (.+)$")
+            let m = MACHINE_HEADER
                 .captures(line)
                 .ok_or_else(|| anyhow::anyhow!("malformed/unbound machine header"))?;
             ensure!(name.is_none() && marker, "malformed/unbound machine header");
@@ -155,7 +290,7 @@ pub fn machine_records(
             bytes = 0;
             marker = false;
         } else if line.starts_with("# End machine code for function ") {
-            let m = re(r"^# End machine code for function ([^ ]+)\.$")
+            let m = MACHINE_END
                 .captures(line)
                 .ok_or_else(|| anyhow::anyhow!("malformed/mismatched machine end"))?;
             ensure!(
@@ -182,7 +317,7 @@ pub fn machine_records(
     Ok(records)
 }
 pub fn benign_assembly(text: &str) -> Result<String> {
-    let m = re(r#"^INLINEASM &"([^"\n]*)" (.+)$"#)
+    let m = INLINE_ASSEMBLY
         .captures(text)
         .ok_or_else(|| anyhow::anyhow!("opaque inline assembly is not a fixed-frame proof"))?;
     let template = &m[1];
@@ -192,22 +327,22 @@ pub fn benign_assembly(text: &str) -> Result<String> {
         "csrrs x0, 0x300, ${0}" | "csrs mstatus, ${0}" => "reguse",
         _ => bail!("opaque inline assembly is not a fixed-frame proof"),
     };
-    let operand = re(r"\$0:\[([^]]+)\], ([^,]+)")
+    let operand = ASSEMBLY_OPERAND
         .captures(operands)
         .ok_or_else(|| anyhow::anyhow!("unsupported inline assembly operands"))?;
     ensure!(
         operand[1] == format!("{role}:GPRNoX0"),
         "unsupported inline assembly operands"
     );
-    for m in re(r"\$([A-Za-z_][A-Za-z_0-9]*|\d+)").captures_iter(operands) {
+    for m in ASSEMBLY_REGISTER.captures_iter(operands) {
         ensure!(
             ["vl", "vtype"].contains(&&m[1])
                 || m[1].chars().all(|c| c.is_ascii_digit())
-                || re(r"^x(?:[0-9]|[12][0-9]|3[01])$").is_match(&m[1]),
+                || GENERAL_REGISTER.is_match(&m[1]),
             "unknown inline assembly register or alias"
         );
     }
-    let registers: Vec<_> = re(r"\$x(\d+)\b")
+    let registers: Vec<_> = NUMBERED_REGISTER
         .captures_iter(operands)
         .map(|m| m[1].parse::<usize>().unwrap())
         .collect();
@@ -219,16 +354,16 @@ pub fn benign_assembly(text: &str) -> Result<String> {
         "reserved register in inline assembly"
     );
     ensure!(
-        !re(r"\$(?:sp|ra|fp|x2_\w+|x8_\w+)\b").is_match(operands),
+        !RESERVED_ASSEMBLY_REGISTER.is_match(operands),
         "stack/register alias in inline assembly"
     );
-    for m in re(r"\$([1-9]\d*):\[([^]]*)\]").captures_iter(operands) {
+    for m in EXTRA_ASSEMBLY_OPERAND.captures_iter(operands) {
         ensure!(
             ["clobber", "reguse tiedto:$0"].contains(&&m[2]),
             "unexpected inline assembly operand"
         );
     }
-    for m in re(r"\[clobber\], implicit-def early-clobber (\$\w+)").captures_iter(operands) {
+    for m in ASSEMBLY_CLOBBER.captures_iter(operands) {
         ensure!(
             ["$vtype", "$vl"].contains(&&m[1]),
             "unsupported inline assembly clobber"
@@ -245,10 +380,10 @@ struct Block {
     instructions: Vec<MachineInstruction>,
     successors: Option<Set<u32>>,
 }
-fn block_targets(text: &str) -> Set<u32> {
-    re(r"%bb\.(\d+)")
+fn block_targets(text: &str) -> Result<Set<u32>> {
+    BLOCK_TARGET
         .captures_iter(text)
-        .map(|m| m[1].parse().unwrap())
+        .map(|m| m[1].parse().context("invalid machine block target"))
         .collect()
 }
 pub fn machine_frame(body: &[String], record: &Frame) -> Result<Proof> {
@@ -273,16 +408,14 @@ pub fn machine_frame(body: &[String], record: &Frame) -> Result<Proof> {
                 "Jump Tables:",
             ]
             .contains(&line.as_str())
-            || re(r"^Function Live Ins: (?:\$x\d+(?: in %\d+)?(?:, )?)+$").is_match(line)
+            || FUNCTION_LIVE_INS.is_match(line)
         {
             continue;
         }
         if line.starts_with("  fi#") {
-            let m = re(
-                r"^  fi#(-?\d+): (?:dead|size=(\d+), align=(\d+), at location \[SP([+-]\d+)\])$",
-            )
-            .captures(line)
-            .ok_or_else(|| anyhow::anyhow!("unsupported/duplicate machine frame object"))?;
+            let m = FRAME_OBJECT
+                .captures(line)
+                .ok_or_else(|| anyhow::anyhow!("unsupported/duplicate machine frame object"))?;
             ensure!(
                 object_ids.insert(m[1].to_owned()),
                 "unsupported/duplicate machine frame object"
@@ -301,14 +434,14 @@ pub fn machine_frame(body: &[String], record: &Frame) -> Result<Proof> {
             continue;
         }
         if line.starts_with("%jump-table.") {
-            let m = re(r"^%jump-table\.(\d+): ((?:%bb\.\d+ ?)+)$")
+            let m = JUMP_TABLE
                 .captures(line)
                 .ok_or_else(|| anyhow::anyhow!("malformed machine jump table"))?;
-            unique(&mut tables, m[1].to_owned(), block_targets(&m[2]))?;
+            unique(&mut tables, m[1].to_owned(), block_targets(&m[2])?)?;
             continue;
         }
         if line.starts_with("bb.") {
-            let m = re(r"^bb\.(\d+)(?: \([^\n]+\))?:$")
+            let m = BLOCK_HEADER
                 .captures(line)
                 .ok_or_else(|| anyhow::anyhow!("unsupported machine block header"))?;
             let id = m[1].parse::<u32>()?;
@@ -330,15 +463,15 @@ pub fn machine_frame(body: &[String], record: &Frame) -> Result<Proof> {
             )
             .unwrap();
         if line.starts_with("  liveins: ") {
-            ensure!(
-                re(r"^  liveins: \$x\d+(?:, \$x\d+)*$").is_match(line),
-                "unsupported block liveins"
-            );
+            ensure!(BLOCK_LIVE_INS.is_match(line), "unsupported block liveins");
             continue;
         }
         if line.starts_with("  successors: ") {
-            ensure!(block.successors.is_none()&&re(r"^  successors: %bb\.\d+\(0x[0-9a-f]+\)(?:, %bb\.\d+\(0x[0-9a-f]+\))*(?:;.*)?$").is_match(line),"malformed/duplicate machine successors");
-            block.successors = Some(block_targets(line.split(';').next().unwrap()));
+            ensure!(
+                block.successors.is_none() && BLOCK_SUCCESSORS.is_match(line),
+                "malformed/duplicate machine successors"
+            );
+            block.successors = Some(block_targets(line.split(';').next().unwrap())?);
             continue;
         }
         let text = line
@@ -356,7 +489,9 @@ pub fn machine_frame(body: &[String], record: &Frame) -> Result<Proof> {
             line.starts_with("  ") && !line.starts_with("    "),
             "unparsed machine instruction"
         );
-        let m=re(r"^(?:(.*?) = )?((?:(?:frame-setup|frame-destroy|nuw|nsw|disjoint|exact|samesign) )*)(\w+)(?: (.*))?$").captures(text).ok_or_else(||anyhow::anyhow!("unsupported machine instruction: {text}"))?;
+        let m = MACHINE_INSTRUCTION
+            .captures(text)
+            .ok_or_else(|| anyhow::anyhow!("unsupported machine instruction: {text}"))?;
         let destination = m.get(1).map(|v| v.as_str());
         let flags = &m[2];
         let opcode = &m[3];
@@ -369,13 +504,12 @@ pub fn machine_frame(body: &[String], record: &Frame) -> Result<Proof> {
             continue;
         }
         ensure!(
-            destination
-                .is_none_or(|d| re(r"^(?:renamable )?\$x(?:[0-9]|[12][0-9]|3[01])$").is_match(d)),
+            destination.is_none_or(|d| REGISTER_DEFINITION.is_match(d)),
             "unsupported machine register definition"
         );
         let mut delta = 0;
         if destination == Some("$x2") {
-            let adjustment = re(r"^\$x2, (-?\d+)$")
+            let adjustment = STACK_ADJUSTMENT
                 .captures(operands)
                 .ok_or_else(|| anyhow::anyhow!("unproved machine SP adjustment"))?;
             ensure!(opcode == "ADDI", "unproved machine SP adjustment");
@@ -395,11 +529,11 @@ pub fn machine_frame(body: &[String], record: &Frame) -> Result<Proof> {
             );
             delta = -amount;
             *proof.sp_writes.entry(amount).or_default() += 1;
-        } else if destination.is_some_and(|d| re(r"\$x2\b").is_match(d)) {
+        } else if destination.is_some_and(|d| STACK_POINTER.is_match(d)) {
             bail!("aliased SP write")
         }
-        if re(r"(?:implicit-def|\bdef\b)[^,]*\$(?:x2|sp)(?:\b|_)").is_match(operands) {
-            let defs: Vec<_> = re(r"implicit-def[^,]*\$x2\b")
+        if IMPLICIT_STACK_DEFINITION.is_match(operands) {
+            let defs: Vec<_> = CALL_STACK_DEFINITION
                 .find_iter(operands)
                 .map(|m| m.as_str())
                 .collect();
@@ -412,18 +546,17 @@ pub fn machine_frame(body: &[String], record: &Frame) -> Result<Proof> {
             *proof.assembly.entry(benign_assembly(text)?).or_default() += 1;
         }
         if ["PseudoCALL", "PseudoTAIL"].contains(&opcode) {
-            let callee = re(r"^target-flags\(riscv-call\) [@&]([^ ,]+), <regmask ")
+            let callee = CALLEE
                 .captures(operands)
                 .ok_or_else(|| anyhow::anyhow!("nonstandard call/tail helper"))?;
             ensure!(
-                !re(r"(?:__riscv_(?:save|restore)|morestack|longjmp|setjmp|swapcontext)")
-                    .is_match(&callee[1]),
+                !NONSTANDARD_CALLEE.is_match(&callee[1]),
                 "nonstandard call/tail helper"
             );
             calls.insert(callee[1].to_owned());
         }
         if ["PseudoBRIND", "PseudoTAILIndirect"].contains(&opcode) {
-            let target = re(r"^(?:killed )?(?:renamable )?\$x(\d+)(?:, |$)")
+            let target = INDIRECT_REGISTER
                 .captures(operands)
                 .ok_or_else(|| anyhow::anyhow!("unsupported indirect transfer register"))?;
             let reg = target[1].parse::<usize>()?;
@@ -441,7 +574,7 @@ pub fn machine_frame(body: &[String], record: &Frame) -> Result<Proof> {
             opcode: opcode.into(),
             delta,
             targets: if BRANCHES.contains(&opcode) {
-                block_targets(operands)
+                block_targets(operands)?
             } else {
                 Set::new()
             },
@@ -539,8 +672,17 @@ pub fn corroborate(
     stack::frame_cfg(&parsed, transfers)?;
     let mut writes = Map::new();
     let mut indirect = vec![];
-    for (address, op, args, target) in parsed {
-        if !stack::NO_DESTINATION.contains(&op.as_str()) && ["sp", "x2"].contains(&args[0].as_str())
+    for stack::Instruction {
+        address,
+        opcode: op,
+        operands: args,
+        target,
+    } in parsed
+    {
+        if !stack::NO_DESTINATION.contains(&op.as_str())
+            && args
+                .first()
+                .is_some_and(|arg| ["sp", "x2"].contains(&arg.as_str()))
         {
             ensure!(
                 op == "addi" && ["sp", "x2"].contains(&args[1].as_str()),
@@ -576,14 +718,15 @@ pub fn corroborate(
             measured == proof.size,
             "successful disassembly frame contradicts compiler size"
         ),
-        Err(e) => {
-            let text = e.to_string();
-            if !text.starts_with("unreachable stack write has no frame proof")
-                && !text.starts_with("unresolved in-frame transfer")
-            {
-                return Err(e);
-            }
-        }
+        Err(error)
+            if matches!(
+                error.downcast_ref::<stack::StackFrameError>(),
+                Some(
+                    stack::StackFrameError::UnreachableStackWrite { .. }
+                        | stack::StackFrameError::UnresolvedTransfer { .. }
+                )
+            ) => {}
+        Err(error) => return Err(error),
     }
     Ok(indirect
         .into_iter()

@@ -1,8 +1,38 @@
-use crate::{number, re};
+use crate::number;
 use anyhow::{Result, ensure};
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use regex::Regex;
+use serde::Serialize;
+use std::sync::LazyLock;
+
+mod report;
+pub use report::{
+    EntryFrames, FrontierSite, FrontierTransfer, HexAddress, Measurements, Outcome, StackReport,
+    Verdict,
+};
 use std::collections::{BTreeMap as Map, BTreeSet as Set, VecDeque};
+
+static INSTRUCTION_LINE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\s*([0-9a-f]+):\s+([a-z][a-z0-9.]*)\s*(.*)")
+        .expect("valid INSTRUCTION_LINE pattern")
+});
+static SYMBOL_TARGET: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r" <(.+)>$").expect("valid SYMBOL_TARGET pattern"));
+static INSTRUCTION_ADDRESS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*[0-9a-f]+:").expect("valid INSTRUCTION_ADDRESS pattern"));
+static ABSOLUTE_ADDRESS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^0x[0-9a-f]+$").expect("valid ABSOLUTE_ADDRESS pattern"));
+static PC_RELATIVE_OPERAND: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(-?0x[0-9a-f]+)\((\w+)\)$").expect("valid PC_RELATIVE_OPERAND pattern")
+});
+static SAVED_REGISTER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^s(?:[0-9]|1[01])$").expect("valid SAVED_REGISTER pattern"));
+static MEMORY_OPERAND: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(-?0x[0-9a-f]+|[0-9]+)\((\w+)\)$").expect("valid MEMORY_OPERAND pattern")
+});
+static FUNCTION_HEADER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^([0-9a-f]+) <(.+)>:$").expect("valid FUNCTION_HEADER pattern"));
+static SYMBOL_OFFSET: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\+0x[0-9a-f]+$").expect("valid SYMBOL_OFFSET pattern"));
 
 pub const TASK: &str = "brewthink::x4::reader_app::__reader_app_task_task::__reader_app_task_task_inner_function::{closure#0}";
 pub const LIBRARY: &str = "brewthink::x4::reader_app::load_library";
@@ -32,35 +62,65 @@ const DESTINATION: &[&str] = &[
     "srli", "sub", "xor", "xori", "zext.b", "zext.h", "sext.b", "sext.h", "csrr", "csrrc",
     "csrrci", "csrrs", "csrrsi", "csrrw", "csrrwi",
 ];
-pub type Instruction = (u32, String, Vec<String>, Option<String>);
+#[derive(Debug, Serialize)]
+pub struct Instruction {
+    pub(crate) address: u32,
+    pub(crate) opcode: String,
+    pub(crate) operands: Vec<String>,
+    pub(crate) target: Option<String>,
+}
 pub type Functions = Map<String, Vec<String>>;
 pub type Transfers = Map<u32, Set<u32>>;
 pub type Registers = Map<String, Set<u32>>;
 pub type Sections = Vec<(u32, Vec<u8>)>;
 pub type Edges = Map<String, Set<String>>;
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TransferEvidence(pub Transfers, pub Transfers);
+#[derive(Debug)]
+pub struct TransferEvidence {
+    pub complete: Transfers,
+    pub discovered: Transfers,
+}
 
 pub fn instructions(body: &[String]) -> Result<Vec<Instruction>> {
     let mut parsed = vec![];
     for line in body {
-        if let Some(m) = re(r"^\s*([0-9a-f]+):\s+([a-z][a-z0-9.]*)\s*(.*)").captures(line) {
+        if let Some(m) = INSTRUCTION_LINE.captures(line) {
             let mut operands = m[3].to_owned();
-            let target = re(r" <(.+)>$")
+            let target = SYMBOL_TARGET
                 .captures(&operands)
                 .map(|a| (a.get(0).unwrap().start(), a[1].to_owned()));
             if let Some((start, _)) = &target {
                 operands.truncate(*start);
             }
-            parsed.push((
-                u32::from_str_radix(&m[1], 16)?,
-                m[2].into(),
-                operands.split(',').map(|s| s.trim().into()).collect(),
-                target.map(|(_, t)| t),
-            ));
+            let args: Vec<String> = if operands.trim().is_empty() {
+                vec![]
+            } else {
+                operands.split(',').map(|s| s.trim().into()).collect()
+            };
+            let minimum = match &m[2] {
+                "li" | "lui" | "auipc" | "mv" | "neg" | "not" | "seqz" | "sgtz" | "sltz"
+                | "snez" | "zext.b" | "zext.h" | "sext.b" | "sext.h" | "csrr" | "lw" | "lh"
+                | "lhu" | "lb" | "lbu" | "beqz" | "bnez" | "blez" | "bgez" | "bltz" | "bgtz"
+                | "sw" | "sh" | "sb" | "fsw" | "fsd" | "csrc" | "csrs" | "csrw" | "csrci"
+                | "csrsi" | "csrwi" => 2,
+                "jal" | "jalr" | "j" | "jr" | "call" | "tail" => 1,
+                op if DESTINATION.contains(&op) || BRANCHES.contains(&op) => 3,
+                _ => 0,
+            };
+            ensure!(
+                minimum == 0 || (args.len() >= minimum && args.iter().all(|arg| !arg.is_empty())),
+                "unsupported operands at {}: {}",
+                &m[1],
+                &m[2]
+            );
+            parsed.push(Instruction {
+                address: u32::from_str_radix(&m[1], 16)?,
+                opcode: m[2].into(),
+                operands: args,
+                target: target.map(|(_, t)| t),
+            });
         } else {
             ensure!(
-                !re(r"^\s*[0-9a-f]+:").is_match(line),
+                !INSTRUCTION_ADDRESS.is_match(line),
                 "unparsed instruction: {line}"
             );
         }
@@ -82,26 +142,40 @@ pub fn is_call(op: &str, args: &[String]) -> bool {
 }
 fn direct(args: &[String]) -> Option<u32> {
     args.iter()
-        .find(|a| re(r"^0x[0-9a-f]+$").is_match(a))
+        .find(|a| ABSOLUTE_ADDRESS.is_match(a))
         .and_then(|a| u32::from_str_radix(&a[2..], 16).ok())
 }
 pub fn frame_cfg(
     parsed: &[Instruction],
     transfers: &Transfers,
 ) -> Result<(Vec<Vec<usize>>, Set<usize>)> {
-    let addresses: Map<_, _> = parsed.iter().enumerate().map(|(i, p)| (p.0, i)).collect();
+    ensure!(!parsed.is_empty(), "empty disassembly body");
+    let addresses: Map<_, _> = parsed
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.address, i))
+        .collect();
     ensure!(
         addresses.len() == parsed.len(),
         "duplicate instruction address"
     );
     let targets: Set<_> = parsed
         .iter()
-        .filter(|p| control_flow(&p.1))
-        .filter_map(|p| direct(&p.2))
+        .filter(|p| control_flow(&p.opcode))
+        .filter_map(|p| direct(&p.operands))
         .collect();
     let mut successors = vec![];
     let mut unresolved = Set::new();
-    for (i, (address, op, args, _)) in parsed.iter().enumerate() {
+    for (
+        i,
+        Instruction {
+            address,
+            opcode: op,
+            operands: args,
+            ..
+        },
+    ) in parsed.iter().enumerate()
+    {
         let following = if i + 1 < parsed.len() {
             vec![i + 1]
         } else {
@@ -135,9 +209,14 @@ pub fn frame_cfg(
             if destination.is_none()
                 && i > 0
                 && !targets.contains(address)
-                && let Some(m) = re(r"^(-?0x[0-9a-f]+)\((\w+)\)$").captures(args.last().unwrap())
+                && let Some(m) = PC_RELATIVE_OPERAND.captures(args.last().unwrap())
             {
-                let (prev, pop, pa, _) = &parsed[i - 1];
+                let Instruction {
+                    address: prev,
+                    opcode: pop,
+                    operands: pa,
+                    ..
+                } = &parsed[i - 1];
                 if pop == "auipc" && pa[0] == m[2] {
                     destination = Some(
                         (i64::from(*prev) + (number(&pa[1])? << 12) as i32 as i64 + number(&m[1])?)
@@ -156,7 +235,7 @@ pub fn frame_cfg(
                         branches.push(*child);
                     } else {
                         ensure!(
-                            d < parsed[0].0 || d > parsed.last().unwrap().0,
+                            d < parsed[0].address || d > parsed.last().unwrap().address,
                             "branch into an unparsed instruction at {address:x}"
                         );
                     }
@@ -246,7 +325,7 @@ fn register_values(
     if is_call(op, args) {
         return Ok(regs
             .iter()
-            .filter(|(n, _)| n.as_str() == "zero" || re(r"^s(?:[0-9]|1[01])$").is_match(n))
+            .filter(|(n, _)| n.as_str() == "zero" || SAVED_REGISTER.is_match(n))
             .map(|(n, v)| (n.clone(), v.clone()))
             .collect());
     }
@@ -263,7 +342,7 @@ fn register_values(
             ])
         }
         "lw" | "lbu" | "lb" | "lhu" | "lh" => {
-            if let Some(m) = re(r"^(-?0x[0-9a-f]+|[0-9]+)\((\w+)\)$").captures(&args[1]) {
+            if let Some(m) = MEMORY_OPERAND.captures(&args[1]) {
                 let offset = number(&m[1])?;
                 let addresses = regs
                     .get(&m[2])
@@ -394,7 +473,12 @@ pub fn resolve_transfers(parsed: &[Instruction], sections: &Sections) -> Result<
         let mut queued = Set::from([0]);
         while let Some(i) = pending.pop_front() {
             queued.remove(&i);
-            let (address, op, args, _) = &parsed[i];
+            let Instruction {
+                address,
+                opcode: op,
+                operands: args,
+                ..
+            } = &parsed[i];
             let outgoing = register_values(*address, op, args, &envs[&i], sections)?;
             for child in &successors[i] {
                 let values = if successors[i].iter().filter(|v| *v == child).count() > 1 {
@@ -426,12 +510,20 @@ pub fn resolve_transfers(parsed: &[Instruction], sections: &Sections) -> Result<
         }
         let mut complete = Transfers::new();
         let mut changed = false;
-        for (i, (address, _, args, _)) in parsed.iter().enumerate() {
+        for (
+            i,
+            Instruction {
+                address,
+                operands: args,
+                ..
+            },
+        ) in parsed.iter().enumerate()
+        {
             let Some(env) = envs.get(&i) else { continue };
             if !unresolved.contains(&i) && !transfers.contains_key(address) {
                 continue;
             }
-            let m = re(r"^(-?0x[0-9a-f]+|[0-9]+)\((\w+)\)$").captures(args.last().unwrap());
+            let m = MEMORY_OPERAND.captures(args.last().unwrap());
             let (register, offset) = if let Some(ref m) = m {
                 (&m[2], number(&m[1])?)
             } else {
@@ -458,17 +550,45 @@ pub fn resolve_transfers(parsed: &[Instruction], sections: &Sections) -> Result<
             }
         }
         if !changed {
-            return Ok(TransferEvidence(complete, transfers));
+            return Ok(TransferEvidence {
+                complete,
+                discovered: transfers,
+            });
         }
     }
 }
+#[derive(Debug, PartialEq, Eq)]
+pub enum StackFrameError {
+    UnreachableStackWrite { address: u32 },
+    UnresolvedTransfer { address: u32 },
+}
+impl std::fmt::Display for StackFrameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnreachableStackWrite { address } => write!(
+                f,
+                "unreachable stack write has no frame proof at {address:x}"
+            ),
+            Self::UnresolvedTransfer { address } => write!(
+                f,
+                "unresolved in-frame transfer at {address:x}; internal targets require proof"
+            ),
+        }
+    }
+}
+impl std::error::Error for StackFrameError {}
+
 pub fn stack_frame(body: &[String], transfers: &Transfers) -> Result<u64> {
     let parsed = instructions(body)?;
     let (successors, unresolved) = frame_cfg(&parsed, transfers)?;
     let mut constants_at = Map::from([(0, Map::from([("zero".into(), 0)]))]);
     let mut pending = VecDeque::from([0]);
     while let Some(i) = pending.pop_front() {
-        let (_, op, args, _) = &parsed[i];
+        let Instruction {
+            opcode: op,
+            operands: args,
+            ..
+        } = &parsed[i];
         let outgoing = constants(op, args, &constants_at[&i])?;
         for child in &successors[i] {
             let joined = if let Some(previous) = constants_at.get(child) {
@@ -487,13 +607,26 @@ pub fn stack_frame(body: &[String], transfers: &Transfers) -> Result<u64> {
         }
     }
     let mut deltas = vec![0i64; parsed.len()];
-    for (i, (address, op, args, _)) in parsed.iter().enumerate() {
-        if NO_DESTINATION.contains(&op.as_str()) || !["sp", "x2"].contains(&args[0].as_str()) {
+    for (
+        i,
+        Instruction {
+            address,
+            opcode: op,
+            operands: args,
+            ..
+        },
+    ) in parsed.iter().enumerate()
+    {
+        if NO_DESTINATION.contains(&op.as_str())
+            || !args
+                .first()
+                .is_some_and(|arg| ["sp", "x2"].contains(&arg.as_str()))
+        {
             continue;
         }
-        let regs = constants_at.get(&i).ok_or_else(|| {
-            anyhow::anyhow!("unreachable stack write has no frame proof at {address:x}")
-        })?;
+        let regs = constants_at
+            .get(&i)
+            .ok_or(StackFrameError::UnreachableStackWrite { address: *address })?;
         let delta = if ["addi", "add", "sub", "mv"].contains(&op.as_str()) && args[1] == "sp" {
             match op.as_str() {
                 "mv" => Some(0),
@@ -536,15 +669,14 @@ pub fn stack_frame(body: &[String], transfers: &Transfers) -> Result<u64> {
     }
     ensure!(settled, "unbounded or inconsistent stack-depth cycle");
     for (i, (low, high)) in depths {
-        let address = parsed[i].0;
+        let address = parsed[i].address;
         ensure!(
             low + deltas[i] >= 0 && high + deltas[i] < 1 << 31,
             "stack depth outside supported entry-relative range at {address:x}"
         );
-        ensure!(
-            !unresolved.contains(&i) || (low, high) == (0, 0),
-            "unresolved in-frame transfer at {address:x}; internal targets require proof"
-        );
+        if unresolved.contains(&i) && (low, high) != (0, 0) {
+            return Err(StackFrameError::UnresolvedTransfer { address }.into());
+        }
     }
     Ok(maximum as u64)
 }
@@ -671,7 +803,7 @@ pub fn functions_from(disassembly: &str, extents: &Map<u32, u32>) -> Result<Func
     let mut owner_start = 0;
     let mut owner_end = None;
     for line in disassembly.lines() {
-        if let Some(m) = re(r"^([0-9a-f]+) <(.+)>:$").captures(line) {
+        if let Some(m) = FUNCTION_HEADER.captures(line) {
             let start = u32::from_str_radix(&m[1], 16)?;
             if owner_end.is_some_and(|end| owner_start < start && start < end)
                 && !extents.contains_key(&start)
@@ -721,37 +853,34 @@ pub fn reader_symbols(functions: &Functions) -> Result<String> {
     }
     Ok(polls[0].clone())
 }
-pub fn check(frames: &Map<String, u64>, available: u64) -> Result<u64> {
-    let required = frames["task"] + frames["library"].max(frames["effects"]) + RESERVE;
-    ensure!(
-        frames["task"] <= 4096 && required <= available,
-        "reader stack budget exceeded: required={required}, available={available}"
-    );
-    Ok(required)
-}
-
 pub fn direct_graph(
     functions: &Functions,
     selected: &Set<String>,
     transfers: &Map<String, Transfers>,
     discovered: &Map<String, Transfers>,
-) -> Result<(Edges, Vec<Value>)> {
+) -> Result<(Edges, Vec<FrontierSite>)> {
     let mut edges: Edges = selected.iter().map(|s| (s.clone(), Set::new())).collect();
     let mut frontier = vec![];
     let mut entries = Map::new();
     for name in selected {
-        entries.insert(instructions(&functions[name])?[0].0, name.clone());
+        entries.insert(instructions(&functions[name])?[0].address, name.clone());
     }
     for name in selected {
         let body = instructions(&functions[name])?;
-        for (address, op, args, target) in &body {
+        for Instruction {
+            address,
+            opcode: op,
+            operands: args,
+            target,
+        } in &body
+        {
             if !control_flow(op) || op == "ret" || (op == "jr" && args == &["ra"]) {
                 continue;
             }
             if (BRANCHES.contains(&op.as_str()) || ["j", "jal", "tail"].contains(&op.as_str()))
                 && let Some(d) = direct(args)
             {
-                if body[0].0 <= d && d <= body.last().unwrap().0 && !is_call(op, args) {
+                if body[0].address <= d && d <= body.last().unwrap().address && !is_call(op, args) {
                     continue;
                 }
                 if let Some(callee) = entries.get(&d) {
@@ -762,37 +891,59 @@ pub fn direct_graph(
             if target.is_none() {
                 if let Some(targets) = transfers.get(name).and_then(|m| m.get(address)) {
                     for d in targets {
-                        if body[0].0 <= *d && *d <= body.last().unwrap().0 {
+                        if body[0].address <= *d && *d <= body.last().unwrap().address {
                             continue;
                         }
                         let callee = entries.get(d);
                         if let Some(callee) = callee {
                             edges.get_mut(name).unwrap().insert(callee.clone());
                         } else {
-                            frontier.push(json!({"caller":name,"address":format!("0x{address:x}"),"kind":"computed-external-target","target":format!("0x{d:x}"),"symbol":callee}));
+                            frontier.push(FrontierSite {
+                                caller: name.clone(),
+                                address: HexAddress(*address),
+                                transfer: FrontierTransfer::ComputedExternalTarget {
+                                    target: HexAddress(*d),
+                                    symbol: callee.cloned(),
+                                },
+                            });
                         }
                     }
                     continue;
                 }
-                frontier.push(json!({"caller":name,"address":format!("0x{address:x}"),"kind":if ["unimp","ebreak"].contains(&op.as_str()){"exception-transfer"}else{"unresolved-transfer"},"instruction":format!("{op} {}",args.join(", "))}));
+                let instruction = format!("{op} {}", args.join(", "));
+                frontier.push(FrontierSite {
+                    caller: name.clone(),
+                    address: HexAddress(*address),
+                    transfer: if ["unimp", "ebreak"].contains(&op.as_str()) {
+                        FrontierTransfer::ExceptionTransfer { instruction }
+                    } else {
+                        FrontierTransfer::UnresolvedTransfer { instruction }
+                    },
+                });
                 continue;
             }
             let target = target.as_ref().unwrap();
-            let callee = re(r"\+0x[0-9a-f]+$").replace(target, "");
+            let callee = SYMBOL_OFFSET.replace(target, "");
             if callee == name.split(" [0x").next().unwrap() && !is_call(op, args) {
                 continue;
             }
             if selected.contains(callee.as_ref()) && target == callee.as_ref() {
                 edges.get_mut(name).unwrap().insert(callee.into_owned());
             } else {
-                frontier.push(json!({"caller":name,"address":format!("0x{address:x}"),"kind":"unmeasured-target","target":target}));
+                frontier.push(FrontierSite {
+                    caller: name.clone(),
+                    address: HexAddress(*address),
+                    transfer: FrontierTransfer::UnmeasuredTarget {
+                        target: target.clone(),
+                    },
+                });
             }
         }
     }
     for (name, sites) in discovered {
         let body = instructions(&functions[name])?;
         for target in sites.values().flatten() {
-            if body[0].0 <= *target && *target <= body.last().unwrap().0 {
+            if body[0].address <= *target && *target <= body.last().unwrap().address {
                 continue;
             }
             if let Some(callee) = entries.get(target) {
@@ -848,7 +999,7 @@ pub fn analyze(
     readonly: Option<&Sections>,
     compiler: Option<&Map<String, crate::machine::Proof>>,
     extents: &Map<u32, u32>,
-) -> Result<Value> {
+) -> Result<StackReport> {
     let functions = functions_from(disassembly, extents)?;
     let poll = reader_symbols(&functions)?;
     let selected: Set<_> = functions
@@ -877,10 +1028,13 @@ pub fn analyze(
             let resolution = if let Some(sections) = readonly {
                 resolve_transfers(&instructions(&functions[name])?, sections)?
             } else {
-                TransferEvidence(Map::new(), Map::new())
+                TransferEvidence {
+                    complete: Map::new(),
+                    discovered: Map::new(),
+                }
             };
-            transfers.insert(name.clone(), resolution.0);
-            discovered.insert(name.clone(), resolution.1);
+            transfers.insert(name.clone(), resolution.complete);
+            discovered.insert(name.clone(), resolution.discovered);
             if let Some(c) = compiler {
                 dispatches.insert(
                     name.clone(),
@@ -907,10 +1061,8 @@ pub fn analyze(
         }
         frontier.retain(|site| {
             !dispatches
-                .get(site["caller"].as_str().unwrap())
-                .is_some_and(|s| {
-                    s.contains(&(number(site["address"].as_str().unwrap()).unwrap() as u32))
-                })
+                .get(&site.caller)
+                .is_some_and(|sites| sites.contains(&site.address.0))
         });
     }
     let mut reached = Set::new();
@@ -920,50 +1072,59 @@ pub fn analyze(
             pending.extend(edges[&name].iter().cloned());
         }
     }
-    let render_transfers = |data: &Map<String, Transfers>| -> Value {
-        json!(
-            data.iter()
-                .filter(|(_, s)| !s.is_empty())
-                .map(|(n, s)| (
-                    n,
-                    s.iter()
-                        .map(|(a, t)| (
-                            format!("0x{a:x}"),
-                            t.iter().map(|v| format!("0x{v:x}")).collect::<Vec<_>>()
-                        ))
-                        .collect::<Map<_, _>>()
-                ))
-                .collect::<Map<_, _>>()
-        )
-    };
-    let mut report = json!({"verdict":"BLOCKED_UNPROVEN","whole_program_bound":false,"available_bytes":available,"reserve_bytes":RESERVE,"entry_frames":null,"entry_required_bytes":null,"selected_path_bytes":null,"selected_path":null,"accounted_bytes_with_reserve":null,"selected_symbol_count":selected.len(),"unsupported_frames":unsupported,"frames":frames,"edges":edges,"computed_transfers":render_transfers(&transfers),"discovered_transfer_candidates":render_transfers(&discovered),"compiler_local_dispatches":dispatches.iter().filter(|(_,s)|!s.is_empty()).map(|(n,s)|(n,s.iter().map(|v|format!("0x{v:x}")).collect::<Vec<_>>())).collect::<Map<_,_>>(),"frontier":frontier,"selected_not_reached_by_direct_edges":selected.difference(&reached).collect::<Vec<_>>(),"unselected_symbol_count":functions.len()-selected.len(),"task_body_symbol":if functions.contains_key(TASK){"measured"}else{"absent; no independent measurement"},"scopes":SCOPES,"limitations":LIMITATIONS});
-    if !unsupported.is_empty() {
-        return Ok(report);
-    }
-    let entries: Map<String, u64> = Map::from([
-        (
-            "task".into(),
-            frames[&poll] + frames.get(TASK).unwrap_or(&0),
-        ),
-        ("library".into(), frames[LIBRARY]),
-        ("effects".into(), frames[EFFECT]),
-    ]);
-    let required = entries["task"] + entries["library"].max(entries["effects"]) + RESERVE;
-    let (path_bytes, path) = longest_path(&poll, &edges, &frames)?;
-    let accounted = required
-        .max(path_bytes + RESERVE)
-        .max(frames.values().max().unwrap() + RESERVE);
-    report["verdict"] = json!(if entries["task"] > 4096 || accounted > available {
-        "BLOCKED_BUDGET"
+    let outcome = if unsupported.is_empty() {
+        let entries = EntryFrames {
+            task: frames[&poll] + frames.get(TASK).unwrap_or(&0),
+            library: frames[LIBRARY],
+            effects: frames[EFFECT],
+        };
+        let (path_bytes, path) = longest_path(&poll, &edges, &frames)?;
+        let accounted = entries
+            .required_bytes()
+            .max(path_bytes + RESERVE)
+            .max(frames.values().max().unwrap() + RESERVE);
+        let exceeded = entries.task > 4096 || accounted > available;
+        let measurements = Measurements {
+            entry_frames: entries,
+            selected_path_bytes: path_bytes,
+            selected_path: path,
+            accounted_bytes_with_reserve: accounted,
+        };
+        if exceeded {
+            Outcome::BudgetExceeded(measurements)
+        } else {
+            Outcome::Limited(measurements)
+        }
     } else {
-        "PASS_LIMITED"
-    });
-    report["entry_frames"] = json!(entries);
-    report["entry_required_bytes"] = json!(required);
-    report["selected_path_bytes"] = json!(path_bytes);
-    report["selected_path"] = json!(path);
-    report["accounted_bytes_with_reserve"] = json!(accounted);
-    Ok(report)
+        Outcome::Unproven
+    };
+    Ok(StackReport {
+        outcome,
+        whole_program_bound: false,
+        available_bytes: available,
+        reserve_bytes: RESERVE,
+        selected_symbol_count: selected.len(),
+        unsupported_frames: unsupported,
+        frames,
+        edges,
+        computed_transfers: transfers,
+        discovered_transfer_candidates: discovered,
+        compiler_local_dispatches: dispatches
+            .into_iter()
+            .filter(|(_, sites)| !sites.is_empty())
+            .map(|(name, sites)| (name, sites.into_iter().map(HexAddress).collect()))
+            .collect(),
+        frontier,
+        selected_not_reached_by_direct_edges: selected.difference(&reached).cloned().collect(),
+        unselected_symbol_count: functions.len() - selected.len(),
+        task_body_symbol: if functions.contains_key(TASK) {
+            "measured"
+        } else {
+            "absent; no independent measurement"
+        },
+        scopes: SCOPES,
+        limitations: LIMITATIONS,
+    })
 }
 
 pub const LIMITATIONS: &[&str] = &[

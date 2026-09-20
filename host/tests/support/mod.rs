@@ -37,8 +37,15 @@ pub fn run(command: &mut Command, timeout: Duration) -> Output {
     let out = read(Box::new(child.stdout.take().unwrap()));
     let err = read(Box::new(child.stderr.take().unwrap()));
     let start = Instant::now();
+    let mut exited = None;
     let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
+        if exited.is_none() {
+            exited = child.try_wait().unwrap();
+        }
+        if let Some(status) = exited
+            && out.is_finished()
+            && err.is_finished()
+        {
             break status;
         }
         if start.elapsed() > timeout {

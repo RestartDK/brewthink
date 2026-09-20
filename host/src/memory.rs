@@ -1,8 +1,10 @@
-use crate::{machine, re, stack};
+use crate::{machine, stack};
 use anyhow::{Context, Result, ensure};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::sync::LazyLock;
 use std::{
     collections::{BTreeMap as Map, BTreeSet as Set},
     fs,
@@ -10,6 +12,13 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
+static STACK_SECTION_SIZE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)^\.stack\s+(\d+)").expect("valid STACK_SECTION_SIZE pattern")
+});
+static SYMBOL_RECORD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^([0-9a-f]+) ([0-9a-f]+) [tT] (\S+)$").expect("valid SYMBOL_RECORD pattern")
+});
+
 pub const TARGET: &str = "riscv32imc-unknown-none-elf";
 pub const ARTIFACTS: &[&str] = &["frames.log", "machine.log", "frames.elf", "reader.elf"];
 pub type Environment = Map<String, String>;
@@ -138,9 +147,95 @@ pub struct Symbol {
     pub size: u32,
     pub code_sha256: String,
 }
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum BuildPhase {
+    Frames,
+    Machine,
+}
+impl BuildPhase {
+    pub const ALL: [Self; 2] = [Self::Frames, Self::Machine];
+
+    fn diagnostic_flags(self) -> Vec<String> {
+        strings(match self {
+            Self::Frames => &["-C", "remark=prologepilog stack-frame-layout"],
+            Self::Machine => &["-C", "llvm-args=-print-before=riscv-asm-printer"],
+        })
+    }
+    pub fn command(self, symbols: &Map<String, Symbol>) -> Vec<String> {
+        let mut args = build_command();
+        args.extend(self.diagnostic_flags());
+        if self == Self::Machine {
+            args.extend([
+                "-C".into(),
+                format!(
+                    "llvm-args=-filter-print-funcs={}",
+                    symbols.keys().cloned().collect::<Vec<_>>().join(",")
+                ),
+            ]);
+        }
+        args
+    }
+}
+impl std::fmt::Display for BuildPhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Frames => "frames",
+            Self::Machine => "machine",
+        })
+    }
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BundleState {
+    Building,
+    Linked,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SourceInputs {
+    pub head: String,
+    pub diff_sha256: String,
+    pub files_sha256: Map<String, Option<String>>,
+    pub source_digest: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CompilerInputs {
+    pub rustc: String,
+    pub cargo: String,
+    pub sysroot: PathBuf,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DependencyInputs {
+    pub source: String,
+    pub archive_sha256: String,
+    pub files_digest: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Inputs {
+    pub source: SourceInputs,
+    pub compiler: CompilerInputs,
+    pub cwd: PathBuf,
+    pub environment: Environment,
+    pub cargo_configuration: Hashes,
+    pub metadata_sha256: String,
+    pub dependencies: Map<String, DependencyInputs>,
+    pub target_directory: PathBuf,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DecompressorContract {
+    pub id: String,
+    pub source: Option<String>,
+    pub files_sha256: Hashes,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Build {
-    pub phase: String,
+    pub phase: BuildPhase,
     pub command: Vec<String>,
     pub clean: Vec<String>,
     pub exit: i32,
@@ -148,16 +243,16 @@ pub struct Build {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bundle {
     pub schema: u32,
-    pub state: String,
-    pub inputs: Value,
+    pub state: BundleState,
+    pub inputs: Inputs,
     pub symbols: Map<String, Symbol>,
     pub generated_inputs: Hashes,
-    pub diagnostics: Map<String, Vec<String>>,
+    pub diagnostics: Map<BuildPhase, Vec<String>>,
     pub command: Vec<String>,
     pub builds: Vec<Build>,
     pub artifacts: Hashes,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decompressor_contract: Option<Value>,
+    pub decompressor_contract: Option<DecompressorContract>,
 }
 #[derive(Debug, Clone, Deserialize)]
 pub struct Package {
@@ -176,17 +271,11 @@ struct Metadata {
 fn strings(args: &[&str]) -> Vec<String> {
     args.iter().map(|s| (*s).into()).collect()
 }
-pub fn diagnostics() -> Map<String, Vec<String>> {
-    Map::from([
-        (
-            "frames".into(),
-            strings(&["-C", "remark=prologepilog stack-frame-layout"]),
-        ),
-        (
-            "machine".into(),
-            strings(&["-C", "llvm-args=-print-before=riscv-asm-printer"]),
-        ),
-    ])
+pub fn diagnostics() -> Map<BuildPhase, Vec<String>> {
+    BuildPhase::ALL
+        .into_iter()
+        .map(|phase| (phase, phase.diagnostic_flags()))
+        .collect()
 }
 pub fn build_command() -> Vec<String> {
     strings(&[
@@ -217,20 +306,6 @@ pub fn clean_command() -> Vec<String> {
         "--package",
         "brewthink",
     ])
-}
-pub fn phase_command(phase: &str, symbols: &Map<String, Symbol>) -> Vec<String> {
-    let mut args = build_command();
-    args.extend(diagnostics()[phase].clone());
-    if phase == "machine" {
-        args.extend([
-            "-C".into(),
-            format!(
-                "llvm-args=-filter-print-funcs={}",
-                symbols.keys().cloned().collect::<Vec<_>>().join(",")
-            ),
-        ]);
-    }
-    args
 }
 pub fn compiler_overrides(environment: &Environment) -> Vec<String> {
     environment
@@ -314,7 +389,7 @@ pub fn build_environment(root: &Path, mut environment: Environment) -> Result<En
     environment.insert("CARGO_TERM_COLOR".into(), "never".into());
     Ok(environment)
 }
-pub fn verify_contract(package: &Package, sources: &Hashes) -> Result<Value> {
+pub fn verify_contract(package: &Package, sources: &Hashes) -> Result<DecompressorContract> {
     ensure!(
         package.version == "0.9.1",
         "miniz_oxide version changed; review the zero-validity contract"
@@ -331,7 +406,11 @@ pub fn verify_contract(package: &Package, sources: &Hashes) -> Result<Value> {
         actual == *sources,
         "miniz_oxide source changed; review docs/reader-memory.md before updating contract hashes"
     );
-    Ok(json!({"id":package.id,"source":package.source,"files_sha256":actual}))
+    Ok(DecompressorContract {
+        id: package.id.clone(),
+        source: package.source.clone(),
+        files_sha256: actual,
+    })
 }
 fn files(directory: &Path) -> Result<Vec<PathBuf>> {
     let mut result = vec![];
@@ -479,14 +558,14 @@ pub fn validate_artifacts(directory: &Path, elf: &Path) -> Result<Bundle> {
     let bundle: Bundle = serde_json::from_value(read_json(directory.join("inputs.json"))?)
         .context("missing complete fresh two-link evidence")?;
     ensure!(
-        bundle.schema == 2 && bundle.state == "linked",
+        bundle.schema == 2 && bundle.state == BundleState::Linked,
         "missing complete fresh two-link evidence"
     );
-    let expected: Vec<_> = ["frames", "machine"]
-        .iter()
-        .map(|p| Build {
-            phase: (*p).into(),
-            command: phase_command(p, &bundle.symbols),
+    let expected: Vec<_> = BuildPhase::ALL
+        .into_iter()
+        .map(|phase| Build {
+            phase,
+            command: phase.command(&bundle.symbols),
             clean: clean_command(),
             exit: 0,
         })
@@ -522,7 +601,7 @@ pub fn validate_artifacts(directory: &Path, elf: &Path) -> Result<Bundle> {
     );
     Ok(bundle)
 }
-pub fn validate_inputs(bundle: &Bundle, current: &Value, generated: &Hashes) -> Result<()> {
+pub fn validate_inputs(bundle: &Bundle, current: &Inputs, generated: &Hashes) -> Result<()> {
     ensure!(
         bundle.inputs == *current,
         "source/compiler/dependency/configuration inputs changed since the reader links"
@@ -533,21 +612,57 @@ pub fn validate_inputs(bundle: &Bundle, current: &Value, generated: &Hashes) -> 
     );
     Ok(())
 }
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct Completion {
+    inputs_sha256: String,
+    stack_sha256: String,
+    elf_sha256: String,
+}
+impl Completion {
+    fn for_bundle(directory: &Path, bundle: &Bundle) -> Result<Self> {
+        Ok(Self {
+            inputs_sha256: hash(directory.join("inputs.json"))?,
+            stack_sha256: hash(directory.join("stack.json"))?,
+            elf_sha256: bundle.artifacts["reader.elf"].clone(),
+        })
+    }
+}
+#[derive(Deserialize)]
+struct ReportBinding {
+    verdict: stack::Verdict,
+    whole_program_bound: bool,
+    elf_sha256: String,
+    evidence_inputs_sha256: String,
+}
 pub fn verify_completion(directory: &Path, bundle: &Bundle) -> Result<()> {
-    let expected = json!({"inputs_sha256":hash(directory.join("inputs.json"))?,"stack_sha256":hash(directory.join("stack.json"))?,"elf_sha256":bundle.artifacts["reader.elf"]});
+    let expected = Completion::for_bundle(directory, bundle)?;
+    let completed: Completion = serde_json::from_value(read_json(directory.join("verified.json"))?)
+        .context("missing or changed completed reader proof")?;
     ensure!(
-        read_json(directory.join("verified.json"))? == expected,
+        completed == expected,
         "missing or changed completed reader proof"
     );
-    let report = read_json(directory.join("stack.json"))?;
+    let report: ReportBinding = serde_json::from_value(read_json(directory.join("stack.json"))?)?;
     ensure!(
-        report["verdict"] == "PASS_LIMITED"
-            && report["whole_program_bound"] == false
-            && report["elf_sha256"] == expected["elf_sha256"]
-            && report["evidence_inputs_sha256"] == expected["inputs_sha256"],
+        report.verdict == stack::Verdict::PassLimited
+            && !report.whole_program_bound
+            && report.elf_sha256 == expected.elf_sha256
+            && report.evidence_inputs_sha256 == expected.inputs_sha256,
         "reader proof does not pass for this exact ELF and input manifest"
     );
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReaderReport {
+    #[serde(flatten)]
+    pub analysis: stack::StackReport,
+    pub compiler_frames: Map<String, machine::FrameReport>,
+    pub evidence_inputs_sha256: String,
+    pub elf: PathBuf,
+    pub elf_sha256: String,
+    pub objdump_version: String,
 }
 
 pub struct ReaderBuild {
@@ -591,7 +706,7 @@ impl ReaderBuild {
             "device-reader",
         ])?)?)
     }
-    fn stable_inputs(&self, metadata: &Value) -> Result<Value> {
+    fn stable_inputs(&self, metadata: &Value) -> Result<Inputs> {
         let paths = self.output(&[
             "git",
             "ls-files",
@@ -604,7 +719,7 @@ impl ReaderBuild {
         for name in paths.split('\0').filter(|s| !s.is_empty()) {
             let path = self.root.join(name);
             hashes.insert(
-                name,
+                name.to_owned(),
                 if path.is_file() {
                     Some(hash(path)?)
                 } else {
@@ -612,13 +727,22 @@ impl ReaderBuild {
                 },
             );
         }
-        let source = json!({"head":self.output(&["git","rev-parse","HEAD"])?,"diff_sha256":digest(self.output_bytes(&["git","diff","HEAD","--binary"])?),"files_sha256":hashes,"source_digest":json_hash(&json!(hashes))});
+        let source = SourceInputs {
+            head: self.output(&["git", "rev-parse", "HEAD"])?,
+            diff_sha256: digest(self.output_bytes(&["git", "diff", "HEAD", "--binary"])?),
+            source_digest: json_hash(&json!(hashes)),
+            files_sha256: hashes,
+        };
         let rustc = self.output(&["rustc", "-vV"])?;
         ensure!(
             rustc.contains("\nrelease: 1.97.1\n") && rustc.ends_with("LLVM version: 22.1.6"),
             "fixed-frame parser requires rustc 1.97.1 / LLVM 22.1.6"
         );
-        let compiler = json!({"rustc":rustc,"cargo":self.output(&["cargo","--version"])?,"sysroot":self.output(&["rustc","--print","sysroot"])?});
+        let compiler = CompilerInputs {
+            rustc,
+            cargo: self.output(&["cargo", "--version"])?,
+            sysroot: self.output(&["rustc", "--print", "sysroot"])?.into(),
+        };
         let parsed: Metadata = serde_json::from_value(metadata.clone())?;
         let lock: toml::Value = toml::from_str(&fs::read_to_string(self.root.join("Cargo.lock"))?)?;
         let locked = lock
@@ -636,13 +760,13 @@ impl ReaderBuild {
             {
                 continue;
             }
-            ensure!(
-                package
-                    .source
-                    .as_ref()
-                    .is_some_and(|s| s.starts_with("registry+")),
-                "reader evidence requires reviewed registry dependencies or this workspace"
-            );
+            let source = package
+                .source
+                .as_deref()
+                .filter(|source| source.starts_with("registry+"))
+                .context(
+                    "reader evidence requires reviewed registry dependencies or this workspace",
+                )?;
             let checksum = locked
                 .iter()
                 .find(|p| {
@@ -655,19 +779,39 @@ impl ReaderBuild {
                 .and_then(toml::Value::as_str)
                 .filter(|s| s.len() == 64)
                 .context("missing locked registry checksum")?;
-            dependencies.insert(&package.id,json!({"source":package.source,"archive_sha256":checksum,"files_digest":registry_sources(package,checksum)?}));
+            dependencies.insert(
+                package.id.clone(),
+                DependencyInputs {
+                    source: source.into(),
+                    archive_sha256: checksum.into(),
+                    files_digest: registry_sources(package, checksum)?,
+                },
+            );
         }
-        Ok(
-            json!({"source":source,"compiler":compiler,"cwd":self.root,"environment":self.environment.iter().filter(|(n,_)|BUILD_ENVIRONMENT.contains(&n.as_str())).collect::<Map<_,_>>(),"cargo_configuration":cargo_configuration(&self.root,&self.environment)?,"metadata_sha256":json_hash(metadata),"dependencies":dependencies,"target_directory":parsed.target_directory}),
-        )
+        Ok(Inputs {
+            source,
+            compiler,
+            cwd: self.root.clone(),
+            environment: self
+                .environment
+                .iter()
+                .filter(|(name, _)| BUILD_ENVIRONMENT.contains(&name.as_str()))
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect(),
+            cargo_configuration: cargo_configuration(&self.root, &self.environment)?,
+            metadata_sha256: json_hash(metadata),
+            dependencies,
+            target_directory: parsed.target_directory,
+        })
     }
     pub fn validate_bundle(&self, directory: &Path, elf: &Path) -> Result<Bundle> {
         let bundle = validate_artifacts(directory, elf)?;
         let current = self.stable_inputs(&self.metadata()?)?;
-        let target = bundle.inputs["target_directory"]
-            .as_str()
-            .context("missing target directory")?;
-        validate_inputs(&bundle, &current, &generated_inputs(Path::new(target))?)?;
+        validate_inputs(
+            &bundle,
+            &current,
+            &generated_inputs(&bundle.inputs.target_directory)?,
+        )?;
         Ok(bundle)
     }
     pub fn verify_proof(&self, directory: &Path, elf: &Path) -> Result<Bundle> {
@@ -724,14 +868,14 @@ impl ReaderBuild {
         directory: &Path,
         report_path: Option<&Path>,
         complete: bool,
-    ) -> Result<Value> {
+    ) -> Result<ReaderReport> {
         let disassembly = self.disassemble(elf)?;
         let sizes = self.output(&[
             "llvm-size",
             "-A",
             elf.to_str().context("non-UTF8 ELF path")?,
         ])?;
-        let sizes: Vec<_> = re(r"(?m)^\.stack\s+(\d+)")
+        let sizes: Vec<_> = STACK_SECTION_SIZE
             .captures_iter(&sizes)
             .map(|m| m[1].parse::<u64>())
             .collect::<std::result::Result<_, _>>()?;
@@ -767,54 +911,53 @@ impl ReaderBuild {
                 .collect();
             compiler.insert(symbol.name.clone(), proof);
         }
-        let mut report = stack::analyze(
+        let analysis = stack::analyze(
             &disassembly,
             sizes[0],
             Some(&stack::readonly_sections(&code)?),
             Some(&compiler),
             &extents,
         )?;
-        report["compiler_frames"] = json!(
-            compiler
-                .iter()
-                .map(|(name, p)| {
-                    let mut value = json!(p);
-                    value.as_object_mut().unwrap().remove("sp_writes");
-                    value["callees"] = json!(p.callees);
-                    (name, value)
-                })
-                .collect::<Map<_, _>>()
-        );
-        report["evidence_inputs_sha256"] = json!(hash(directory.join("inputs.json"))?);
-        report["elf"] = json!(elf.canonicalize()?);
-        report["elf_sha256"] = json!(digest(&code));
-        report["objdump_version"] = json!(
-            self.output(&["llvm-objdump", "--version"])?
+        let report = ReaderReport {
+            analysis,
+            compiler_frames: compiler
+                .into_iter()
+                .map(|(name, proof)| (name, proof.into()))
+                .collect(),
+            evidence_inputs_sha256: hash(directory.join("inputs.json"))?,
+            elf: elf.canonicalize()?,
+            elf_sha256: digest(&code),
+            objdump_version: self
+                .output(&["llvm-objdump", "--version"])?
                 .lines()
                 .next()
                 .unwrap_or("")
-        );
+                .into(),
+        };
         if let Some(path) = report_path {
             write_json(path, &report)?;
         }
         println!(
             "reader-stack {} accounted={} available={} reserve={} selected_frames={}/{} frontier_sites={}",
-            report["verdict"].as_str().unwrap(),
-            report["accounted_bytes_with_reserve"],
+            report.analysis.outcome.verdict(),
+            report.analysis.outcome.measurements().map_or_else(
+                || "null".into(),
+                |m| m.accounted_bytes_with_reserve.to_string()
+            ),
             sizes[0],
             stack::RESERVE,
-            report["frames"].as_object().unwrap().len(),
-            report["selected_symbol_count"],
-            report["frontier"].as_array().unwrap().len()
+            report.analysis.frames.len(),
+            report.analysis.selected_symbol_count,
+            report.analysis.frontier.len()
         );
-        for (name, error) in report["unsupported_frames"].as_object().unwrap() {
-            println!("UNPROVEN: {name}: {error}");
+        for (name, error) in &report.analysis.unsupported_frames {
+            println!("UNPROVEN: {name}: {}", serde_json::to_string(error)?);
         }
         for limitation in stack::LIMITATIONS {
             println!("LIMIT: {limitation}");
         }
         ensure!(
-            report["verdict"] == "PASS_LIMITED",
+            report.analysis.outcome.verdict() == stack::Verdict::PassLimited,
             "reader stack proof blocked; no passing budget or whole-program bound"
         );
         ensure!(
@@ -842,7 +985,7 @@ impl ReaderBuild {
         fs::create_dir(directory)?;
         let mut bundle = Bundle {
             schema: 2,
-            state: "building".into(),
+            state: BundleState::Building,
             inputs: inputs.clone(),
             symbols: Map::new(),
             generated_inputs: Map::new(),
@@ -855,10 +998,10 @@ impl ReaderBuild {
         let manifest = directory.join("inputs.json");
         println!(
             "reader-memory source_digest={}",
-            inputs["source"]["source_digest"]
+            serde_json::to_string(&inputs.source.source_digest)?
         );
-        for phase in ["frames", "machine"] {
-            let arguments = phase_command(phase, &bundle.symbols);
+        for phase in BuildPhase::ALL {
+            let arguments = phase.command(&bundle.symbols);
             let clean = clean_command();
             let run = |args: &[String], file: PathBuf| -> Result<std::process::ExitStatus> {
                 let log = fs::File::create(file)?;
@@ -875,7 +1018,7 @@ impl ReaderBuild {
             write_json(&manifest, &bundle)?;
             let status = run(&arguments, directory.join(format!("{phase}.log")))?;
             bundle.builds.push(Build {
-                phase: phase.into(),
+                phase,
                 command: arguments,
                 clean,
                 exit: status.code().unwrap_or(-1),
@@ -890,7 +1033,7 @@ impl ReaderBuild {
                 self.stable_inputs(&self.metadata()?)? == inputs,
                 "reader source/compiler/dependencies changed during the links"
             );
-            let elf = directory.join(if phase == "frames" {
+            let elf = directory.join(if phase == BuildPhase::Frames {
                 "frames.elf"
             } else {
                 "reader.elf"
@@ -906,7 +1049,7 @@ impl ReaderBuild {
             permissions.set_readonly(true);
             fs::set_permissions(&elf, permissions)?;
             let generated = generated_inputs(&parsed.target_directory)?;
-            if phase == "frames" {
+            if phase == BuildPhase::Frames {
                 let code = fs::read(&elf)?;
                 bundle.symbols = self.inventory(
                     &elf,
@@ -928,7 +1071,7 @@ impl ReaderBuild {
             .iter()
             .map(|name| Ok(((*name).into(), hash(directory.join(name))?)))
             .collect::<Result<_>>()?;
-        bundle.state = "linked".into();
+        bundle.state = BundleState::Linked;
         write_json(&manifest, &bundle)?;
         let elf = directory.join("reader.elf");
         self.validate_bundle(directory, &elf)?;
@@ -936,7 +1079,7 @@ impl ReaderBuild {
         self.validate_bundle(directory, &elf)?;
         write_json(
             directory.join("verified.json"),
-            &json!({"inputs_sha256":hash(&manifest)?,"stack_sha256":hash(directory.join("stack.json"))?,"elf_sha256":bundle.artifacts["reader.elf"]}),
+            &Completion::for_bundle(directory, &bundle)?,
         )?;
         self.verify_proof(directory, &elf)?;
         println!("reader-memory evidence={}", directory.display());
@@ -961,7 +1104,7 @@ pub fn symbol_inventory(
     }
     let mut symbols: Map<u32, Vec<(u32, String)>> = Map::new();
     for line in nm.lines() {
-        if let Some(m) = re(r"^([0-9a-f]+) ([0-9a-f]+) [tT] (\S+)$").captures(line) {
+        if let Some(m) = SYMBOL_RECORD.captures(line) {
             symbols
                 .entry(u32::from_str_radix(&m[1], 16)?)
                 .or_default()
@@ -979,7 +1122,7 @@ pub fn symbol_inventory(
             continue;
         }
         let parsed = stack::instructions(body)?;
-        let address = parsed[0].0;
+        let address = parsed[0].address;
         let candidates = symbols.get(&address).context("missing raw symbol extent")?;
         ensure!(
             candidates.len() == 1 && candidates[0].0 > 0,
@@ -1015,7 +1158,8 @@ pub fn symbol_inventory(
             offset += if halfword & 3 == 3 { 4 } else { 2 };
         }
         ensure!(
-            offset == *size as usize && addresses == parsed.iter().map(|p| p.0).collect::<Vec<_>>(),
+            offset == *size as usize
+                && addresses == parsed.iter().map(|p| p.address).collect::<Vec<_>>(),
             "disassembly does not decode every byte of selected extent: {name}"
         );
         ensure!(

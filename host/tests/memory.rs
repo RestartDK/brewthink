@@ -52,8 +52,26 @@ impl Evidence {
         )]);
         let bundle = Bundle {
             schema: 2,
-            state: "linked".into(),
-            inputs: json!({"source":"current","target_directory":path.join("target")}),
+            state: BundleState::Linked,
+            inputs: Inputs {
+                source: SourceInputs {
+                    head: "current".into(),
+                    diff_sha256: "diff".into(),
+                    files_sha256: BTreeMap::new(),
+                    source_digest: "source".into(),
+                },
+                compiler: CompilerInputs {
+                    rustc: "rustc".into(),
+                    cargo: "cargo".into(),
+                    sysroot: path.join("sysroot"),
+                },
+                cwd: path.into(),
+                environment: BTreeMap::new(),
+                cargo_configuration: BTreeMap::new(),
+                metadata_sha256: "metadata".into(),
+                dependencies: BTreeMap::new(),
+                target_directory: path.join("target"),
+            },
             symbols: symbols.clone(),
             generated_inputs: BTreeMap::from([(
                 "release/build/test/out/link.x".into(),
@@ -61,11 +79,11 @@ impl Evidence {
             )]),
             diagnostics: diagnostics(),
             command: build_command(),
-            builds: ["frames", "machine"]
-                .iter()
-                .map(|p| Build {
-                    phase: (*p).into(),
-                    command: phase_command(p, &symbols),
+            builds: BuildPhase::ALL
+                .into_iter()
+                .map(|phase| Build {
+                    phase,
+                    command: phase.command(&symbols),
                     clean: clean_command(),
                     exit: 0,
                 })
@@ -111,6 +129,7 @@ fn partial_duplicate_or_malformed_metadata_is_rejected() {
         (json!(2.0), "linked"),
         (json!(true), "linked"),
         (json!(2), "building"),
+        (json!(2), "unknown"),
     ] {
         let mut b = json!(e.bundle);
         b["schema"] = schema;
@@ -121,6 +140,24 @@ fn partial_duplicate_or_malformed_metadata_is_rejected() {
     fs::write(e.path().join("inputs.json"), "{\"schema\":2,\"schema\":2}").unwrap();
     error(e.validate(), "duplicate");
 }
+#[test]
+fn evidence_rejects_unknown_phases_and_input_fields() {
+    let e = Evidence::new();
+    for mutation in ["phase", "diagnostics", "inputs", "compiler", "target"] {
+        let mut bundle = json!(e.bundle);
+        match mutation {
+            "phase" => bundle["builds"][0]["phase"] = json!("unknown"),
+            "diagnostics" => bundle["diagnostics"]["unknown"] = json!([]),
+            "inputs" => bundle["inputs"]["unknown"] = json!(true),
+            "compiler" => bundle["inputs"]["compiler"]["unknown"] = json!(true),
+            "target" => bundle["inputs"]["target_directory"] = json!([]),
+            _ => unreachable!(),
+        }
+        e.save(&bundle);
+        assert!(e.validate().is_err(), "{mutation}");
+    }
+}
+
 #[test]
 fn each_required_artifact_is_bound() {
     let e = Evidence::new();
@@ -166,7 +203,7 @@ fn cross_elf_bundle_and_wrong_requested_image_are_rejected() {
 fn different_source_or_generated_inputs_are_rejected() {
     let e = Evidence::new();
     let mut current = e.bundle.inputs.clone();
-    current["source"] = json!("changed");
+    current.source.head = "changed".into();
     error(
         validate_inputs(&e.bundle, &current, &e.bundle.generated_inputs),
         "inputs changed",
@@ -311,8 +348,8 @@ fn same_version_with_changed_private_source_is_rejected() {
     fs::write(&path, "reviewed private fields").unwrap();
     let expected = BTreeMap::from([("state.rs".into(), digest(fs::read(&path).unwrap()))]);
     assert_eq!(
-        verify_contract(&r.package, &expected).unwrap()["files_sha256"],
-        json!(expected)
+        verify_contract(&r.package, &expected).unwrap().files_sha256,
+        expected
     );
     fs::write(path, "a new reference field").unwrap();
     error(verify_contract(&r.package, &expected), "source changed");

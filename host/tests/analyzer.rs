@@ -30,7 +30,29 @@ fn optional<T: DeserializeOwned + Default>(args: &[Value], i: usize) -> T {
 fn run(case: &Value) -> Result<Value> {
     let args = case["args"].as_array().unwrap();
     Ok(match case["op"].as_str().unwrap() {
-        "stack.instructions" => json!(stack::instructions(&arg::<Vec<String>>(args, 0))?),
+        "stack.instructions" => {
+            let parsed = json!(stack::instructions(&arg::<Vec<String>>(args, 0))?);
+            json!(
+                parsed
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|instruction| {
+                        let operands = if instruction["operands"].as_array().unwrap().is_empty() {
+                            json!([""])
+                        } else {
+                            instruction["operands"].clone()
+                        };
+                        json!([
+                            instruction["address"],
+                            instruction["opcode"],
+                            operands,
+                            instruction["target"]
+                        ])
+                    })
+                    .collect::<Vec<_>>()
+            )
+        }
         "stack.stack_frame" => json!(stack::stack_frame(
             &arg::<Vec<String>>(args, 0),
             &optional(args, 1)
@@ -51,7 +73,7 @@ fn run(case: &Value) -> Result<Value> {
             &arg(args, 2)
         )?),
         "stack.function_extents" => json!(stack::function_extents(&arg::<Vec<u8>>(args, 0))?),
-        "stack.check" => json!(stack::check(&arg(args, 0), arg(args, 1))?),
+        "stack.check" => json!(arg::<stack::EntryFrames>(args, 0).check(arg(args, 1))?),
         "stack.analyze" => json!(stack::analyze(
             &arg::<String>(args, 0),
             arg(args, 1),
@@ -60,10 +82,21 @@ fn run(case: &Value) -> Result<Value> {
             &Default::default()
         )?),
         "stack.reader_symbols" => json!(stack::reader_symbols(&arg(args, 0))?),
-        "stack.resolve_transfers" => json!(stack::resolve_transfers(
-            &arg::<Vec<stack::Instruction>>(args, 0),
-            &arg(args, 1)
-        )?),
+        "stack.resolve_transfers" => {
+            let source: Vec<(u32, String, Vec<String>, Option<String>)> = arg(args, 0);
+            let body: Vec<_> = source
+                .into_iter()
+                .map(|(address, opcode, operands, target)| {
+                    format!(
+                        "{address:x}: {opcode} {}{}",
+                        operands.join(", "),
+                        target.map_or_else(String::new, |target| format!(" <{target}>"))
+                    )
+                })
+                .collect();
+            let evidence = stack::resolve_transfers(&stack::instructions(&body)?, &arg(args, 1))?;
+            json!((evidence.complete, evidence.discovered))
+        }
         "stack.readonly_sections" => json!(stack::readonly_sections(&arg::<Vec<u8>>(args, 0))?),
         "stack.branch_values" => json!(stack::branch_values(
             &arg::<String>(args, 0),
@@ -104,6 +137,65 @@ fn frame_slot_lengths_cannot_wrap_into_the_signed_extent() {
     .map(String::from);
     let error = machine::frame_records(&source, &["f".into()].into()).unwrap_err();
     assert!(error.to_string().contains("slot alignment/extent"));
+}
+
+#[test]
+fn malformed_instruction_operands_return_errors() {
+    for line in [
+        "1000: addi sp",
+        "1000: li a0",
+        "1000: lw a0",
+        "1000: bgeu a0",
+    ] {
+        let error = stack::stack_frame(&[line.into()], &Default::default()).unwrap_err();
+        assert!(error.to_string().contains("operands"), "{line}: {error}");
+    }
+    assert!(stack::resolve_transfers(&[], &vec![]).is_err());
+}
+
+#[test]
+fn overflowing_machine_block_targets_return_errors() {
+    let body = [
+        "bb.0:",
+        "  successors: %bb.4294967296(0x80000000)",
+        "  PseudoRET",
+    ]
+    .map(String::from);
+    let error = machine::machine_frame(
+        &body,
+        &machine::Frame {
+            size: 0,
+            slots: vec![],
+        },
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("block target"), "{error}");
+}
+
+#[test]
+fn compiler_fallback_errors_retain_their_kind_through_context() {
+    for (body, expected) in [
+        (
+            vec!["100: addi sp, sp, -16", "104: jr a0"],
+            stack::StackFrameError::UnresolvedTransfer { address: 0x104 },
+        ),
+        (
+            vec!["100: jr a0", "104: sub sp, sp, a2", "108: ret"],
+            stack::StackFrameError::UnreachableStackWrite { address: 0x104 },
+        ),
+    ] {
+        let body: Vec<_> = body.into_iter().map(String::from).collect();
+        let error = stack::stack_frame(&body, &Default::default())
+            .unwrap_err()
+            .context("additional compiler diagnostic context");
+        assert_eq!(
+            error.downcast_ref::<stack::StackFrameError>(),
+            Some(&expected)
+        );
+    }
+    let error =
+        stack::stack_frame(&["100: sub sp, sp, a0".into()], &Default::default()).unwrap_err();
+    assert!(error.downcast_ref::<stack::StackFrameError>().is_none());
 }
 
 #[test]
