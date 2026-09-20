@@ -55,8 +55,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo ${{ matrix.command }}
 
-  host-protocol:
-    name: Host protocol and image tools
+  host-tools:
+    name: Rust host tools and safety tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -64,11 +64,13 @@ jobs:
       - name: Install the pinned Rust toolchain
         run: rustup show active-toolchain
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --locked --target x86_64-unknown-linux-gnu --features device-control,host-image-tools --bin device-control --bin prepare-image
-      - run: python3 -m unittest discover -s tools -p 'test_*.py' -v
-        env:
-          DEVICE_CONTROL_BIN: target/x86_64-unknown-linux-gnu/debug/device-control
-          PREPARE_IMAGE_BIN: target/x86_64-unknown-linux-gnu/debug/prepare-image
+        with:
+          workspaces: |
+            . -> target
+            host -> target
+      - run: cargo fmt --manifest-path host/Cargo.toml -- --check
+      - run: cargo test --locked --manifest-path host/Cargo.toml --target x86_64-unknown-linux-gnu
+      - run: cargo clippy --locked --manifest-path host/Cargo.toml --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
 
   firmware:
     name: Firmware images and reader stack
@@ -86,7 +88,7 @@ jobs:
       - run: cargo install espflash --version 4.5.0 --locked
       - run: python3 -m pip install esptool==5.3.1
       - run: cargo fetch --locked
-      - run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - run: cargo fetch --locked --manifest-path host/Cargo.toml
       - run: scripts/check-firmware.sh
       - name: Inspect failed reader disassembly
         if: failure()

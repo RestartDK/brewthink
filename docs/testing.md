@@ -10,13 +10,14 @@ Brewthink tests application behavior in Rust on the host. Browser tests check th
 | Rendering | `src/ui/render_tests.rs` and component tests | Representative screen pixels and per-row selection behavior |
 | Hardware adapters | Rust tests beside display, storage, and X4 modules | Real driver logic against fake buses, clocks, and storage with injected failures |
 | Ownership constraints | `src/scratch/compile_tests.rs` | Valid scratch reuse compiles. Oversized, over-aligned, Drop-requiring, and overlapping-borrow cases do not |
-| Host commands | Rust CLI tests and `tools/test_*.py` | Argument parsing and real executables communicating through pseudo-terminals |
-| Build and recovery tools | `scripts/test_*.py` | Image construction, evidence integrity, protected write boundaries, and failure ordering with fake hardware commands |
+| Host commands | Rust CLI unit tests and `host/tests/protocol.rs` | Argument parsing and real executables communicating through pseudo-terminals |
+| Build and recovery tools | `host/tests/shell.rs` | Image construction, protected write boundaries, and failure ordering with file-backed fake hardware commands |
+| Reader evidence | `host/tests/analyzer.rs` and `host/tests/memory.rs` | Compiler-record parsing, limited stack accounting, source/ELF binding, and producer guards |
 | Firmware artifacts | `scripts/check-firmware.sh` | ESP32 release links, image headers and bounds, supported configurations, and limited reader-stack evidence |
 | Browser adapters | `web/tests` and `web/parity-tests` | WASM loading, user input, imports, native canvas pixels, grayscale export, and hot reload |
 | Physical device | Explicitly authorized bench checks | Real SD, USB, display output, timing, and sleep/wake behavior |
 
-Small Rust unit tests stay in `#[cfg(test)] mod tests`. Larger suites use sibling test modules. All current library suites run with `cargo test --lib`; they are not part of the firmware image. Top-level `tests/` currently holds fixtures, not integration-test crates. Adding `tests/*.rs` requires an explicit host test target and CI invocation because `--lib` does not run them.
+Small Rust unit tests stay in `#[cfg(test)] mod tests`. Larger suites use sibling test modules. All current library suites run with `cargo test --lib`; they are not part of the firmware image. Top-level `tests/` holds firmware-library fixtures. The separate `host/` Cargo package owns tooling integration tests and the reader analyzer; it is not a firmware dependency. Its tests run without `--lib` so Cargo includes every integration suite.
 
 The scratch checks invoke `rustc --emit=obj`, not just type checking. Code generation evaluates the generic size, alignment, and Drop assertions. Invalid examples are never executed.
 
@@ -46,7 +47,12 @@ HOST_TARGET="$(rustc -vV | awk '/^host:/ { print $2 }')"
 cargo test --locked --lib --target "$HOST_TARGET" app::
 cargo test --locked --lib --features web-sim --target "$HOST_TARGET" simulator::
 cargo test --locked --lib --features device-reader --target "$HOST_TARGET" scratch::
+cargo test --locked --manifest-path host/Cargo.toml --target "$HOST_TARGET"
 ```
+
+The host package's protocol suite builds the actual `device-control` and `prepare-image` executables once in `target/host-cli-tests/`. It checks terminal restoration, screenshot CRCs, image conversion, and chunked upload through OS pseudo-terminals. The shell suite runs real scripts with Rust fake `espflash` and `esptool` executables. Their flash is a temporary 16 MiB file; they cannot open a hardware port.
+
+The analyzer corpus retains 178 calls from all 81 former stack/compiler-evidence tests. Each case records its original test name, inputs, expected result or rejection, and error pattern where the old test required one. The new Rust implementation is compared directly with that checked-in data. No Python test code or test runner is invoked.
 
 ## Rendering snapshots
 
@@ -68,7 +74,7 @@ The browser suite deliberately does not pin the exact focus-outline color or run
 
 The reader image builder produces and verifies its own stack evidence. CI retains that image-bound evidence instead of running the same two diagnostic links a second time.
 
-Python remains for Python analyzers and shell orchestration. Moving their tests to Rust without changing the implementation would add a language boundary, not remove one. Pseudo-terminal tests still exercise real host executables. Flash and recovery tests still use fake hardware tools.
+All test cases are Rust or browser tests. The stack analyzer and evidence producer moved to `host/src/` with their tests. Python remains a runtime dependency of the existing grayscale bench CLI, OTA inspector, some shell helpers, and asset generators; Rust subprocess tests exercise those real command boundaries rather than embedding Python assertions.
 
 Host results do not establish ESP32 runtime stack safety. The stack gate is limited, as described in [reader memory evidence](reader-memory.md). Browser parity can also preserve a bug shared by both callers.
 

@@ -93,7 +93,7 @@ Removing `#[inline(always)]` from `run_effect` and `load_chapter` in `src/x4/rea
 
 The suspected FAT cycle was not confirmed. Read-only inspection found matching FAT copies and valid book/directory chains. The same scan succeeded against captured bytes on the host. Five orphan clusters were preserved without repair.
 
-`scripts/check-reader-stack.py` now checks compiled entry frames against the linked stack with an 8 KiB reserve. It catches the known regression but is not whole-program stack analysis.
+The reader stack gate (now `host/src/stack.rs`) checks compiled entry frames against the linked stack with an 8 KiB reserve. It catches the known regression but is not whole-program stack analysis.
 
 ## Verification record
 

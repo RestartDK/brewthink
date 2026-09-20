@@ -29,7 +29,7 @@ if [[ "${BREWTHINK_DIAGNOSTIC_STAGE:-}" == reader-app ]]; then
   fi
   require_cmd python3
   MEMORY_EVIDENCE="$(mktemp -d "${IMAGE}.memory.XXXXXX")/evidence"
-  python3 "$ROOT_DIR/scripts/check-reader-memory.py" "$MEMORY_EVIDENCE"
+  "$ROOT_DIR/scripts/host-tool.sh" memory "$MEMORY_EVIDENCE"
   ELF="$MEMORY_EVIDENCE/reader.elf"
 elif [[ -n "${BREWTHINK_CARGO_FEATURES:-}" ]]; then
   cargo build --locked --release --bin brewthink --features "$BREWTHINK_CARGO_FEATURES"
@@ -58,7 +58,7 @@ espflash save-image \
 "$ROOT_DIR/scripts/check-app1-image.sh" "$IMAGE" "$INFO_FILE"
 
 if [[ -n "$MEMORY_EVIDENCE" ]]; then
-  python3 "$ROOT_DIR/scripts/check-reader-memory.py" "$MEMORY_EVIDENCE" --verify-elf "$ELF"
+  "$ROOT_DIR/scripts/host-tool.sh" memory "$MEMORY_EVIDENCE" --verify-elf "$ELF"
   cp "$MEMORY_EVIDENCE/stack.json" "${IMAGE}.reader-stack.json"
   printf 'Reader evidence: %s\n' "$MEMORY_EVIDENCE"
 fi
