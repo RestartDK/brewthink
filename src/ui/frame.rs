@@ -43,10 +43,90 @@ impl DrawTarget for FrameTarget<'_, '_> {
                 && x < width
                 && y < height
             {
-                self.image.set_luma(x, y, color.luma());
+                const THRESHOLDS: [[u8; 2]; 2] = [[224, 96], [32, 160]];
+                let luma = if color.luma() >= THRESHOLDS[y % 2][x % 2] {
+                    255
+                } else {
+                    0
+                };
+                self.image.set_luma(x, y, luma);
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::image::{PixelDepth, Size};
+    use embedded_graphics::geometry::Point;
+
+    #[test]
+    fn ui_tones_are_binary_with_ordered_coverage() {
+        let size = Size::new(8, 8).unwrap();
+        for depth in [PixelDepth::Monochrome, PixelDepth::Four] {
+            for (tone, expected_black) in [(0, 64), (85, 48), (170, 16), (255, 0)] {
+                let mut bytes = [0xff; 16];
+                let len = depth.byte_len(size).unwrap();
+                let mut image = PackedImage::new(size, depth, &mut bytes[..len]).unwrap();
+                FrameTarget::new(&mut image)
+                    .clear(Gray8::new(tone))
+                    .unwrap();
+                assert!(image.bitmap().is_monochrome());
+                let black = (0..8)
+                    .flat_map(|y| (0..8).map(move |x| (x, y)))
+                    .filter(|&(x, y)| image.pixel_is_black(x, y))
+                    .count();
+                assert_eq!(black, expected_black);
+            }
+        }
+    }
+
+    #[test]
+    fn clipped_and_fragmented_ui_drawing_keeps_the_screen_anchored_pattern() {
+        let size = Size::new(8, 8).unwrap();
+        let mut bytes = [0xff; 16];
+        let mut image = PackedImage::new(size, PixelDepth::Four, &mut bytes).unwrap();
+        let mut target = FrameTarget::new(&mut image);
+        for column in [-1..3, 3..9] {
+            target
+                .draw_iter((-1..9).flat_map(|y| {
+                    column
+                        .clone()
+                        .map(move |x| Pixel(Point::new(x, y), Gray8::new(170)))
+                }))
+                .unwrap();
+        }
+        for y in 0..8 {
+            for x in 0..8 {
+                assert_eq!(
+                    image.luma(x, y),
+                    if x % 2 == 0 && y % 2 == 0 { 0 } else { 255 }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn drawing_ui_does_not_convert_untouched_image_pixels() {
+        let size = Size::new(8, 8).unwrap();
+        let mut bytes = [0xff; 16];
+        let mut image = PackedImage::new(size, PixelDepth::Four, &mut bytes).unwrap();
+        for x in 0..8 {
+            image.set_luma(x, 0, [0, 85, 170, 255][x % 4]);
+        }
+        FrameTarget::new(&mut image)
+            .draw_iter([
+                Pixel(Point::new(0, 2), Gray8::new(170)),
+                Pixel(Point::new(1, 2), Gray8::new(170)),
+            ])
+            .unwrap();
+        assert_eq!(image.luma(0, 2), 0);
+        assert_eq!(image.luma(1, 2), 255);
+        for x in 0..8 {
+            assert_eq!(image.luma(x, 0), [0, 85, 170, 255][x % 4]);
+        }
     }
 }
 

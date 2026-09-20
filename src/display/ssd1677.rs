@@ -982,6 +982,63 @@ mod tests {
     }
 
     #[test]
+    fn dithered_home_cleans_once_after_grayscale_then_uses_the_normal_refresh_cycle() {
+        use crate::{
+            app::{HomeItem, HomeState},
+            home::render_home,
+            image::{PackedImage, PixelDepth, Size},
+            input::UsbState,
+            power::BatteryStatus,
+        };
+        let mut bus = FakeBus::default();
+        let controller = Ssd1677::with_profile(X4DriveProfile::StockParity)
+            .initialize(&mut bus)
+            .unwrap();
+        let mut display = BufferedDisplay::with_controller_ram(controller, Rotation::Degrees270);
+        let mut bytes = vec![255; FRAME_BYTES * 2];
+        let mut image =
+            PackedImage::new(Size::new(480, 800).unwrap(), PixelDepth::Four, &mut bytes).unwrap();
+        image.set_luma(0, 0, 170);
+        assert_eq!(
+            display.refresh_image(
+                &mut bus,
+                &mut NoDelay,
+                image.bitmap(),
+                RefreshMode::Differential
+            ),
+            Ok(RefreshMode::FullClean)
+        );
+        let mut policy = RefreshPolicy::new(RefreshPolicyMode::Automatic);
+        for step in 0..18 {
+            render_home(
+                HomeState::with_selected(HomeItem::ALL[step % 3]),
+                BatteryStatus::from_percent(82, UsbState::Disconnected),
+                &mut image,
+            )
+            .unwrap();
+            assert!(image.bitmap().is_monochrome());
+            bus.events.clear();
+            let applied = display
+                .refresh_image(
+                    &mut bus,
+                    &mut NoDelay,
+                    image.bitmap(),
+                    policy.requested_mode(),
+                )
+                .unwrap();
+            let expected = match step {
+                0 => RefreshMode::FullClean,
+                16 => RefreshMode::QuickClean,
+                _ => RefreshMode::Differential,
+            };
+            assert_eq!(applied, expected, "Home move {step}");
+            assert_eq!(bus.events.contains(&Event::Reset), step == 0);
+            assert_eq!(display.baseline_state(), BaselineState::Synchronized);
+            policy.commit(applied);
+        }
+    }
+
+    #[test]
     fn grayscale_rejects_wrong_shape_and_retains_reset_requirement_on_failure() {
         use crate::image::{PackedBitmap, PackedImage, PixelDepth, Size};
         let mut bus = FakeBus::default();

@@ -64,19 +64,16 @@ fn menu_row(item: HomeItem, selected: HomeItem) -> MenuRow<'static> {
 mod tests {
     extern crate std;
 
-    use embedded_graphics::pixelcolor::GrayColor;
-
     use super::render_home;
     use crate::{
         app::{HomeItem, HomeState},
         image::{PackedImage, READER_DEPTH, Size},
         input::UsbState,
         power::BatteryStatus,
-        ui::SELECTION_BACKGROUND,
     };
 
     #[test]
-    fn every_home_row_uses_gray_selection_with_black_foreground_and_outline() {
+    fn every_home_row_uses_dithered_selection_with_black_foreground_and_outline() {
         let size = Size::new(480, 800).unwrap();
         let battery = BatteryStatus::from_percent(82, UsbState::Disconnected);
         let tops = [106, 186, 266];
@@ -87,11 +84,15 @@ mod tests {
             let mut image = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
             render_home(HomeState::with_selected(item), battery, &mut image).unwrap();
 
-            assert_eq!(
-                image.luma(450, tops[index] + 38),
-                SELECTION_BACKGROUND.luma(),
-                "home row {index} lost its selection fill"
-            );
+            assert!(image.bitmap().is_monochrome());
+            for y in tops[index] + 38..tops[index] + 40 {
+                for x in 450..452 {
+                    assert_eq!(
+                        image.luma(x, y),
+                        if x % 2 == 0 && y % 2 == 0 { 0 } else { 255 }
+                    );
+                }
+            }
             assert_eq!(
                 image.luma(240, tops[index]),
                 0,

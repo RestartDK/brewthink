@@ -48,7 +48,7 @@ Commands `0x25` and `0x4D` operate the controller's dithering engine. The datash
 
 ## Reader scope
 
-Normal reader images use four shades, or 2 bits per pixel. There is no eight-tone reader build profile. Covers, previews, image viewing, and sleep preserve these four logical levels without ordered dithering. See [image pipeline](image-pipeline.md) for packing, memory, and screenshot details.
+Normal reader images use four shades, or 2 bits per pixel. There is no eight-tone reader build profile. Full-screen covers, image-viewer content and sleep images preserve these four logical levels without ordered dithering. UI drawing, including shelf thumbnails and settings previews, uses a screen-anchored black-and-white pattern; see [the UI raster policy](../DESIGN.md#selection). See [image pipeline](image-pipeline.md) for packing, memory, and screenshot details.
 
 The reader uses one fixed stock absolute waveform. The adjustment waveform and eight-tone recipes remain behind `grayscale-bench` for the recorded experiments only. This source integration has not been flashed or tested optically. The held version 3 diagnostic pattern remains untouched.
 

@@ -250,15 +250,12 @@ impl Drawable for SettingsPreview<'_> {
 mod tests {
     extern crate std;
 
-    use embedded_graphics::pixelcolor::GrayColor;
-
     use super::{CustomImagePreview, render_settings};
     use crate::{
         app::{AppPreferences, SettingsItem, SettingsState},
         image::{PackedImage, READER_DEPTH, Size},
         input::UsbState,
         power::BatteryStatus,
-        ui::SELECTION_BACKGROUND,
     };
 
     #[test]
@@ -298,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn every_settings_row_uses_gray_selection_with_black_foreground_and_outline() {
+    fn every_settings_row_uses_dithered_selection_with_black_foreground_and_outline() {
         let tops = [92, 148, 204, 260, 326];
         let heights = [46, 46, 46, 46, 64];
         let foreground = [(41, 110), (40, 179), (49, 219), (51, 273), (42, 361)];
@@ -316,11 +313,16 @@ mod tests {
             )
             .unwrap();
 
-            assert_eq!(
-                image.luma(450, tops[index] + heights[index] / 2),
-                SELECTION_BACKGROUND.luma(),
-                "settings row {index} lost its selection fill"
-            );
+            assert!(image.bitmap().is_monochrome());
+            let center = tops[index] + heights[index] / 2;
+            for y in center..center + 2 {
+                for x in 450..452 {
+                    assert_eq!(
+                        image.luma(x, y),
+                        if x % 2 == 0 && y % 2 == 0 { 0 } else { 255 }
+                    );
+                }
+            }
             assert_eq!(
                 image.luma(240, tops[index]),
                 0,

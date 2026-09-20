@@ -1,12 +1,11 @@
 extern crate std;
 
-use embedded_graphics::{Drawable, pixelcolor::GrayColor};
+use embedded_graphics::Drawable;
 
 use super::{DrawerSurface, FrameTarget, draw_reader_drawer};
 use crate::{
     app::{App, AppEffect, AppInput, AppView, Direction},
     image::{PackedImage, READER_DEPTH, Size},
-    ui::SELECTION_BACKGROUND,
 };
 
 fn reader_with_open_drawer() -> App {
@@ -44,7 +43,7 @@ fn drawer_preserves_rounded_corners_and_fades_the_page_behind_it() {
 }
 
 #[test]
-fn every_drawer_item_uses_gray_selection_with_black_foreground_and_outline() {
+fn every_drawer_item_uses_dithered_selection_with_black_foreground_and_outline() {
     let mut app = reader_with_open_drawer();
     let tops = [400, 484, 562, 610, 658];
     let heights = [78, 72, 44, 44, 44];
@@ -66,11 +65,16 @@ fn every_drawer_item_uses_gray_selection_with_black_foreground_and_outline() {
         )
         .unwrap();
 
-        assert_eq!(
-            frame.luma(450, tops[index] + heights[index] / 2),
-            SELECTION_BACKGROUND.luma(),
-            "drawer row {index} lost its selection fill"
-        );
+        assert!(frame.bitmap().is_monochrome());
+        let center = tops[index] + heights[index] / 2;
+        for y in center..center + 2 {
+            for x in 450..452 {
+                assert_eq!(
+                    frame.luma(x, y),
+                    if x % 2 == 0 && y % 2 == 0 { 0 } else { 255 }
+                );
+            }
+        }
         assert_eq!(
             frame.luma(240, tops[index]),
             0,

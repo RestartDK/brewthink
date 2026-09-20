@@ -143,19 +143,16 @@ pub fn render_files(
 mod tests {
     extern crate std;
 
-    use embedded_graphics::pixelcolor::GrayColor;
-
     use super::{FileItem, FileKind, render_files};
     use crate::{
         app::FilesState,
         image::{PackedImage, READER_DEPTH, Size},
         input::UsbState,
         power::BatteryStatus,
-        ui::SELECTION_BACKGROUND,
     };
 
     #[test]
-    fn every_file_row_uses_gray_selection_with_black_foreground_and_outline() {
+    fn every_file_row_uses_dithered_selection_with_black_foreground_and_outline() {
         let files = [
             FileItem::new("alice.epub", 12_000, FileKind::Epub),
             FileItem::new("cover.jpg", 24_000, FileKind::Jpeg),
@@ -177,11 +174,15 @@ mod tests {
             )
             .unwrap();
 
-            assert_eq!(
-                image.luma(450, tops[index] + 31),
-                SELECTION_BACKGROUND.luma(),
-                "file row {index} lost its selection fill"
-            );
+            assert!(image.bitmap().is_monochrome());
+            for y in tops[index] + 31..tops[index] + 33 {
+                for x in 450..452 {
+                    assert_eq!(
+                        image.luma(x, y),
+                        if x % 2 == 0 && y % 2 == 0 { 0 } else { 255 }
+                    );
+                }
+            }
             assert_eq!(
                 image.luma(240, tops[index]),
                 0,

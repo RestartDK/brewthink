@@ -1993,10 +1993,12 @@ fn refresh(
     panel: &mut ReaderDisplay,
     bytes: &[u8; FRAME_BYTES],
 ) -> Result<(), &'static str> {
+    let started = embassy_time::Instant::now();
     let mode = panel.refresh_policy.requested_mode();
     let image = PackedBitmap::new(frame_size(), READER_DEPTH, bytes)
         .map_err(|_| "reader frame shape is invalid")?;
-    let frequency = esp_hal::time::Rate::from_mhz(if image.is_monochrome() { 40 } else { 20 });
+    let monochrome = image.is_monochrome();
+    let frequency = esp_hal::time::Rate::from_mhz(if monochrome { 40 } else { 20 });
     let applied = store.with_device(|device| {
         device.with_hardware(|hardware| {
             let mut bus = hardware
@@ -2009,6 +2011,16 @@ fn refresh(
         })
     })?;
     panel.refresh_policy.commit(applied);
+    esp_println::println!(
+        "BREWCTL/1 LOG stage=display-refresh applied={} pixels={} elapsed_ms={}",
+        applied.name(),
+        if monochrome {
+            "monochrome"
+        } else {
+            "grayscale"
+        },
+        started.elapsed().as_millis()
+    );
     info!(
         "reader display refreshed: drive={=str} previous={=str} policy={=str} requested={=str} applied={=str}",
         panel.display.drive_profile().name(),
