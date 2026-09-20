@@ -8,8 +8,6 @@ cd "$ROOT_DIR"
 ARTIFACTS="artifacts/simulator-parity"
 python3 scripts/generate-simulator-fixtures.py "$ARTIFACTS/fixtures"
 diff -qr web/tests/fixtures/parity "$ARTIFACTS/fixtures"
-cargo test --locked --lib --features web-sim --target "$HOST_TARGET"
-cargo clippy --locked --lib --features web-sim --target "$HOST_TARGET" -- -D warnings
 cargo build --locked --bin simulator-oracle --features device-reader --target "$HOST_TARGET"
 cargo clippy --locked --bin simulator-oracle --features device-reader --target "$HOST_TARGET" -- -D warnings
 ORACLE="target/$HOST_TARGET/debug/simulator-oracle"

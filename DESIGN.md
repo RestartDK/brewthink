@@ -80,13 +80,13 @@ Shared components own recurring visual rules: `AppBar`, `CommandBar`, `DrawerSur
 
 Semantic `TextRole` values resolve application typography centrally. Reader typography continues to resolve through `ReaderTheme` and never changes application chrome.
 
-Home, Books, Files, Settings, Reader, all five drawer selections, Image, Error, and Sleep render through the 96,000-byte four-shade frame. PBM fixtures pin pure-black geometry after that real render. Actual-depth tests assert the selection fill, outline, and foreground tones, while native PNG captures preserve all four logical shades. Coverage includes empty catalogs, populated shelf pages, every settings selection, filename clipping, and sleep-image previews. A component or layout change must preserve those contracts unless the visual change is deliberate and the fixtures are reviewed.
+Home, Books, Files, Settings, Reader, all five drawer selections, Image, Error, and Sleep render through the 96,000-byte four-shade frame. Native grayscale PNG snapshots pin representative screen compositions after that real render. Focused Rust tests cover every selection row without a separate snapshot per row. Coverage includes empty catalogs, populated shelf pages, filename clipping, and sleep-image previews. A component or layout change must preserve those contracts unless the visual change is deliberate and the fixtures are reviewed.
 
 ## Simulator
 
 The browser shell remains a restrained developer tool around the exact packed X4 frame. Its warm neutral palette and system typography do not replace or reinterpret the device UI. The canvas decodes the same 96,000-byte, two-plane logical frame used by the X4 reader. The native canvas uses neutral logical values 0, 85, 170, and 255. Warm colors stay in the surrounding browser shell. These values represent intended tones, not calibrated panel reflectance.
 
-The canvas backing bitmap and CSS dimensions are both 480 × 800. Narrow viewports scroll the preview instead of shrinking it. Save frame PNG and the Playwright capture helper export the canvas bitmap without CSS resampling and reject colors outside the four logical values. UI iteration uses the hot-reloading web simulator, not device flashes. `scripts/render-ui-fixtures.py` converts pinned PBM geometry fixtures to native-size PNGs for inspection.
+The canvas backing bitmap and CSS dimensions are both 480 × 800. Narrow viewports scroll the preview instead of shrinking it. Save frame PNG and the Playwright capture helper export the canvas bitmap without CSS resampling and reject colors outside the four logical values. UI iteration uses the hot-reloading web simulator, not device flashes. The snapshots in `tests/fixtures/ui/` are directly viewable PNGs. See [test organization](docs/testing.md).
 
 ## Native captures
 

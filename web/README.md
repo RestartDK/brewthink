@@ -20,12 +20,7 @@ Use **Save frame PNG** to export the exact 480 × 800 canvas bitmap. The preview
 
 For UI iteration, keep `bun run dev` running and use its Rust hot reload. Do not use the physical device as the iteration loop. Do not judge bitmap text from CSS-scaled element screenshots.
 
-The Playwright walkthrough uses `tests/capture-frame.ts` to accept only neutral logical values 0, 85, 170, and 255 and export them without resizing.
-
-```bash
-BREWTHINK_WALKTHROUGH_DIR=../artifacts/ui-walkthrough bun run test:e2e
-python3 ../scripts/render-ui-fixtures.py
-```
+Browser tests use `tests/capture-frame.ts` to accept only neutral logical values 0, 85, 170, and 255. Native captures are saved under `test-results/`. Rust rendering snapshots are directly viewable PNGs under `../tests/fixtures/ui/`.
 
 ## Verify
 
@@ -35,9 +30,9 @@ bun run test:e2e
 bun run test:e2e:dev
 ```
 
-`test:e2e` starts a production preview of the assets from `bun run build` on port 4173. It refuses to reuse an existing server. Tests cover Home, Books, Files, reader settings and reflow, the shared 2 × 2 shelf, rounded drawers, physical hint alignment, named navigation, whole-book endpoints, cover-only opening, optional-cover failures, sleep and resume, invalid input, narrow layouts, muted focus styles, and WCAG AA rules. The grayscale test requires exact neutral values 0, 85, 170, and 255 in image, cover, and sleep frames. A synthetic 480 × 800 cover verifies every pixel to catch thumbnail enlargement or chrome overlays. The native decoder checks the same fixture. Regenerate the navigation and cover fixtures with `python3 scripts/generate-navigation-fixture.py` from the repository root.
+`test:e2e` starts a production preview of the assets from `bun run build` on port 4173. It refuses to reuse an existing server. Tests cover production loading, file import, input controls, hint alignment, cover-only opening, image selection, sleep and resume, invalid-input recovery, and an accessibility scan. Exhaustive application and parser cases belong to host Rust tests. The parity suite checks representative reading and drawer flows against native frames. The grayscale test requires exact neutral values 0, 85, 170, and 255 in image, cover, and sleep frames. A synthetic 480 × 800 cover verifies every pixel to catch thumbnail enlargement or chrome overlays. The native decoder checks the same fixture. Regenerate the navigation and cover fixtures with `python3 scripts/generate-navigation-fixture.py` from the repository root.
 
-`test:e2e:dev` starts a separate development server on port 4174 and checks Rust-triggered WASM reloads. Both commands stop their servers when the tests finish. `BREWTHINK_WEB_PORT` selects an isolated test port. `BREWTHINK_WALKTHROUGH_DIR` saves native-resolution canvas PNGs and a browser-shell screenshot.
+`test:e2e:dev` starts a separate development server on port 4174 and checks Rust-triggered WASM reloads. Both commands stop their servers when the tests finish. `BREWTHINK_WEB_PORT` selects an isolated test port. Screenshot-only walkthroughs and exact browser-chrome styling are not release gates. See [test organization](../docs/testing.md).
 
 A private acceptance EPUB can be supplied without adding it to the repository:
 

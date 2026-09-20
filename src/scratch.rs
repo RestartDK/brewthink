@@ -52,6 +52,9 @@ impl<const N: usize> Scratch<N> {
 }
 
 #[cfg(test)]
+mod compile_tests;
+
+#[cfg(test)]
 mod tests {
     use super::Scratch;
     use crate::{
