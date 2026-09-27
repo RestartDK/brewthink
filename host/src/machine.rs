@@ -140,6 +140,8 @@ pub struct Proof {
     pub assembly: Map<String, usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub callees: Vec<String>,
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub nonreturning_calls: Map<String, usize>,
 }
 #[derive(Debug, Serialize)]
 pub struct FrameReport {
@@ -149,6 +151,8 @@ pub struct FrameReport {
     pub blocks: usize,
     pub assembly: Map<String, usize>,
     pub callees: Vec<String>,
+    #[serde(skip_serializing_if = "Map::is_empty")]
+    pub nonreturning_calls: Map<String, usize>,
 }
 impl From<Proof> for FrameReport {
     fn from(proof: Proof) -> Self {
@@ -160,6 +164,7 @@ impl From<Proof> for FrameReport {
             blocks,
             assembly,
             callees,
+            nonreturning_calls,
         } = proof;
         Self {
             size,
@@ -168,6 +173,7 @@ impl From<Proof> for FrameReport {
             blocks,
             assembly,
             callees,
+            nonreturning_calls,
         }
     }
 }
@@ -375,6 +381,7 @@ struct MachineInstruction {
     opcode: String,
     delta: i64,
     targets: Set<u32>,
+    callee: Option<String>,
 }
 struct Block {
     instructions: Vec<MachineInstruction>,
@@ -397,6 +404,7 @@ pub fn machine_frame(body: &[String], record: &Frame) -> Result<Proof> {
         ..Proof::default()
     };
     let mut calls = Set::new();
+    let mut call_counts = Map::<String, usize>::new();
     for line in body {
         if line.is_empty()
             || line.starts_with(';')
@@ -545,6 +553,7 @@ pub fn machine_frame(body: &[String], record: &Frame) -> Result<Proof> {
         if opcode == "INLINEASM" {
             *proof.assembly.entry(benign_assembly(text)?).or_default() += 1;
         }
+        let mut direct_callee = None;
         if ["PseudoCALL", "PseudoTAIL"].contains(&opcode) {
             let callee = CALLEE
                 .captures(operands)
@@ -554,6 +563,10 @@ pub fn machine_frame(body: &[String], record: &Frame) -> Result<Proof> {
                 "nonstandard call/tail helper"
             );
             calls.insert(callee[1].to_owned());
+            if opcode == "PseudoCALL" {
+                *call_counts.entry(callee[1].to_owned()).or_default() += 1;
+            }
+            direct_callee = Some(callee[1].to_owned());
         }
         if ["PseudoBRIND", "PseudoTAILIndirect"].contains(&opcode) {
             let target = INDIRECT_REGISTER
@@ -573,6 +586,7 @@ pub fn machine_frame(body: &[String], record: &Frame) -> Result<Proof> {
         block.instructions.push(MachineInstruction {
             opcode: opcode.into(),
             delta,
+            callee: direct_callee,
             targets: if BRANCHES.contains(&opcode) {
                 block_targets(operands)?
             } else {
@@ -613,6 +627,9 @@ pub fn machine_frame(body: &[String], record: &Frame) -> Result<Proof> {
                 targets.is_empty(),
                 "nonreturning call block has branch targets"
             );
+            if let Some(callee) = &last.callee {
+                *proof.nonreturning_calls.entry(callee.clone()).or_default() += 1;
+            }
         } else {
             if last.opcode != "PseudoBR"
                 && let Some(next) = order.get(index + 1)
@@ -659,10 +676,45 @@ pub fn machine_frame(body: &[String], record: &Frame) -> Result<Proof> {
         depths.len() == blocks.len() && maximum as u64 == record.size,
         "unreachable machine blocks or contradicting frame size"
     );
+    proof
+        .nonreturning_calls
+        .retain(|callee, count| call_counts.get(callee) == Some(count));
     proof.blocks = blocks.len();
     proof.calls = calls.into_iter().collect();
     Ok(proof)
 }
+fn nonreturning_sites(parsed: &[stack::Instruction], proof: &Proof) -> Result<Set<u32>> {
+    let mut counts = Map::new();
+    for (callee, count) in &proof.nonreturning_calls {
+        ensure!(
+            *count > 0 && proof.calls.contains(callee),
+            "nonreturning callee lacks call provenance"
+        );
+        let name = format!("{:#}", rustc_demangle::demangle(callee));
+        ensure!(
+            counts.insert(name, (*count, 0)).is_none(),
+            "ambiguous nonreturning callee name"
+        );
+    }
+    let mut sites = Set::new();
+    for instruction in parsed {
+        if stack::is_call(&instruction.opcode, &instruction.operands)
+            && let Some((_, seen)) = instruction
+                .target
+                .as_ref()
+                .and_then(|name| counts.get_mut(name))
+        {
+            *seen += 1;
+            sites.insert(instruction.address);
+        }
+    }
+    ensure!(
+        counts.values().all(|(expected, seen)| expected == seen),
+        "emitted nonreturning calls contradict compiler provenance"
+    );
+    Ok(sites)
+}
+
 pub fn corroborate(
     body: &[String],
     proof: &Proof,
@@ -670,6 +722,7 @@ pub fn corroborate(
 ) -> Result<Set<u32>> {
     let parsed = stack::instructions(body)?;
     stack::frame_cfg(&parsed, transfers)?;
+    let nonreturning = nonreturning_sites(&parsed, proof)?;
     let mut writes = Map::new();
     let mut indirect = vec![];
     for stack::Instruction {
@@ -713,7 +766,7 @@ pub fn corroborate(
             .eq(proof.indirect.iter().map(|(_, r)| r)),
         "ambiguous emitted local/ABI-tail provenance"
     );
-    match stack::stack_frame(body, transfers) {
+    match stack::stack_frame_with_terminal_calls(body, transfers, &nonreturning) {
         Ok(measured) => ensure!(
             measured == proof.size,
             "successful disassembly frame contradicts compiler size"

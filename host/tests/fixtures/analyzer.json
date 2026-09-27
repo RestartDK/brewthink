@@ -931,7 +931,9 @@
         "brewthink::device_epub::",
         "brewthink::zip_stream::",
         "brewthink::scratch::",
-        "brewthink::bounded_layout::"
+        "brewthink::bounded_layout::",
+        "brewthink::bounded_xml::",
+        "brewthink::chapter_cache::"
       ],
       "selected_not_reached_by_direct_edges": [
         "brewthink::x4::reader_app::load_library"
@@ -1134,7 +1136,9 @@
         "brewthink::device_epub::",
         "brewthink::zip_stream::",
         "brewthink::scratch::",
-        "brewthink::bounded_layout::"
+        "brewthink::bounded_layout::",
+        "brewthink::bounded_xml::",
+        "brewthink::chapter_cache::"
       ],
       "selected_not_reached_by_direct_edges": [
         "brewthink::x4::reader_app::load_library"
@@ -1420,7 +1424,9 @@
         "brewthink::device_epub::",
         "brewthink::zip_stream::",
         "brewthink::scratch::",
-        "brewthink::bounded_layout::"
+        "brewthink::bounded_layout::",
+        "brewthink::bounded_xml::",
+        "brewthink::chapter_cache::"
       ],
       "selected_not_reached_by_direct_edges": [
         "brewthink::x4::reader_app::load_library",
@@ -2378,7 +2384,9 @@
         "brewthink::device_epub::",
         "brewthink::zip_stream::",
         "brewthink::scratch::",
-        "brewthink::bounded_layout::"
+        "brewthink::bounded_layout::",
+        "brewthink::bounded_xml::",
+        "brewthink::chapter_cache::"
       ],
       "selected_not_reached_by_direct_edges": [
         "brewthink::x4::reader_app::load_library"
@@ -6083,6 +6091,9 @@
       "size": 16,
       "sp_writes": {
         "-16": 1
+      },
+      "nonreturning_calls": {
+        "panic": 1
       }
     },
     "test": "test_reader_frame_evidence.MachineFrameTests.test_ordinary_external_call_and_nonreturning_block"
