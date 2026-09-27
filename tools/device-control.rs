@@ -1,6 +1,7 @@
 #[cfg(not(unix))]
 compile_error!("device-control requires a Unix host");
 
+mod book_upload;
 mod sd_export;
 
 use std::{
@@ -20,7 +21,7 @@ use brewthink::{
         ImageFormat, JpegDecodeWorkspace, PngDecodeWorkspace, decode_jpeg, decode_png,
     },
     input::Button,
-    transfer::{ImageName, MAX_IMAGE_BYTES},
+    transfer::{ImageName, MAX_IMAGE_BYTES, UploadTarget},
 };
 use image::{ExtendedColorType, ImageEncoder, codecs::jpeg::JpegEncoder, imageops::FilterType};
 
@@ -37,6 +38,10 @@ enum Command {
     Status,
     Screen(PathBuf),
     PutImage(PathBuf),
+    PutBook(PathBuf),
+    PutBooks(PathBuf),
+    CheckBooks(PathBuf),
+    VerifyBook(PathBuf),
     SdInfo,
     SdRead {
         start: u32,
@@ -266,6 +271,21 @@ fn run() -> io::Result<()> {
         }
         _ => None,
     };
+    let prepared_books = match &arguments.command {
+        Command::PutBook(input) | Command::VerifyBook(input) => {
+            vec![book_upload::PreparedBook::read(input)?]
+        }
+        Command::PutBooks(directory) | Command::CheckBooks(directory) => {
+            book_upload::prepare_directory(directory)?
+        }
+        _ => Vec::new(),
+    };
+    for book in &prepared_books {
+        book.report();
+    }
+    if matches!(arguments.command, Command::CheckBooks(_)) {
+        return Ok(());
+    }
     let port = find_port(arguments.port.as_deref())?;
     let mut connection = Connection::open(&port, true)?;
     match arguments.command {
@@ -282,13 +302,41 @@ fn run() -> io::Result<()> {
             output,
         } => sd_export::export(&mut connection, start, count, &output, arguments.timeout),
         Command::Screen(output) => capture_screen(&mut connection, &output, arguments.timeout),
-        Command::PutImage(input) => upload_image(
-            &mut connection,
-            &input,
-            prepared_image.expect("put-image preparation ran before opening the port"),
-            arguments.timeout,
-        ),
-        Command::Monitor | Command::Help => unreachable!(),
+        Command::PutImage(_) => {
+            let image = prepared_image.expect("put-image preparation ran before opening the port");
+            upload_bytes(
+                &mut connection,
+                UploadTarget::Image(image.name),
+                &image.bytes,
+                arguments.timeout,
+            )
+        }
+        Command::PutBook(_) | Command::PutBooks(_) => {
+            for book in prepared_books {
+                println!("host: sending {}", book.path.display());
+                upload_bytes(
+                    &mut connection,
+                    UploadTarget::Book(book.name),
+                    &book.bytes,
+                    arguments.timeout,
+                )?;
+            }
+            Ok(())
+        }
+        Command::VerifyBook(_) => {
+            let book = &prepared_books[0];
+            run_text_command(
+                &mut connection,
+                &format!(
+                    "verify book {} {} {:08x}",
+                    book.name.as_str(),
+                    book.bytes.len(),
+                    crc32fast::hash(&book.bytes)
+                ),
+                arguments.timeout,
+            )
+        }
+        Command::Monitor | Command::Help | Command::CheckBooks(_) => unreachable!(),
     }
 }
 
@@ -335,6 +383,22 @@ fn parse_arguments(
         Some("put-image") => Command::PutImage(PathBuf::from(required_argument(
             &mut arguments,
             "put-image",
+        )?)),
+        Some("put-book") => Command::PutBook(PathBuf::from(required_argument(
+            &mut arguments,
+            "put-book",
+        )?)),
+        Some("put-books") => Command::PutBooks(PathBuf::from(required_argument(
+            &mut arguments,
+            "put-books",
+        )?)),
+        Some("verify-book") => Command::VerifyBook(PathBuf::from(required_argument(
+            &mut arguments,
+            "verify-book",
+        )?)),
+        Some("check-books") => Command::CheckBooks(PathBuf::from(required_argument(
+            &mut arguments,
+            "check-books",
         )?)),
         Some("sd-info") => Command::SdInfo,
         Some("sd-read") => {
@@ -385,7 +449,7 @@ fn required_argument(
 fn print_usage() {
     println!(
         "Usage: device-control [--port PATH] [--timeout SECONDS] <COMMAND>\n\n\
-         Commands:\n  tap <back|confirm|left|right|up|down|power>\n  status\n  screen <OUTPUT.png>\n  put-image <INPUT.jpg|INPUT.png>\n  sd-info\n  sd-read <START_SECTOR> <SECTOR_COUNT> <OUTPUT.bin>\n  monitor"
+         Commands:\n  tap <back|confirm|left|right|up|down|power>\n  status\n  screen <OUTPUT.png>\n  put-image <INPUT.jpg|INPUT.png>\n  put-book <INPUT.epub>\n  put-books <DIRECTORY>\n  check-books <DIRECTORY>\n  verify-book <INPUT.epub>\n  sd-info\n  sd-read <START_SECTOR> <SECTOR_COUNT> <OUTPUT.bin>\n  monitor"
     );
 }
 
@@ -501,20 +565,20 @@ fn capture_screen(connection: &mut Connection, output: &Path, timeout: Duration)
     Ok(())
 }
 
-fn upload_image(
+fn upload_bytes(
     connection: &mut Connection,
-    input: &Path,
-    prepared: PreparedImage,
+    target: UploadTarget,
+    bytes: &[u8],
     timeout: Duration,
 ) -> io::Result<()> {
-    let bytes = &prepared.bytes;
     let deadline = Instant::now() + timeout;
     let crc32 = crc32fast::hash(bytes);
     connection.drain()?;
     connection.write_all(
         format!(
-            "BREWCTL/1 upload image {} {} {crc32:08x}\n",
-            prepared.name.as_str(),
+            "BREWCTL/1 upload {} {} {} {crc32:08x}\n",
+            target.kind(),
+            target.name(),
             bytes.len()
         )
         .as_bytes(),
@@ -524,15 +588,23 @@ fn upload_image(
         let line = connection.read_line(deadline)?;
         print_control_line(&line);
         if line.starts_with(b"BREWCTL/1 READY command=upload ") {
+            if parse_control_field::<usize>(&line, "chunk")? != 4096
+                || parse_control_field::<usize>(&line, "bytes")? != bytes.len()
+            {
+                return Err(invalid_data(
+                    "device upload parameters do not match the request",
+                ));
+            }
             break;
         }
-        if line.starts_with(b"BREWCTL/1 DONE command=upload status=error") {
+        if line.starts_with(b"BREWCTL/1 DONE ") && line.ends_with(b"status=error") {
             return Err(invalid_data("device rejected the upload"));
         }
     }
 
     let mut sent = 0usize;
     for chunk in bytes.chunks(4 * 1024) {
+        let deadline = Instant::now() + timeout;
         connection.write_all(chunk, deadline)?;
         sent += chunk.len();
         loop {
@@ -553,6 +625,7 @@ fn upload_image(
         }
     }
 
+    let deadline = Instant::now() + timeout;
     loop {
         let line = connection.read_line(deadline)?;
         print_control_line(&line);
@@ -564,9 +637,9 @@ fn upload_image(
         }
     }
     println!(
-        "host: uploaded {} as {} bytes={} crc32={crc32:08x}",
-        input.display(),
-        prepared.name.as_str(),
+        "host: uploaded {} {} bytes={} crc32={crc32:08x}",
+        target.kind(),
+        target.name(),
         bytes.len()
     );
     Ok(())

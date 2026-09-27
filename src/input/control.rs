@@ -1,5 +1,5 @@
 use super::Button;
-use crate::transfer::{ImageName, UploadRequest};
+use crate::transfer::{BookName, ImageName, UploadRequest};
 
 const PREFIX: &str = "BREWCTL/1 ";
 const MAX_LINE_BYTES: usize = 96;
@@ -10,6 +10,7 @@ pub enum ControlCommand {
     Status,
     Screen,
     Upload(UploadRequest),
+    Verify(UploadRequest),
     AbortUpload,
 }
 
@@ -104,6 +105,9 @@ pub fn parse_control_command(line: &[u8]) -> Result<ControlCommand, ControlParse
             if let Some(arguments) = command.strip_prefix("upload ") {
                 return parse_upload(arguments).map(ControlCommand::Upload);
             }
+            if let Some(arguments) = command.strip_prefix("verify ") {
+                return parse_upload(arguments).map(ControlCommand::Verify);
+            }
             command
                 .strip_prefix("tap ")
                 .and_then(Button::from_name)
@@ -115,13 +119,8 @@ pub fn parse_control_command(line: &[u8]) -> Result<ControlCommand, ControlParse
 
 fn parse_upload(arguments: &str) -> Result<UploadRequest, ControlParseError> {
     let mut fields = arguments.split(' ');
-    if fields.next() != Some("image") {
-        return Err(ControlParseError::InvalidUpload);
-    }
-    let name = fields
-        .next()
-        .and_then(|value| ImageName::parse(value).ok())
-        .ok_or(ControlParseError::InvalidUpload)?;
+    let kind = fields.next().ok_or(ControlParseError::InvalidUpload)?;
+    let name = fields.next().ok_or(ControlParseError::InvalidUpload)?;
     let length = fields
         .next()
         .and_then(|value| value.parse::<usize>().ok())
@@ -133,7 +132,15 @@ fn parse_upload(arguments: &str) -> Result<UploadRequest, ControlParseError> {
     if fields.next().is_some() {
         return Err(ControlParseError::InvalidUpload);
     }
-    Ok(UploadRequest::image(name, length, crc32))
+    match kind {
+        "image" => ImageName::parse(name)
+            .map(|name| UploadRequest::image(name, length, crc32))
+            .map_err(|_| ControlParseError::InvalidUpload),
+        "book" => BookName::parse(name)
+            .map(|name| UploadRequest::book(name, length, crc32))
+            .map_err(|_| ControlParseError::InvalidUpload),
+        _ => Err(ControlParseError::InvalidUpload),
+    }
 }
 
 #[cfg(test)]
@@ -190,6 +197,37 @@ mod tests {
             parse_control_command(b"BREWCTL/1 upload-abort"),
             Ok(ControlCommand::AbortUpload)
         );
+    }
+
+    #[test]
+    fn parses_only_typed_short_book_names() {
+        assert_eq!(
+            parse_control_command(b"BREWCTL/1 verify book BOOK.EPB 42 12345678"),
+            Ok(ControlCommand::Verify(UploadRequest::book(
+                crate::transfer::BookName::parse("BOOK.EPB").unwrap(),
+                42,
+                0x12345678
+            )))
+        );
+        assert_eq!(
+            parse_control_command(b"BREWCTL/1 upload book BOOK.EPB 8062265 89abcdef"),
+            Ok(ControlCommand::Upload(UploadRequest::book(
+                crate::transfer::BookName::parse("BOOK.EPB").unwrap(),
+                8062265,
+                0x89abcdef
+            )))
+        );
+        for line in [
+            "BREWCTL/1 upload book BOOK.EPUB 42 12345678",
+            "BREWCTL/1 upload book ../B.EPB 42 12345678",
+            "BREWCTL/1 upload image BOOK.EPB 42 12345678",
+            "BREWCTL/1 upload book BOOK.EPB 42 12345678 extra",
+        ] {
+            assert_eq!(
+                parse_control_command(line.as_bytes()),
+                Err(ControlParseError::InvalidUpload)
+            );
+        }
     }
 
     #[test]

@@ -207,11 +207,21 @@ impl ReaderTheme {
 pub struct ReaderLine<'a> {
     text: &'a str,
     style: ReaderStyle,
+    top: Option<u16>,
 }
 
 impl<'a> ReaderLine<'a> {
     pub const fn new(text: &'a str, style: ReaderStyle) -> Self {
-        Self { text, style }
+        Self {
+            text,
+            style,
+            top: None,
+        }
+    }
+
+    pub const fn with_top(mut self, top: u16) -> Self {
+        self.top = Some(top);
+        self
     }
 
     pub const fn text(self) -> &'a str {
@@ -267,6 +277,14 @@ pub fn render_reader(
     view: ReaderView<'_>,
     target: &mut PackedImage<'_>,
 ) -> Result<(), ReaderRenderError> {
+    render_reader_with_images(view, target, |_, _| {})
+}
+
+pub fn render_reader_with_images(
+    view: ReaderView<'_>,
+    target: &mut PackedImage<'_>,
+    images: impl FnOnce(&mut PackedImage<'_>, usize),
+) -> Result<(), ReaderRenderError> {
     let expected =
         Size::new(FRAME_WIDTH, FRAME_HEIGHT).expect("reader frame dimensions are non-zero");
     if target.size() != expected {
@@ -281,6 +299,9 @@ pub fn render_reader(
     let theme = ReaderTheme::from_preferences(view.preferences);
     let mut height = BODY_TOP;
     for line in view.lines {
+        if let Some(top) = line.top {
+            height = BODY_TOP + usize::from(top);
+        }
         height += theme.line_height(line.style);
         if height > BODY_BOTTOM {
             return Err(ReaderRenderError::ContentExceedsPage);
@@ -288,15 +309,14 @@ pub fn render_reader(
     }
 
     target.clear_white();
-    let mut display = FrameTarget::new(target);
+    let offset = if view.drawer.is_some() { 44 } else { 0 };
     let mut content = ReaderContent::new(view, theme);
-    if view.drawer.is_some() {
-        content.origin.y = 44;
-    }
-    content.draw(&mut display).ok();
+    content.origin.y = offset as i32;
+    content.draw(&mut FrameTarget::new(target)).ok();
+    images(target, offset);
     if let Some(drawer) = view.drawer {
         draw_reader_drawer(
-            &mut display,
+            &mut FrameTarget::new(target),
             drawer,
             view.book_title,
             view.chapter_title,
@@ -335,6 +355,40 @@ pub fn render_reader_error(
     .draw(&mut FrameTarget::new(target))
     .ok();
     Ok(())
+}
+
+#[cfg(feature = "device-reader")]
+pub fn render_inline_image(
+    image: &crate::bounded_layout::BoundedImage,
+    bitmap: Option<crate::image::PackedBitmap<'_>>,
+    target: &mut PackedImage<'_>,
+    offset: usize,
+) -> bool {
+    let size = image.spec().size();
+    let left = (FRAME_WIDTH - size.width()) / 2;
+    let top = BODY_TOP + image.top() + offset;
+    if let Some(bitmap) = bitmap.filter(|bitmap| bitmap.size() == size) {
+        target.blit(bitmap, left, top);
+        return true;
+    }
+    let clip = Rectangle::new(
+        Point::new(left as i32, top as i32),
+        GraphicsSize::new(size.width() as u32, size.height() as u32),
+    );
+    let mut display = FrameTarget::new(target);
+    let style = MonoTextStyle::new(&FONT_6X12, Gray8::new(0));
+    Text::with_baseline("[Image unavailable]", clip.top_left, style, Baseline::Top)
+        .draw(&mut display.clipped(&clip))
+        .ok();
+    Text::with_baseline(
+        image.alt(),
+        clip.top_left + Point::new(0, 14),
+        style,
+        Baseline::Top,
+    )
+    .draw(&mut display.clipped(&clip))
+    .ok();
+    false
 }
 
 #[derive(Clone, Copy)]
@@ -381,6 +435,9 @@ impl Drawable for ReaderContent<'_> {
         );
         let mut y = BODY_TOP;
         for line in self.view.lines {
+            if let Some(top) = line.top {
+                y = BODY_TOP + usize::from(top);
+            }
             self.theme.draw_text(
                 line.text,
                 line.style,

@@ -199,6 +199,60 @@ fn compiler_fallback_errors_retain_their_kind_through_context() {
 }
 
 #[test]
+fn signed_comparison_is_stack_neutral_but_cannot_define_the_stack_pointer() {
+    for (instruction, valid) in [
+        ("renamable $x9 = SLT $x0, renamable $x14", true),
+        ("$x2 = SLT $x0, renamable $x14", false),
+        ("$sp = SLT $x0, renamable $x14", false),
+        ("renamable $x2 = SLT $x0, renamable $x14", false),
+        ("$x9 = SLT $x0, $x14, implicit-def $x2", false),
+    ] {
+        let body = vec![
+            "bb.0:".into(),
+            "  $x2 = frame-setup ADDI $x2, -16".into(),
+            format!("  {instruction}"),
+            "  $x2 = frame-destroy ADDI $x2, 16".into(),
+            "  PseudoRET".into(),
+        ];
+        let proof = machine::machine_frame(
+            &body,
+            &machine::Frame {
+                size: 16,
+                slots: vec![],
+            },
+        );
+        assert_eq!(proof.is_ok(), valid, "{instruction}: {proof:?}");
+        if let Ok(proof) = proof {
+            assert_eq!(proof.size, 16);
+            assert_eq!(proof.sp_writes, [(-16, 1), (16, 1)].into());
+        }
+    }
+}
+
+#[test]
+fn image_storage_and_codec_owners_remain_in_the_measured_call_graph() {
+    let cases: Vec<Value> = serde_json::from_str(include_str!("fixtures/analyzer.json")).unwrap();
+    let case = cases.iter().find(|case| case["test"] == "test_reader_stack.ReaderStackTests.test_integrated_orchestration_and_identity_frames_are_selected").unwrap();
+    let encoded = serde_json::to_string(case).unwrap();
+    for owner in [
+        "brewthink::storage::catalog::prepare_image",
+        "brewthink::image_cache::prepare",
+        "brewthink::image_decoder::decode",
+        "brewthink::reader::render",
+        "embedded_sdmmc::allocate",
+        "tjpgd_rs::decode",
+        "miniz_oxide::inflate",
+    ] {
+        let mut case: Value = serde_json::from_str(
+            &encoded.replace("brewthink::reader_orchestration::drive_effect", owner),
+        )
+        .unwrap();
+        decode(&mut case);
+        assert_eq!(run(&case).unwrap(), case["result"], "{owner}");
+    }
+}
+
+#[test]
 fn preserved_analyzer_cases() {
     let mut cases: Vec<Value> =
         serde_json::from_str(include_str!("fixtures/analyzer.json")).unwrap();

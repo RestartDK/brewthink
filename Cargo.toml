@@ -6,7 +6,7 @@ version      = "0.1.0"
 
 [features]
 default             = []
-device-control      = ["image-decoder", "dep:image", "dep:libc"]
+device-control      = ["device-reader", "epub", "dep:image", "dep:libc"]
 device-reader       = ["image-decoder", "sd-card-write", "dep:miniz_oxide"]
 epub                = ["dep:quick-xml", "dep:zip"]
 grayscale-bench     = []
@@ -48,9 +48,17 @@ path              = "./tools/simulator-oracle.rs"
 required-features = ["device-reader"]
 
 [[bin]]
+name              = "inspect-images"
+path              = "./tools/inspect-images.rs"
+required-features = ["device-reader", "epub", "host-image-tools"]
+
+[[bin]]
 name              = "web-sim"
 path              = "./src/bin/web-sim.rs"
 required-features = ["web-sim"]
+
+[patch.crates-io]
+embedded-sdmmc = { path = "vendor/embedded-sdmmc-0.10.0" }
 
 [dependencies]
 crc32fast         = { version = "=1.5.0", optional = true, default-features = false }

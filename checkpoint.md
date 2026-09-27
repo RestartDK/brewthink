@@ -1,5 +1,23 @@
 # Brewthink checkpoint
 
+## Latest observed hardware, streamed reader images, 2026-09-27
+
+This image worktree records an authorized reader installation over the separate C3 diagnostic. The main checkout's Tailscale checkpoint and the original upload worktree were not edited. Revalidate actual hardware and shared ownership before another session; this record is not a reservation or flash authorization.
+
+- Acceptance source lives in worktree `/Users/danielkumlin/.herdr/worktrees/brew-img`, branch `daniel/reader-images`. The image PR publishes this work separately from the subsequent streamed-chapter implementation.
+- Installed reader image is 599,744 bytes, SHA-256 `4ae77ee9d4eeef415772bd26b9caefd27b7c3ca349e811f7bff701b9a0a05524`. App1 write `0x650000..0x6E26BF`, affected sectors through `0x6E2FFF`.
+- The then-current diagnostic, full flash, app1 and otadata were backed up privately. Guarded readback matched the exact image. Every byte outside the reviewed sectors stayed unchanged; app1 sequence 2 remained selected. A later 16 MiB read after the reading/cache workload matched the post-install snapshot completely. No stock/app0, boot-selection or eFuse write occurred.
+- Private backups are under `backup/reader-images-20260927T182110Z/`. Commands, source-bound build evidence, native captures and verification records are under `artifacts/reader-images/`.
+- All four uploaded EPUBs matched the unchanged Mac originals by complete byte count/CRC before and after image-cache writes. Coffee is now verified. No retransmission, conversion, duplicate deletion or original-book replacement occurred; the library retains five entries including the Hamming duplicate.
+- DDIA, Hamming, Everyday Things and Coffee covers rendered. Hamming and Coffee illustrations matched simulator pixels exactly, with unchanged page/drawer return frames. Coffee navigation crossed the 16-title window. Restarted readers reused the cache without new preparations and returned identical frames. See [streaming reader images](docs/reader-images.md) for timing and limits.
+- Exact-artifact memory evidence is `PASS_LIMITED`, 22,384 bytes accounted against 28,896 available, with the unchanged 8,192-byte reserve. All 201 selected frames were measured; 1,497 frontier sites remain. This is not a whole-program stack bound.
+- The final command entered sleep from Coffee spine 8, page index 7. Automatic sleep mode stayed unchanged. The pre-sleep current-cover CRC `5aae41d0` matched its opening frame. USB disconnected afterward. The X4 is asleep; use physical Power to wake it. No post-sleep capture or optical-quality claim is made.
+- `/TSC3/IDENTITY.BIN` was not targeted. A read-only verification attempt stopped because raw-SD export belongs to the separate storage diagnostic, not the reader. Its post-reader byte equality remains unverified; do not regenerate or replace that identity.
+- DDIA still has twelve XHTML resources above the 140 KiB limit; Everyday Things has a 175,238-byte index. The simulator rejects their whole-book import; firmware encounters limits on demand. GIF, progressive JPEG and interlaced PNG remain unsupported. Area-averaged shrinking and zoom/pan are later work.
+- The shared persistent flock was held across backup, flash, reset and captures, then released. `/tmp/brewthink-x4-501.lock` was retained. No serial monitor or simulator server is left running.
+
+This supersedes the older installation records below for this acceptance run.
+
 ## Latest recorded hardware, dithered UI trial, 2026-09-20
 
 The authorized dithered UI trial supersedes the installation records below. App1 runs a normal reader with monochrome menu pixels and genuine-gray full-screen images, without the experimental three-attempt limit. The trial ended on Home/Settings, selection 2, with unchanged app1 boot selection and verified flash readback.

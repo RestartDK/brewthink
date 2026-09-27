@@ -1,5 +1,7 @@
 extern crate std;
 
+mod image_tests;
+
 use super::*;
 use embedded_sdmmc::{Block, BlockCount, BlockIdx, Timestamp};
 use std::{cell::RefCell, rc::Rc, vec, vec::Vec};
@@ -223,23 +225,26 @@ fn an_unreadable_upload_target_is_not_deleted() {
     let data = store.app_data();
     let bytes = b"\x89PNG\r\n\x1a\nrecovery-payload";
     let name = ImageName::parse("TEST.PNG").unwrap();
-    let transaction = ImageUploadRecord {
-        name,
+    let transaction = UploadRecord {
+        target: UploadTarget::Image(name),
         length: bytes.len(),
         crc32: crc32fast::hash(bytes),
     };
-    data.write_file(AppDataFile::ImageUploadTemp, bytes)
+    data.write_file(AppDataFile::UploadTemp, bytes).unwrap();
+    data.copy_file_to_named(
+        AppDataFile::UploadTemp,
+        UploadTarget::Image(name),
+        &mut [0; 32],
+    )
+    .unwrap();
+    data.write_file(AppDataFile::UploadTemp, b"temporary bytes")
         .unwrap();
-    data.copy_file_to_named(AppDataFile::ImageUploadTemp, name.as_str(), &mut [0; 32])
-        .unwrap();
-    data.write_file(AppDataFile::ImageUploadTemp, b"temporary bytes")
-        .unwrap();
-    data.write_file(AppDataFile::ImageUploadTransaction, &transaction.encode())
+    data.write_file(AppDataFile::UploadTransaction, &transaction.encode())
         .unwrap();
     card.fail_read_containing(bytes);
     let bytes_before = card.0.borrow().bytes.clone();
     assert_eq!(
-        data.recover_image_upload(&mut [0; 512]),
+        data.recover_upload(&mut [0; 512]),
         Err(AppDataError::Filesystem(Error::DeviceError(Fault::Read)))
     );
     assert!(card.0.borrow().bytes == bytes_before);
@@ -250,9 +255,9 @@ fn an_unreadable_upload_target_is_not_deleted() {
         Ok(bytes.len())
     );
     assert_eq!(&output[..bytes.len()], bytes);
-    let mut record = [0; IMAGE_UPLOAD_RECORD_BYTES];
+    let mut record = [0; UPLOAD_RECORD_BYTES];
     assert_eq!(
-        data.read_file(AppDataFile::ImageUploadTransaction, &mut record),
+        data.read_file(AppDataFile::UploadTransaction, &mut record),
         Ok(record.len())
     );
     assert_eq!(record, transaction.encode());
@@ -283,13 +288,13 @@ fn corrupt_upload_journal_is_preserved_without_changing_stored_bytes() {
     let store = card.store();
     store.ensure_layout().unwrap();
     let data = store.app_data();
-    data.write_file(AppDataFile::ImageUploadTransaction, b"broken")
+    data.write_file(AppDataFile::UploadTransaction, b"broken")
         .unwrap();
-    data.write_file(AppDataFile::ImageUploadTemp, b"partial upload")
+    data.write_file(AppDataFile::UploadTemp, b"partial upload")
         .unwrap();
     let before = card.0.borrow().bytes.clone();
     assert_eq!(
-        data.recover_image_upload(&mut [0; 512]),
+        data.recover_upload(&mut [0; 512]),
         Err(AppDataError::InvalidMetadata)
     );
     assert_eq!(
@@ -298,7 +303,7 @@ fn corrupt_upload_journal_is_preserved_without_changing_stored_bytes() {
     );
     let request = UploadRequest::image(ImageName::parse("NEW.PNG").unwrap(), 8, 0);
     assert_eq!(
-        data.begin_image_upload(request),
+        data.begin_upload(request),
         Err(AppDataError::InvalidMetadata)
     );
     assert!(card.0.borrow().bytes == before);
@@ -370,13 +375,13 @@ fn an_empty_upload_journal_has_no_authority_over_named_images() {
     let bytes = b"\x89PNG\r\n\x1a\nkeep-image";
     let keep = ImageName::parse("KEEP.PNG").unwrap();
     let request = UploadRequest::image(keep, bytes.len(), crc32fast::hash(bytes));
-    data.begin_image_upload(request).unwrap();
-    data.append_image_upload(bytes).unwrap();
-    data.commit_image_upload(request, &mut [0; 512]).unwrap();
+    data.begin_upload(request).unwrap();
+    data.append_upload(bytes).unwrap();
+    data.commit_upload(request, &mut [0; 512]).unwrap();
     data.write_selected_image(keep).unwrap();
-    data.write_file(AppDataFile::ImageUploadTemp, b"uncommitted")
+    data.write_file(AppDataFile::UploadTemp, b"uncommitted")
         .unwrap();
-    data.write_file(AppDataFile::ImageUploadTransaction, &[])
+    data.write_file(AppDataFile::UploadTransaction, &[])
         .unwrap();
 
     let catalog = data.scan_images::<4>().unwrap();
@@ -389,10 +394,7 @@ fn an_empty_upload_journal_has_no_authority_over_named_images() {
         Ok(bytes.len())
     );
     assert_eq!(&output[..bytes.len()], bytes);
-    for file in [
-        AppDataFile::ImageUploadTransaction,
-        AppDataFile::ImageUploadTemp,
-    ] {
+    for file in [AppDataFile::UploadTransaction, AppDataFile::UploadTemp] {
         assert!(matches!(
             data.read_file(file, &mut output),
             Err(AppDataError::Filesystem(Error::NotFound))
@@ -408,19 +410,19 @@ fn every_failed_image_commit_recovers_without_blocking_existing_images() {
     let bytes = b"\x89PNG\r\n\x1a\nkeep-image";
     let keep = ImageName::parse("KEEP.PNG").unwrap();
     let request = UploadRequest::image(keep, bytes.len(), crc32fast::hash(bytes));
-    data.begin_image_upload(request).unwrap();
-    data.append_image_upload(bytes).unwrap();
-    data.commit_image_upload(request, &mut [0; 512]).unwrap();
+    data.begin_upload(request).unwrap();
+    data.append_upload(bytes).unwrap();
+    data.commit_upload(request, &mut [0; 512]).unwrap();
     data.write_selected_image(keep).unwrap();
     let name = ImageName::parse("NEW.PNG").unwrap();
     let request = UploadRequest::image(name, bytes.len(), crc32fast::hash(bytes));
-    data.begin_image_upload(request).unwrap();
-    data.append_image_upload(bytes).unwrap();
+    data.begin_upload(request).unwrap();
+    data.append_upload(bytes).unwrap();
     let snapshot = card.0.borrow().bytes.clone();
     card.0.borrow_mut().writes = 0;
     card.store()
         .app_data()
-        .commit_image_upload(request, &mut [0; 512])
+        .commit_upload(request, &mut [0; 512])
         .unwrap();
     let total_writes = card.0.borrow().writes;
     assert!(total_writes > 0);
@@ -434,7 +436,7 @@ fn every_failed_image_commit_recovers_without_blocking_existing_images() {
         let result = failing
             .store()
             .app_data()
-            .commit_image_upload(request, &mut [0; 512]);
+            .commit_upload(request, &mut [0; 512]);
         assert_eq!(
             result.is_ok(),
             limit == total_writes,
@@ -465,10 +467,139 @@ fn every_failed_image_commit_recovers_without_blocking_existing_images() {
             );
             assert_eq!(&output[..bytes.len()], bytes);
         } else {
-            assert!(!data.named_file_exists(name.as_str()).unwrap());
+            assert!(!data.named_file_exists(UploadTarget::Image(name)).unwrap());
         }
-        data.begin_image_upload(request).unwrap();
-        data.abort_image_upload().unwrap();
+        data.begin_upload(request).unwrap();
+        data.abort_upload().unwrap();
+    }
+}
+
+#[test]
+fn books_stream_to_books_and_retry_without_overwriting() {
+    use crate::transfer::{BookName, FileTransfer};
+    let card = Card::formatted();
+    let store = card.store();
+    let mut data = store.app_data();
+    let name = BookName::parse("BOOK.EPB").unwrap();
+    let mut bytes = vec![42; 130 * 1024];
+    bytes[..4].copy_from_slice(b"PK\x03\x04");
+    let request = UploadRequest::book(name, bytes.len(), crc32fast::hash(&bytes));
+    for _ in 0..2 {
+        let mut transfer = FileTransfer::new();
+        transfer.begin(request, &mut data).unwrap();
+        for chunk in bytes.chunks(4096) {
+            transfer.append(chunk, &mut data).unwrap();
+        }
+        transfer.finish(&mut data, &mut [0; 4096]).unwrap();
+    }
+    let remounted = card.store();
+    let catalog = remounted.scan::<16>().unwrap();
+    assert_eq!(catalog.len(), 1);
+    let file = catalog.books().next().unwrap();
+    assert_eq!(file.name().as_str(), "BOOK.EPB");
+    let mut readback = vec![0; bytes.len()];
+    assert_eq!(
+        remounted.read_at(file.name(), 0, &mut readback).unwrap(),
+        bytes.len()
+    );
+    assert_eq!(readback, bytes);
+    assert_eq!(remounted.app_data().scan_images::<16>().unwrap().len(), 0);
+    let changed = UploadRequest::book(name, bytes.len(), request.crc32() ^ 1);
+    let before_verification = card.0.borrow().bytes.clone();
+    data.verify_upload(request, &mut [0; 4096]).unwrap();
+    assert_eq!(
+        data.verify_upload(changed, &mut [0; 4096]),
+        Err(AppDataError::ChecksumMismatch)
+    );
+    let missing = UploadRequest::book(
+        BookName::parse("MISSING.EPB").unwrap(),
+        request.length(),
+        request.crc32(),
+    );
+    assert!(matches!(
+        data.verify_upload(missing, &mut [0; 4096]),
+        Err(AppDataError::Filesystem(Error::NotFound))
+    ));
+    assert_eq!(card.0.borrow().bytes, before_verification);
+    assert_eq!(data.begin_upload(changed), Err(AppDataError::TargetExists));
+    data.verify_named_file(
+        request.target(),
+        request.length(),
+        request.crc32(),
+        &mut [0; 512],
+    )
+    .unwrap();
+}
+
+#[test]
+fn every_failed_book_commit_preserves_books_and_images_after_remount() {
+    use crate::transfer::BookName;
+    let card = Card::formatted();
+    let store = card.store();
+    let data = store.app_data();
+    let image = b"\x89PNG\r\n\x1a\nkeep-image";
+    let book = b"PK\x03\x04keep-book";
+    let image_request = UploadRequest::image(
+        ImageName::parse("KEEP.PNG").unwrap(),
+        image.len(),
+        crc32fast::hash(image),
+    );
+    let book_request = UploadRequest::book(
+        BookName::parse("KEEP.EPB").unwrap(),
+        book.len(),
+        crc32fast::hash(book),
+    );
+    for (request, bytes) in [(image_request, &image[..]), (book_request, &book[..])] {
+        data.begin_upload(request).unwrap();
+        data.append_upload(bytes).unwrap();
+        data.commit_upload(request, &mut [0; 512]).unwrap();
+    }
+    let request = UploadRequest::book(
+        BookName::parse("NEW.EPB").unwrap(),
+        book.len(),
+        crc32fast::hash(book),
+    );
+    data.begin_upload(request).unwrap();
+    data.append_upload(book).unwrap();
+    let snapshot = card.0.borrow().bytes.clone();
+    card.0.borrow_mut().writes = 0;
+    data.commit_upload(request, &mut [0; 512]).unwrap();
+    let total_writes = card.0.borrow().writes;
+    for limit in 0..=total_writes {
+        let failing = Card(Rc::new(RefCell::new(MemoryCard {
+            bytes: snapshot.clone(),
+            fail_read: None,
+            fail_write_after: Some(limit),
+            writes: 0,
+        })));
+        let result = failing
+            .store()
+            .app_data()
+            .commit_upload(request, &mut [0; 512]);
+        assert_eq!(
+            result.is_ok(),
+            limit == total_writes,
+            "write boundary {limit}"
+        );
+        failing.0.borrow_mut().fail_write_after = None;
+        let remounted = failing.store();
+        let data = remounted.app_data();
+        data.recover_upload(&mut [0; 512]).unwrap();
+        for kept in [image_request, book_request] {
+            data.verify_named_file(kept.target(), kept.length(), kept.crc32(), &mut [0; 512])
+                .unwrap();
+        }
+        if data.named_file_exists(request.target()).unwrap() {
+            data.verify_named_file(
+                request.target(),
+                request.length(),
+                request.crc32(),
+                &mut [0; 512],
+            )
+            .unwrap();
+        }
+        data.begin_upload(request).unwrap();
+        data.abort_upload().unwrap();
     }
 }
 

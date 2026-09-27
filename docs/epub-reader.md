@@ -105,13 +105,14 @@ The X4 path applies lower fixed limits:
 | Container XML | 2 KiB |
 | OPF package XML | 64 KiB |
 | Extracted resource | 140 KiB |
-| Encoded shelf cover | 128 KiB |
-| Linear spine items per book | 64 |
+| Encoded EPUB image | 8 MiB |
+| Linear spine items per book | 128 |
+| Resident navigation titles | 16 |
 | Cached catalog spine paths | 64 / 2 KiB total |
 | Manifest items | 512 |
 | Retained lines per page | 50 |
 | UTF-8 bytes per retained line | 320 |
-| PNG cover width | 1,536 pixels |
+| Image dimension / area | 4,096 pixels / 8 Mi pixels, subject to PNG row capacity |
 
 A limit failure becomes a visible, recoverable book error or a cover placeholder; content is never silently truncated.
 
@@ -121,7 +122,7 @@ A durable reading location is semantic: book identity, spine resource, and sourc
 
 Normal book access stays read-only. The current resume record is versioned by magic and checksummed in RTC fast memory; it stores the active screen, application preferences, catalog index, spine index, and page index. When typography changes, Brewthink maps the saved chapter progress into the new page count. Application preferences also use checksummed primary and backup records under `/brew`. Durable reading progress still needs stable book identity plus semantic source/token position so reflow can return to the exact paragraph.
 
-All firmware-initiated filesystem writes pass through `AppDataStore`. Fixed application records and upload transaction files live under `/brew`; completed images live under `/files`. Firmware creates the 8.3-compatible `/brew`, `/brew/cache`, `/brew/bookmark`, and `/files` directories when missing. The general book/file capability exposes no arbitrary write path.
+All firmware-initiated filesystem writes pass through `AppDataStore`. Fixed application records and upload transaction files live under `/brew`. Completed images live under `/files`, and [USB-uploaded books](usb-book-upload.md) live under `/books` with `.EPB` filenames. Firmware creates the 8.3-compatible `/brew`, `/brew/cache`, `/brew/bookmark`, and `/files` directories when missing. The general book/file capability exposes no arbitrary write path.
 
 ## Sleep screens
 
@@ -135,7 +136,7 @@ Settings exposes one exhaustive mode:
 
 Files lists up to sixteen uppercase 8.3 JPEG or PNG names from `/files` alongside EPUBs. Opening an image renders a contained full-screen preview. Confirm selects it as the custom sleep source and persists the filename in a checksummed primary and backup record. Sleep rendering center-crops the selected image into the 480 × 800 frame. Missing or invalid selections fall back safely.
 
-The host command accepts ordinary JPEG or PNG sources. Files already within the 96 KiB decoder boundary upload unchanged. Oversized PNGs and progressive JPEGs are resized and converted to bounded baseline JPEGs before transfer. The transfer state machine accepts a typed image name, declared length, format, checksum, and bounded chunks. USB Serial/JTAG supplies the first adapter through `scripts/device-control.sh put-image`. The device writes `UPLOAD.TMP`, verifies it, records `UPLOAD.TXN`, copies to a new named target, verifies SD readback, then removes the transaction. A retry cleans interrupted copies and treats an identical existing target as success; it refuses to overwrite a different file.
+The host command accepts ordinary JPEG or PNG sources. Files already within the separate 96 KiB image-upload boundary upload unchanged. Oversized PNGs and progressive JPEGs are resized and converted to bounded baseline JPEGs before transfer. The transfer state machine accepts a typed image name, declared length, format, checksum, and bounded chunks. USB Serial/JTAG supplies the first adapter through `scripts/device-control.sh put-image`. The device writes `UPLOAD.TMP`, verifies it, records `UPLOAD.TXN`, copies to a new named target, verifies SD readback, then removes the transaction. A retry cleans interrupted copies and treats an identical existing target as success; it refuses to overwrite a different file.
 
 `transfer::wifi` defines the future `PUT /api/files/images` request boundary; it does not start a network stack or expose an HTTP server yet.
 

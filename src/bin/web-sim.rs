@@ -518,7 +518,7 @@ impl WebLibrary {
             .map_err(js_error)?;
         let lines = page
             .lines()
-            .map(|line| ReaderLine::new(line.text(), line.style()))
+            .map(|line| ReaderLine::new(line.text(), line.style()).with_top(line.top() as u16))
             .collect::<Vec<_>>();
         let chapter_title = match self.app.view() {
             AppView::ReaderDrawer(drawer) => book.chapters[drawer.chapter()].title(),
@@ -554,7 +554,10 @@ impl WebLibrary {
             };
             metadata.chapter = drawer.chapter();
         }
-        render_app(AppFrame::Reader(view), target).map_err(js_error)?;
+        brewthink::reader::render_reader_with_images(view, target, |target, offset| {
+            chapter.draw_images(&page, target, offset);
+        })
+        .map_err(js_error)?;
         Ok(metadata)
     }
 

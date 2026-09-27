@@ -41,4 +41,4 @@ The application bar reserves the upper-right corner for a battery icon and perce
 
 ## Persistence boundary
 
-The X4 retains the active screen, reader location, and application preferences in checksummed RTC fast memory across deep sleep. Applied preferences also use checksummed primary and backup records under `/brew`. The browser stores applied preferences in versioned local storage. Named image uploads can write only to `/files`; their transaction records remain under `/brew`. Firmware creates `/brew`, `/brew/cache`, `/brew/bookmark`, and `/files` when missing. No stock flash, NVS, or firmware partition is used.
+The X4 retains the active screen, reader location, and application preferences in checksummed RTC fast memory across deep sleep. Applied preferences also use checksummed primary and backup records under `/brew`. The browser stores applied preferences in versioned local storage. Typed uploads write images to `/files` and books to `/books`. Their transaction records remain under `/brew`. Firmware creates `/brew`, `/brew/cache`, `/brew/bookmark`, and `/files` when missing. No stock flash, NVS, or firmware partition is used.

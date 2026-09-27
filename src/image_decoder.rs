@@ -4,8 +4,11 @@ use tjpgd_rs::{JpegDecoder, PixelFormat, Rect, Scale};
 
 use crate::image::{Dither, PackedImage, RenderOptions, ScaleMode, Size};
 
-pub const MAX_IMAGE_DIMENSION: usize = 1_536;
-pub const MAX_DECODED_IMAGE_PIXELS: usize = 1_024 * 1_536;
+#[cfg(feature = "device-reader")]
+pub mod stream;
+
+pub const MAX_IMAGE_DIMENSION: usize = 4_096;
+pub const MAX_DECODED_IMAGE_PIXELS: usize = 8 * 1_024 * 1_024;
 const DEFLATE_WINDOW_BYTES: usize = 32 * 1024;
 const MAX_SCANLINE_BYTES: usize = MAX_IMAGE_DIMENSION * 4;
 const JPEG_WORKSPACE_BYTES: usize = 35_000;
@@ -168,7 +171,20 @@ pub fn decode_jpeg(
     if ImageFormat::detect(encoded) != Some(ImageFormat::Jpeg) {
         return Err(ImageDecodeError::FormatMismatch);
     }
-    let reader = SliceReader { remaining: encoded };
+    decode_jpeg_reader(
+        SliceReader { remaining: encoded },
+        target,
+        options,
+        workspace,
+    )
+}
+
+pub fn decode_jpeg_reader<R: embedded_io::Read>(
+    reader: R,
+    target: &mut PackedImage<'_>,
+    options: RenderOptions,
+    workspace: &mut JpegDecodeWorkspace,
+) -> Result<DecodeReport, ImageDecodeError> {
     let mut decoder = JpegDecoder::new(&mut workspace.bytes[..], reader)
         .map_err(|_| ImageDecodeError::InvalidImage)?;
     let original = checked_size(usize::from(decoder.width()), usize::from(decoder.height()))?;
@@ -287,7 +303,7 @@ impl Transform {
     }
 }
 
-fn checked_size(width: usize, height: usize) -> Result<Size, ImageDecodeError> {
+pub(crate) fn checked_size(width: usize, height: usize) -> Result<Size, ImageDecodeError> {
     if width > MAX_IMAGE_DIMENSION
         || height > MAX_IMAGE_DIMENSION
         || width
