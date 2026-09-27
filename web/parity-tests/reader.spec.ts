@@ -5,6 +5,10 @@ import { captureFrame } from "../tests/capture-frame";
 
 const artifacts = path.resolve("../artifacts/simulator-parity");
 const defaultPreferences = 65_792;
+const authoredFixtures = new Map([
+  ["inline-images", { title: "Streaming illustrations", chapters: 2 }],
+  ["streamed-chapters", { title: "Streamed chapters", chapters: 3 }],
+]);
 const headings = {
   reader: "EPUB reader",
   "reader-drawer": "Reading controls",
@@ -69,13 +73,14 @@ async function ready(page: Page): Promise<void> {
 
 async function loadShelf(page: Page, fixture: string): Promise<void> {
   await ready(page);
-  const file = fixture === "inline-images" ? path.resolve("tests/fixtures/inline-images.epub") : path.join(artifacts, "fixtures", `${fixture}.epub`);
+  const authored = authoredFixtures.get(fixture);
+  const file = authored === undefined ? path.join(artifacts, "fixtures", `${fixture}.epub`) : path.resolve(`tests/fixtures/${fixture}.epub`);
   await page.locator("#epub-file").setInputFiles(file);
   await expect(page.locator("#file-summary")).toHaveText(`${fixture}.epub`);
   await expect(page.locator("#display-placeholder")).toBeHidden();
   await page.locator(".device-viewport").focus();
   await page.keyboard.press("Enter");
-  await expect(page.locator("#selected-title")).toHaveText(fixture === "inline-images" ? "Streaming illustrations" : "Parity &amp; literal");
+  await expect(page.locator("#selected-title")).toHaveText(authored?.title ?? "Parity &amp; literal");
 }
 
 async function openReader(page: Page, fixture: string, hasCover: boolean): Promise<void> {
@@ -150,14 +155,18 @@ for (const fixture of ["text", "jpeg", "frame-limit", "shelf-limit", "oversized-
   });
 }
 
-for (const fixture of ["text", "malformed-nav"]) {
+for (const fixture of ["text", "malformed-nav", "oversized-chapter", "streamed-chapters"]) {
   test(`${fixture} matches native drawer drafts, cancel, jumps, endpoints, reflow and wake`, async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
     const warnings: string[] = [];
     page.on("console", (entry) => { if (entry.type() === "warning") warnings.push(entry.text()); });
     await openReader(page, fixture, fixture === "text");
     if (fixture === "malformed-nav") expect(warnings.join("\n")).toContain("Malformed");
+    const chapters = authoredFixtures.get(fixture)?.chapters ?? 2;
+    if (fixture === "streamed-chapters") await captureFrame(page, path.join(artifacts, "streamed-chapters-opening.png"));
     const trace = (await readFile(path.join(artifacts, fixture, "drawer.txt"), "utf8")).trim().split("\n");
-    expect(trace.length).toBe(19);
+    expect(trace.length).toBe(21);
     for (const row of trace) {
       const fields = row.split("\t");
       if (fields.length !== 7) throw new Error(`invalid oracle trace: ${row}`);
@@ -174,23 +183,24 @@ for (const fixture of ["text", "malformed-nav"]) {
       }
       await expect(page.locator("#preview-heading")).toContainText(headings[screen]);
       if (screen !== "sleep") {
-        await expect(page.locator("#selection-position")).toHaveText(`Chapter ${unsigned(chapterText) + 1} / 2`);
+        await expect(page.locator("#selection-position")).toHaveText(`Chapter ${unsigned(chapterText) + 1} / ${chapters}`);
         await expect(page.locator("#view-position")).toHaveText(`${unsigned(pageText) + 1} / ${unsigned(countText)}`);
       }
       expect(await page.evaluate(() => localStorage.getItem("brewthink.reader-preferences.v1"))).toBe(String(unsigned(packedText)));
       await expectFrame(page, fixture, name);
       if (name === "chapter-row" || name === "chapter-next") {
         const index = name === "chapter-row" ? 0 : 1;
-        const label = fixture === "text"
+        const label = fixture === "text" || fixture === "oversized-chapter"
           ? (index === 0 ? "Opening" : "Closing") : `Chapter ${index + 1}`;
         await expect(page.locator("#selected-creator")).toHaveText(`Chapter: ${label}`);
       }
       if (name === "end-position") await expect(page.locator("#selected-creator")).toHaveText("Book position: 100%");
       if (name === "start-position") await expect(page.locator("#selected-creator")).toHaveText("Book position: 0%");
-      if (name === "chapter-next" || name === "type-staged") await captureFrame(page, path.join(artifacts, `${fixture}-${name}.png`));
+      if (name === "chapter-next" || name === "type-staged" || name === "previous-end") await captureFrame(page, path.join(artifacts, `${fixture}-${name}.png`));
     }
     await page.getByRole("button", { name: "Wake", exact: true }).click();
     await expectFrame(page, fixture, "awake");
+    expect(errors).toEqual([]);
   });
 }
 
@@ -214,7 +224,6 @@ for (const fixture of ["shelf-only-cover"]) {
 
 for (const { fixture, reason } of [
   { fixture: "malformed", reason: "Malformed" },
-  { fixture: "oversized-chapter", reason: "ResourceTooLarge" },
   { fixture: "too-many-chapters", reason: "TooManySpineItems" },
 ]) {
   test(`rejects ${fixture} at the device boundary`, async ({ page }) => {

@@ -12,7 +12,7 @@ def main():
         ("META-INF/container.xml", b'<container><rootfiles><rootfile full-path="EPUB/book.opf"/></rootfiles></container>'),
         ("EPUB/book.opf", b'<package><metadata><title>Streamed chapters</title><creator>Brewthink</creator></metadata><manifest><item id="long" href="long.xhtml" media-type="application/xhtml+xml"/><item id="paragraph" href="paragraph.xhtml" media-type="application/xhtml+xml"/><item id="end" href="end.xhtml" media-type="application/xhtml+xml"/><item id="figure" href="figure.png" media-type="image/png"/></manifest><spine><itemref idref="long"/><itemref idref="paragraph"/><itemref idref="end"/></spine></package>'),
     ]
-    paragraphs = [f'<p>Entry {index:05d}. A bounded reader keeps this sentence intact across buffers. The words båten, 文, and café keep their characters. <em>Inline text</em> stays in its paragraph.</p>' for index in range(4200)]
+    paragraphs = [f'<p>Entry {index:05d}. A bounded reader keeps this sentence intact across buffers. The words båten, öl, and café keep their characters. <em>Inline text</em> stays in its paragraph.</p>' for index in range(4200)]
     paragraphs.insert(0, '<h1>Across the old limit</h1><p>Before the illustration.</p><img src="figure.png" alt="Four tones"/><p>After the illustration.</p>')
     paragraphs.append('<p>FINAL CHAPTER MARKER. The complete chapter reached its end.</p>')
     long = ('<html><body>' + ''.join(paragraphs) + '</body></html>').encode()

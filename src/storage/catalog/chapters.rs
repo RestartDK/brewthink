@@ -7,7 +7,7 @@ use crate::{
         PreparedChapter, SOURCE_HEADER_BYTES,
     },
     device_epub::resolve_resource_path,
-    image_cache::{CacheState, ImageWorkspace},
+    image_cache::{CacheState, ImageProbeError, ImageWorkspace},
     zip_stream::{StreamingZip, ZipError, ZipValidationScratch},
 };
 use core::{cell::RefCell, fmt::Write};
@@ -262,7 +262,11 @@ impl<D: BlockDevice, T: TimeSource, const DIRS: usize, const FILES: usize, const
                 let file = FatStorage::open_book_file(books, key.source().book().name())?;
                 let probe = (|| {
                     let archive = StreamingZip::open(FileSource::new(&file), zip)?;
-                    Ok(images.probe_resource(&archive, path.as_str()).ok())
+                    match images.probe_resource(&archive, path.as_str()) {
+                        Ok(resource) => Ok(Some(resource)),
+                        Err(ImageProbeError::Image(_)) => Ok(None),
+                        Err(ImageProbeError::Read(error)) => Err(ZipError::Read(error)),
+                    }
                 })();
                 file.close()?;
                 match probe {
@@ -318,6 +322,9 @@ impl<D: BlockDevice, T: TimeSource, const DIRS: usize, const FILES: usize, const
             }
             StreamLayoutError::Layout(error) => AppDataError::Chapter(error),
         })?;
+        if text.checksum() != Some(key.source().checksum()) {
+            return Err(AppDataError::ChecksumMismatch);
+        }
         source.close().map_err(AppDataError::Filesystem)?;
         workspace.index[count * 4..count * 4 + 4].copy_from_slice(&position.to_le_bytes());
         let index = &workspace.index[..(count + 1) * 4];

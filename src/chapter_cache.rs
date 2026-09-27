@@ -1,4 +1,4 @@
-use core::fmt::Write;
+use core::{cell::RefCell, fmt::Write};
 
 #[cfg(test)]
 mod tests;
@@ -14,7 +14,7 @@ use crate::{
     zip_stream::{ReadAt, ZipEntry},
 };
 
-pub const MAX_CHAPTER_BYTES: u32 = 16 * 1024 * 1024;
+pub use crate::device_epub::MAX_CHAPTER_BYTES;
 pub const MAX_CHAPTER_PAGES: usize = 8192;
 pub const SOURCE_HEADER_BYTES: usize = 416;
 pub const CHAPTER_HEADER_BYTES: usize = 540;
@@ -296,6 +296,12 @@ pub struct PreparedChapter {
 pub struct ChapterText<'a, R> {
     source: &'a R,
     length: u32,
+    progress: RefCell<Option<ReadProgress>>,
+}
+
+struct ReadProgress {
+    offset: u32,
+    checksum: crc32fast::Hasher,
 }
 
 impl<'a, R: ReadAt> ChapterText<'a, R> {
@@ -303,7 +309,19 @@ impl<'a, R: ReadAt> ChapterText<'a, R> {
         (source.len() == SOURCE_HEADER_BYTES as u32 + key.length()).then_some(Self {
             source,
             length: key.length(),
+            progress: RefCell::new(Some(ReadProgress {
+                offset: 0,
+                checksum: crc32fast::Hasher::new(),
+            })),
         })
+    }
+
+    pub fn checksum(&self) -> Option<u32> {
+        self.progress
+            .borrow()
+            .as_ref()
+            .filter(|progress| progress.offset == self.length)
+            .map(|progress| progress.checksum.clone().finalize())
     }
 }
 
@@ -319,7 +337,18 @@ impl<R: ReadAt> ReadAt for ChapterText<'_, R> {
         if length == 0 {
             return Ok(0);
         }
-        self.source
-            .read_at(SOURCE_HEADER_BYTES as u32 + offset, &mut output[..length])
+        let count = self
+            .source
+            .read_at(SOURCE_HEADER_BYTES as u32 + offset, &mut output[..length])?;
+        let mut state = self.progress.borrow_mut();
+        if let Some(progress) = state.as_mut() {
+            if progress.offset == offset {
+                progress.checksum.update(&output[..count]);
+                progress.offset += count as u32;
+            } else {
+                *state = None;
+            }
+        }
+        Ok(count)
     }
 }

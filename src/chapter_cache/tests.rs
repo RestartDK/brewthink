@@ -6,7 +6,7 @@ use crate::{
     bounded_layout::{BoundedPage, layout_xhtml_page},
     image_cache::ImageBytes,
     storage::BookFileName,
-    zip_stream::{StreamingZip, ZipValidationScratch},
+    zip_stream::{InflateWorkspace, StreamingZip, ZipValidationScratch},
 };
 use std::{boxed::Box, vec};
 
@@ -27,6 +27,48 @@ fn key() -> ChapterKey {
         .unwrap(),
         ReaderPreferences::default(),
     )
+}
+
+#[test]
+fn staged_text_checksum_requires_complete_sequential_reads_and_detects_changed_bytes() {
+    let key = key();
+    let mut staged = key.source.header().to_vec();
+    let mut zip = Box::new(ZipValidationScratch::new());
+    let archive = StreamingZip::open(
+        ImageBytes(include_bytes!("../../web/tests/fixtures/minimal.epub")),
+        &mut zip,
+    )
+    .unwrap();
+    archive
+        .read_entry_to(
+            archive.find(key.source.path()).unwrap(),
+            &mut Box::new(InflateWorkspace::new()),
+            &mut [0; 128],
+            |bytes| {
+                staged.extend_from_slice(bytes);
+                Ok(())
+            },
+        )
+        .unwrap();
+    for damaged in [false, true] {
+        if damaged {
+            staged[SOURCE_HEADER_BYTES] ^= 1;
+        }
+        let source = ImageBytes(&staged);
+        let text = ChapterText::new(&source, key.source()).unwrap();
+        assert_eq!(text.checksum(), None);
+        let mut offset = 0;
+        let mut buffer = [0; 19];
+        while offset < text.len() {
+            offset += text.read_at(offset, &mut buffer).unwrap() as u32;
+        }
+        assert_eq!(text.checksum() == Some(key.source.checksum()), !damaged);
+        let nonsequential = ChapterText::new(&source, key.source()).unwrap();
+        nonsequential.read_at(1, &mut buffer).unwrap();
+        let mut output = vec![0; text.len() as usize];
+        nonsequential.read_at(0, &mut output).unwrap();
+        assert_eq!(nonsequential.checksum(), None);
+    }
 }
 
 #[test]

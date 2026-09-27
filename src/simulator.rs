@@ -1,11 +1,14 @@
 use std::{boxed::Box, format, rc::Rc, string::String, vec, vec::Vec};
 
 mod images;
+mod pages;
+use core::cell::RefCell;
 use images::BookImages;
+use pages::Pages;
 
 use crate::{
     app::ReaderPreferences,
-    bounded_layout::{BoundedPage, LayoutError, layout_xhtml_page},
+    bounded_layout::{BoundedPage, LayoutError},
     bounded_xml::FixedString,
     cover::{self, COVER_BYTES},
     device_epub::{
@@ -125,21 +128,22 @@ impl Book {
             .err();
         let mut chapters = Vec::with_capacity(publication.spine_len());
         for index in 0..publication.spine_len() {
-            let length = epub
-                .read_spine(index, &mut resource[..], &mut inflater)
-                .map_err(SimulatorError::Epub)?;
             let title = match titles[index].as_str() {
                 "" => format!("Chapter {}", index + 1),
                 title => title.into(),
             };
-            let mut chapter = Chapter::from_xhtml(&resource[..length], title)?;
-            chapter.path = publication
+            let path = publication
                 .spine_item(index)
                 .expect("spine index checked")
-                .path()
-                .into();
-            chapter.images = Some(Rc::clone(&images));
-            chapters.push(chapter);
+                .path();
+            images.layout(path, 0, ReaderPreferences::default())?;
+            chapters.push(Chapter {
+                title,
+                source: ChapterSource::Book {
+                    path: path.into(),
+                    images: Rc::clone(&images),
+                },
+            });
         }
         let cover = Cover::read(&images, publication.cover_path());
         Ok(Self {
@@ -156,23 +160,30 @@ impl Book {
 
 pub struct Chapter {
     title: String,
-    xhtml: Box<[u8]>,
-    path: String,
-    images: Option<Rc<BookImages>>,
+    source: ChapterSource,
+}
+
+enum ChapterSource {
+    Text {
+        xhtml: Box<[u8]>,
+        pages: RefCell<Pages>,
+    },
+    Book {
+        path: String,
+        images: Rc<BookImages>,
+    },
 }
 
 impl Chapter {
     fn from_xhtml(xhtml: &[u8], title: String) -> Result<Self, SimulatorError> {
-        if xhtml.len() > MAX_DEVICE_RESOURCE_BYTES {
-            return Err(SimulatorError::Epub(DeviceEpubError::ResourceTooLarge));
-        }
-        layout_xhtml_page(xhtml, 0, ReaderPreferences::default())
+        let pages = Pages::build(xhtml, ReaderPreferences::default(), |_| None)
             .map_err(SimulatorError::Layout)?;
         Ok(Self {
             title,
-            xhtml: xhtml.into(),
-            path: String::new(),
-            images: None,
+            source: ChapterSource::Text {
+                xhtml: xhtml.into(),
+                pages: RefCell::new(pages),
+            },
         })
     }
 
@@ -184,10 +195,17 @@ impl Chapter {
         &self,
         index: usize,
         preferences: ReaderPreferences,
-    ) -> Result<BoundedPage, LayoutError> {
-        match &self.images {
-            Some(images) => images.layout(&self.path, &self.xhtml, index, preferences),
-            None => layout_xhtml_page(&self.xhtml, index, preferences),
+    ) -> Result<BoundedPage, SimulatorError> {
+        match &self.source {
+            ChapterSource::Book { path, images } => images.layout(path, index, preferences),
+            ChapterSource::Text { xhtml, pages } => {
+                let mut pages = pages.borrow_mut();
+                if pages.preferences() != preferences {
+                    *pages = Pages::build(xhtml, preferences, |_| None)
+                        .map_err(SimulatorError::Layout)?;
+                }
+                pages.page(index).map_err(SimulatorError::Layout)
+            }
         }
     }
 
@@ -199,11 +217,14 @@ impl Chapter {
     ) -> usize {
         let mut drawn = 0;
         for image in page.images() {
-            let result = self.images.as_ref().map(|images| {
-                images.with_image(image.resource(), image.spec(), |bitmap| {
-                    crate::reader::render_inline_image(image, Some(bitmap), target, offset)
-                })
-            });
+            let result = match &self.source {
+                ChapterSource::Book { images, .. } => {
+                    Some(images.with_image(image.resource(), image.spec(), |bitmap| {
+                        crate::reader::render_inline_image(image, Some(bitmap), target, offset)
+                    }))
+                }
+                ChapterSource::Text { .. } => None,
+            };
             if matches!(result, Some(Ok(true))) {
                 drawn += 1;
             } else {

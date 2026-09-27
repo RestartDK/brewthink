@@ -17,7 +17,9 @@ for fixture in text jpeg no-cover frame-limit shelf-only-cover shelf-limit overs
   printf 'Native oracle: %s\n' "$fixture"
 done
 "$ORACLE" web/tests/fixtures/inline-images.epub "$ARTIFACTS/inline-images"
-for rejection in malformed:Malformed oversized-chapter:ResourceTooLarge too-many-chapters:TooManySpineItems; do
+"$ORACLE" web/tests/fixtures/streamed-chapters.epub "$ARTIFACTS/streamed-chapters" --trace-only
+"$ORACLE" "$ARTIFACTS/fixtures/oversized-chapter.epub" "$ARTIFACTS/oversized-chapter" --trace-only
+for rejection in malformed:Malformed too-many-chapters:TooManySpineItems; do
   fixture="${rejection%%:*}"
   reason="${rejection#*:}"
   if "$ORACLE" "$ARTIFACTS/fixtures/$fixture.epub" "$ARTIFACTS/$fixture" > "$ARTIFACTS/$fixture.log" 2>&1; then

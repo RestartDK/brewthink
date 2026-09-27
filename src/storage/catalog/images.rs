@@ -1,8 +1,8 @@
 use super::*;
 use crate::{
     image_cache::{
-        CACHE_HEADER_BYTES, CacheSlot, CacheState, ImageKey, ImageResource, ImageSource, ImageSpec,
-        ImageWorkspace, PreparedImage,
+        CACHE_HEADER_BYTES, CacheSlot, CacheState, ImageKey, ImageProbeError, ImageResource,
+        ImageSource, ImageSpec, ImageWorkspace, PreparedImage,
     },
     image_decoder::stream::{self, MAX_IMAGE_FILE_BYTES},
     zip_stream::{ReadAt, StreamingZip, ZipValidationScratch},
@@ -85,7 +85,10 @@ where
         let archive = StreamingZip::open(reader, zip).map_err(|_| AppDataError::InvalidMetadata)?;
         workspace
             .probe_resource(&archive, path)
-            .map_err(AppDataError::Image)
+            .map_err(|error| match error {
+                ImageProbeError::Read(error) => AppDataError::Filesystem(error),
+                ImageProbeError::Image(error) => AppDataError::Image(error),
+            })
     }
 
     pub fn prepare_image(

@@ -1,12 +1,13 @@
 use std::{
-    convert::Infallible,
     fs, io,
     path::{Path, PathBuf},
 };
 
 use brewthink::{
     app::ReaderPreferences,
-    bounded_layout::layout_xhtml_page,
+    bounded_layout::{BoundedPage, MAX_ENCODED_PAGE_BYTES, layout_xhtml_stream},
+    bounded_xml::stream::XmlWorkspace,
+    chapter_cache::{CHAPTER_HEADER_BYTES, MAX_CHAPTER_CACHE_BYTES, MAX_CHAPTER_PAGES},
     device_epub::{DeviceEpub, DevicePackageScratch, DevicePublication, MAX_DEVICE_RESOURCE_BYTES},
     epub::EpubBook,
     transfer::{BookName, MAX_BOOK_BYTES},
@@ -60,7 +61,7 @@ impl PreparedBook {
         }
         if self.warnings.is_empty() {
             println!(
-                "host: {} passed device package and chapter layout checks; cover not checked",
+                "host: {} passed device package and streamed text checks; images not checked",
                 self.name.as_str()
             );
         }
@@ -103,7 +104,7 @@ pub fn prepare_directory(directory: &Path) -> io::Result<Vec<PreparedBook>> {
 struct Bytes<'a>(&'a [u8]);
 
 impl ReadAt for Bytes<'_> {
-    type Error = Infallible;
+    type Error = io::Error;
 
     fn len(&self) -> u32 {
         self.0.len() as u32
@@ -140,16 +141,46 @@ fn reader_warnings(encoded: &[u8]) -> Vec<String> {
     };
     let mut warnings = Vec::new();
     for index in 0..book.publication().spine_len() {
-        match book.read_spine(index, &mut resource[..], &mut inflater) {
-            Ok(length) => {
-                if let Err(error) =
-                    layout_xhtml_page(&resource[..length], 0, ReaderPreferences::default())
-                {
-                    warnings.push(format!("chapter {} layout: {error:?}", index + 1));
+        let mut text = Vec::new();
+        match book.read_spine_to(index, &mut inflater, &mut resource[..4096], |bytes| {
+            text.extend_from_slice(bytes);
+            Ok(())
+        }) {
+            Ok(()) => {
+                if let Err(error) = check_text(&text) {
+                    warnings.push(format!("chapter {} layout: {error}", index + 1));
                 }
             }
             Err(error) => warnings.push(format!("chapter {} read: {error:?}", index + 1)),
         }
     }
     warnings
+}
+
+fn check_text(text: &[u8]) -> Result<(), String> {
+    let mut xml = Box::new(XmlWorkspace::new());
+    let mut page = Box::new(BoundedPage::new());
+    let mut record = Box::new([0; MAX_ENCODED_PAGE_BYTES]);
+    let mut file_bytes = CHAPTER_HEADER_BYTES + 4;
+    layout_xhtml_stream(
+        &Bytes(text),
+        &mut xml,
+        ReaderPreferences::default(),
+        &mut page,
+        |_| Ok(None),
+        |page| {
+            let length = page
+                .encode(&mut record[..])
+                .ok_or_else(|| io::Error::other("invalid page record"))?;
+            file_bytes += length + 12;
+            if page.page_index() >= MAX_CHAPTER_PAGES
+                || file_bytes > MAX_CHAPTER_CACHE_BYTES as usize
+            {
+                return Err(io::Error::other("chapter exceeds page cache capacity"));
+            }
+            Ok(())
+        },
+    )
+    .map(|_| ())
+    .map_err(|error| format!("{error:?}"))
 }

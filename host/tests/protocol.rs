@@ -494,7 +494,24 @@ fn books_preflight_never_opens_a_device_and_rejects_invalid_archives() {
         ]),
         Duration::from_secs(20),
     ));
-    assert!(String::from_utf8_lossy(&result.stdout).contains("ResourceTooLarge"));
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(stdout.contains("streamed text checks"));
+    assert!(!stdout.contains("reader warning"));
+    fs::copy(
+        root().join("web/tests/fixtures/parity/malformed.epub"),
+        dir.path().join("WARN.epub"),
+    )
+    .unwrap();
+    let result = success(run(
+        Command::new(tools().join("device-control")).args([
+            "--port",
+            "/no-device",
+            "check-books",
+            dir.path().to_str().unwrap(),
+        ]),
+        Duration::from_secs(20),
+    ));
+    assert!(String::from_utf8_lossy(&result.stdout).contains("Malformed"));
     fs::write(dir.path().join("BAD.epub"), b"PK\x03\x04broken").unwrap();
     let result = run(
         Command::new(tools().join("device-control")).args([

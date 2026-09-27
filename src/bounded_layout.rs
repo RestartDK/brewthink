@@ -156,6 +156,8 @@ pub enum LayoutError {
     Xml(XmlError),
     PageOutOfBounds,
     TooManyLines,
+    ChapterCapacity,
+    InvalidPageRecord,
 }
 
 impl core::fmt::Display for LayoutError {
@@ -164,6 +166,8 @@ impl core::fmt::Display for LayoutError {
             Self::Xml(error) => write!(f, "{error}"),
             Self::PageOutOfBounds => f.write_str("reader page is out of bounds"),
             Self::TooManyLines => f.write_str("reader page exceeds line capacity"),
+            Self::ChapterCapacity => f.write_str("chapter exceeds page cache capacity"),
+            Self::InvalidPageRecord => f.write_str("chapter page record is invalid"),
         }
     }
 }
@@ -172,7 +176,10 @@ impl core::error::Error for LayoutError {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::Xml(error) => Some(error),
-            Self::PageOutOfBounds | Self::TooManyLines => None,
+            Self::PageOutOfBounds
+            | Self::TooManyLines
+            | Self::ChapterCapacity
+            | Self::InvalidPageRecord => None,
         }
     }
 }

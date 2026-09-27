@@ -1,10 +1,9 @@
 use super::*;
 use crate::{
-    bounded_layout::layout_xhtml_page_with_images_into,
-    device_epub::resolve_resource_path,
+    device_epub::{MAX_CHAPTER_BYTES, resolve_resource_path},
     image_cache::{
-        CACHE_HEADER_BYTES, CacheState, ImageKey, ImageResource, ImageSpec, ImageWorkspace,
-        PreparedImage,
+        CACHE_HEADER_BYTES, CacheState, ImageKey, ImageProbeError, ImageResource, ImageSpec,
+        ImageWorkspace, PreparedImage,
     },
     storage::{BookFile, BookFileName},
 };
@@ -17,6 +16,13 @@ pub(super) struct BookImages {
     workspace: RefCell<Box<ImageWorkspace>>,
     zip: RefCell<Box<ZipValidationScratch>>,
     cache: RefCell<VecDeque<CachedPixels>>,
+    chapter: RefCell<Option<CachedChapter>>,
+}
+
+struct CachedChapter {
+    path: String,
+    text: Vec<u8>,
+    pages: super::pages::Pages,
 }
 
 struct CachedPixels {
@@ -35,6 +41,7 @@ impl BookImages {
             workspace: RefCell::new(Box::default()),
             zip: RefCell::new(Box::default()),
             cache: RefCell::new(VecDeque::new()),
+            chapter: RefCell::new(None),
         })
     }
 
@@ -47,27 +54,78 @@ impl BookImages {
         self.workspace
             .borrow_mut()
             .probe_resource(&archive, path)
-            .map_err(SimulatorError::Image)
+            .map_err(|error| match error {
+                ImageProbeError::Read(never) => match never {},
+                ImageProbeError::Image(error) => SimulatorError::Image(error),
+            })
     }
 
     pub fn layout(
         &self,
         path: &str,
-        xhtml: &[u8],
         index: usize,
         preferences: ReaderPreferences,
-    ) -> Result<BoundedPage, LayoutError> {
-        let reader =
-            MemoryFile::try_from(&self.bytes[..]).expect("book address range checked at load");
-        let archive = StreamingZip::open(reader, &mut self.zip.borrow_mut())
-            .expect("book archive was validated at load");
+    ) -> Result<BoundedPage, SimulatorError> {
+        let mut cache = self.chapter.borrow_mut();
+        if cache.as_ref().is_none_or(|chapter| chapter.path != path) {
+            *cache = None;
+            let text = self.chapter_text(path)?;
+            let pages = self.chapter_pages(path, &text, preferences)?;
+            *cache = Some(CachedChapter {
+                path: path.into(),
+                text,
+                pages,
+            });
+        }
+        let chapter = cache.as_mut().expect("validated chapter was inserted");
+        if chapter.pages.preferences() != preferences {
+            chapter.pages = self.chapter_pages(path, &chapter.text, preferences)?;
+        }
+        chapter.pages.page(index).map_err(SimulatorError::Layout)
+    }
+
+    fn chapter_text(&self, path: &str) -> Result<Vec<u8>, SimulatorError> {
+        let archive = StreamingZip::open(
+            MemoryFile::try_from(&self.bytes[..])?,
+            &mut self.zip.borrow_mut(),
+        )
+        .map_err(SimulatorError::Zip)?;
+        let entry = archive.find(path).map_err(SimulatorError::Zip)?;
+        if entry.uncompressed_size() > MAX_CHAPTER_BYTES {
+            return Err(SimulatorError::Epub(DeviceEpubError::ResourceTooLarge));
+        }
+        let mut text = Vec::new();
+        archive
+            .read_entry_to(
+                entry,
+                self.workspace.borrow_mut().inflate(),
+                &mut [0; 4096],
+                |bytes| {
+                    text.extend_from_slice(bytes);
+                    Ok(())
+                },
+            )
+            .map_err(SimulatorError::Zip)?;
+        Ok(text)
+    }
+
+    fn chapter_pages(
+        &self,
+        path: &str,
+        text: &[u8],
+        preferences: ReaderPreferences,
+    ) -> Result<super::pages::Pages, SimulatorError> {
+        let archive = StreamingZip::open(
+            MemoryFile::try_from(&self.bytes[..])?,
+            &mut self.zip.borrow_mut(),
+        )
+        .map_err(SimulatorError::Zip)?;
         let mut workspace = self.workspace.borrow_mut();
-        let mut page = BoundedPage::new();
-        layout_xhtml_page_with_images_into(xhtml, index, preferences, &mut page, |href| {
+        super::pages::Pages::build(text, preferences, |href| {
             let resource = resolve_resource_path::<Infallible>(path, href).ok()?;
             workspace.probe_resource(&archive, resource.as_str()).ok()
-        })?;
-        Ok(page)
+        })
+        .map_err(SimulatorError::Layout)
     }
 
     pub fn with_image<R>(

@@ -28,15 +28,16 @@ use crate::{
         App, AppEffect, AppInput, AppPreferences, AppView, BookId, Direction, HomeItem, ImageId,
         ReadingLocation, ResumePoint, SettingsItem, SleepScreenMode, SleepScreenSource,
     },
-    bounded_layout::{BoundedPage, MAX_PAGE_LINES, layout_xhtml_page_with_images_into},
+    bounded_layout::{BoundedPage, MAX_PAGE_LINES},
     bounded_xml::FixedString,
+    chapter_cache::{ChapterRequest, ChapterWorkspace},
     cover::{
         COVER_BYTES, MAX_ENCODED_COVER_BYTES, SHELF_COVER_BYTES, bitmap, downsample_cover,
         shelf_bitmap,
     },
     device_epub::{
         DeviceEpub, DevicePackageScratch, DevicePublication, MAX_DEVICE_PATH_BYTES,
-        MAX_DEVICE_RESOURCE_BYTES, resolve_resource_path,
+        MAX_DEVICE_RESOURCE_BYTES,
     },
     display::{
         framebuffer::{FRAME_BYTES as MONO_FRAME_BYTES, Rotation},
@@ -60,7 +61,7 @@ use crate::{
     transfer::{FileTransfer, UploadRequest, UploadTarget},
     ui::{AppFrame, render_app},
     x4::{X4FatBlockDevice, X4InputHardware, X4StorageHardware, decode_buttons},
-    zip_stream::{InflateWorkspace, StreamingZip, ZipValidationScratch},
+    zip_stream::{InflateWorkspace, ZipValidationScratch},
 };
 
 const MAX_DEVICE_BOOKS: usize = 16;
@@ -374,7 +375,7 @@ struct Workspaces {
     zip: &'static mut ZipValidationScratch,
     frame_codec: &'static mut FrameCodecWorkspace,
     content: &'static mut ContentWorkspace,
-    resource: &'static mut [u8; MAX_DEVICE_RESOURCE_BYTES],
+    resource: &'static mut ChapterWorkspace,
 }
 
 #[derive(Clone, Copy)]
@@ -382,7 +383,6 @@ struct LoadedChapter {
     book: BookId,
     spine_index: usize,
     spine_count: usize,
-    length: usize,
     path: FixedString<128>,
 }
 
@@ -527,8 +527,8 @@ pub async fn reader_app_task(
         ConstStaticCell::new(FrameCodecWorkspace::new());
     static CONTENT: ConstStaticCell<ContentWorkspace> =
         ConstStaticCell::new(ContentWorkspace::new());
-    static RESOURCE: ConstStaticCell<[u8; MAX_DEVICE_RESOURCE_BYTES]> =
-        ConstStaticCell::new([0; MAX_DEVICE_RESOURCE_BYTES]);
+    static RESOURCE: ConstStaticCell<ChapterWorkspace> =
+        ConstStaticCell::new(ChapterWorkspace::new());
     static UPLOAD_BUFFER: ConstStaticCell<[u8; UPLOAD_CHUNK_BYTES]> =
         ConstStaticCell::new([0; UPLOAD_CHUNK_BYTES]);
 
@@ -1209,7 +1209,7 @@ fn load_library(
             workspaces.zip,
             package,
             inflate,
-            workspaces.resource,
+            workspaces.resource.bytes(),
             publication,
         ) {
             Ok(book) => book,
@@ -1329,28 +1329,23 @@ fn run_effect(
                         *loaded = Some(chapter);
                         let page = workspaces.content.prepare_page();
                         let file = library.file(book).ok_or("reader book is missing")?;
-                        let reader = store
-                            .open_reader(file)
-                            .map_err(|_| "reader image source open failed")?;
-                        let archive = StreamingZip::open(reader, workspaces.zip)
-                            .map_err(|_| "reader image archive open failed")?;
-                        match layout_xhtml_page_with_images_into(
-                            &workspaces.resource[..chapter.length],
-                            0,
-                            app.reader_preferences(),
-                            page,
-                            |href| {
-                                let path = resolve_resource_path::<()>(chapter.path.as_str(), href)
-                                    .ok()?;
-                                workspaces
-                                    .frame_codec
-                                    .probe_resource(&archive, path.as_str())
-                                    .ok()
+                        match prepare_chapter_page(
+                            ChapterRequest {
+                                book: &file,
+                                path: chapter.path.as_str(),
+                                page_index: 0,
+                                preferences: app.reader_preferences(),
                             },
+                            store,
+                            workspaces.resource,
+                            workspaces.frame_codec,
+                            workspaces.zip,
+                            page,
                         ) {
-                            Ok(()) => app
-                                .chapter_loaded(chapter.spine_count, page.page_count())
-                                .map_err(|_| "reader application state rejected chapter")?,
+                            Ok(page_count) => {
+                                app.chapter_loaded(chapter.spine_count, page_count)
+                                    .map_err(|_| "reader application state rejected chapter")?
+                            }
                             Err(_) => app
                                 .chapter_failed()
                                 .map_err(|_| "reader application state rejected layout failure")?,
@@ -1419,23 +1414,31 @@ fn run_effect(
                         AppView::ReaderDrawer(drawer) => drawer.chapter(),
                         _ => location.spine_index(),
                     };
-                    let chapter = match loaded.take() {
-                        Some(chapter) => chapter,
-                        None => load_chapter(
-                            location.book(),
-                            location.spine_index(),
-                            title_index,
-                            library,
-                            store,
-                            workspaces,
-                        )
-                        .map_err(|_| "reader chapter reload failed")?,
+                    let chapter = match *loaded {
+                        Some(chapter)
+                            if chapter.book == location.book()
+                                && chapter.spine_index == location.spine_index()
+                                && workspaces.navigation.book == Some(location.book())
+                                && (workspaces.navigation.first
+                                    ..workspaces.navigation.first + CHAPTER_TITLE_WINDOW)
+                                    .contains(&title_index) =>
+                        {
+                            chapter
+                        }
+                        _ => {
+                            let chapter = load_chapter(
+                                location.book(),
+                                location.spine_index(),
+                                title_index,
+                                library,
+                                store,
+                                workspaces,
+                            )
+                            .map_err(|_| "reader chapter metadata reload failed")?;
+                            *loaded = Some(chapter);
+                            chapter
+                        }
                     };
-                    if chapter.book != location.book()
-                        || chapter.spine_index != location.spine_index()
-                    {
-                        return Err("reader chapter cache mismatch");
-                    }
                     render_page(app, location, library, chapter, store, workspaces)?;
                     refresh(store, panel, workspaces.frame_codec.frame())?;
                     esp_println::println!(
@@ -1488,71 +1491,92 @@ fn load_chapter(
     store: &DeviceStore,
     workspaces: &mut Workspaces,
 ) -> Result<LoadedChapter, ()> {
-    let file = library.file(selected).ok_or(())?;
-    let (inflate, publication, package) = workspaces.frame_codec.prepare_epub();
-    let reader = store.open_reader(file).map_err(|_| ())?;
     let navigation_matches = workspaces.navigation.book == Some(selected)
         && (workspaces.navigation.first..workspaces.navigation.first + CHAPTER_TITLE_WINDOW)
             .contains(&title_index);
-    let (spine_count, length, path) = if let Some(path) = library
+    if let Some(path) = library
         .spine_path(selected, spine_index)
         .filter(|_| navigation_matches)
     {
-        let archive = StreamingZip::open(reader, workspaces.zip).map_err(|_| ())?;
-        let entry = archive.find(path).map_err(|_| ())?;
-        if entry.uncompressed_size() as usize > workspaces.resource.len() {
-            return Err(());
-        }
-        let length = archive
-            .read_entry(entry, workspaces.resource, inflate)
-            .map_err(|_| ())?;
-        (
-            library.spine_count(selected),
-            length,
-            FixedString::try_from_str(path).map_err(|_| ())?,
-        )
-    } else {
-        let book = DeviceEpub::open(
-            reader,
-            workspaces.zip,
-            package,
+        return Ok(LoadedChapter {
+            book: selected,
+            spine_index,
+            spine_count: library.spine_count(selected),
+            path: FixedString::try_from_str(path).map_err(|_| ())?,
+        });
+    }
+    let file = library.file(selected).ok_or(())?;
+    let (inflate, publication, package) = workspaces.frame_codec.prepare_epub();
+    let reader = store.open_reader(file).map_err(|_| ())?;
+    let book = DeviceEpub::open(
+        reader,
+        workspaces.zip,
+        package,
+        inflate,
+        workspaces.resource.bytes(),
+        publication,
+    )
+    .map_err(|_| ())?;
+    if !navigation_matches {
+        workspaces.navigation.first = title_index / CHAPTER_TITLE_WINDOW * CHAPTER_TITLE_WINDOW;
+        if let Err(error) = book.read_chapter_titles(
+            &mut workspaces.navigation.titles,
+            workspaces.navigation.first,
+            workspaces.resource.bytes(),
             inflate,
-            workspaces.resource,
-            publication,
-        )
-        .map_err(|_| ())?;
-        let spine_count = book.publication().spine_len();
-        if !navigation_matches {
-            workspaces.navigation.first = title_index / CHAPTER_TITLE_WINDOW * CHAPTER_TITLE_WINDOW;
-            if let Err(error) = book.read_chapter_titles(
-                &mut workspaces.navigation.titles,
-                workspaces.navigation.first,
-                workspaces.resource,
-                inflate,
-            ) {
-                esp_println::println!(
-                    "BREWCTL/1 LOG stage=chapter-navigation state=fallback book={} reason={:?}",
-                    selected.index(),
-                    error
-                );
-            }
-            workspaces.navigation.book = Some(selected);
+        ) {
+            esp_println::println!(
+                "BREWCTL/1 LOG stage=chapter-navigation state=fallback book={} reason={:?}",
+                selected.index(),
+                error
+            );
         }
-        let length = book
-            .read_spine(spine_index, workspaces.resource, inflate)
-            .map_err(|_| ())?;
-        let path =
-            FixedString::try_from_str(book.publication().spine_item(spine_index).ok_or(())?.path())
-                .map_err(|_| ())?;
-        (spine_count, length, path)
-    };
+        workspaces.navigation.book = Some(selected);
+    }
     Ok(LoadedChapter {
         book: selected,
         spine_index,
-        spine_count,
-        length,
-        path,
+        spine_count: book.publication().spine_len(),
+        path: FixedString::try_from_str(
+            book.publication().spine_item(spine_index).ok_or(())?.path(),
+        )
+        .map_err(|_| ())?,
     })
+}
+
+fn prepare_chapter_page(
+    request: ChapterRequest<'_>,
+    store: &DeviceStore,
+    resource: &mut ChapterWorkspace,
+    images: &mut FrameCodecWorkspace,
+    zip: &mut ZipValidationScratch,
+    page: &mut BoundedPage,
+) -> Result<usize, &'static str> {
+    let started = Instant::now();
+    match store
+        .app_data()
+        .chapter_page(request, resource, images, zip, page)
+    {
+        Ok(chapter) => {
+            esp_println::println!(
+                "BREWCTL/1 LOG stage=chapter-cache state={} pages={} elapsed_ms={}",
+                match chapter.state {
+                    CacheState::Hit => "hit",
+                    CacheState::Prepared => "prepared",
+                },
+                chapter.summary.page_count,
+                started.elapsed().as_millis()
+            );
+            Ok(chapter.summary.page_count)
+        }
+        Err(error) => {
+            esp_println::println!(
+                "BREWCTL/1 LOG stage=chapter-cache state=failed reason={:?}",
+                error
+            );
+            Err("reader chapter cache preparation failed")
+        }
+    }
 }
 
 fn prepare_image(
@@ -1645,13 +1669,13 @@ fn decode_book_cover_frame(
         store,
         workspaces.frame_codec,
         workspaces.zip,
-        &mut workspaces.resource[..FRAME_BYTES],
+        &mut workspaces.resource.bytes()[..FRAME_BYTES],
         &[],
     )?;
     workspaces
         .frame_codec
         .frame()
-        .copy_from_slice(&workspaces.resource[..FRAME_BYTES]);
+        .copy_from_slice(&workspaces.resource.bytes()[..FRAME_BYTES]);
     Ok(true)
 }
 
@@ -1691,13 +1715,13 @@ fn decode_image_frame(
         store,
         workspaces.frame_codec,
         workspaces.zip,
-        &mut workspaces.resource[..FRAME_BYTES],
+        &mut workspaces.resource.bytes()[..FRAME_BYTES],
         &[],
     )?;
     workspaces
         .frame_codec
         .frame()
-        .copy_from_slice(&workspaces.resource[..FRAME_BYTES]);
+        .copy_from_slice(&workspaces.resource.bytes()[..FRAME_BYTES]);
     Ok(())
 }
 
@@ -1849,7 +1873,7 @@ fn render_library(
             let offset = MAX_ENCODED_COVER_BYTES as usize + cache_slot * SHELF_COVER_BYTES;
             downsample_cover(
                 workspaces.content.cover(),
-                &mut workspaces.resource[offset..offset + SHELF_COVER_BYTES],
+                &mut workspaces.resource.bytes()[offset..offset + SHELF_COVER_BYTES],
             );
         }
     }
@@ -1857,7 +1881,7 @@ fn render_library(
         decoded[index - visible.start] =
             decode_book_cover(BookId::new(index), library, store, workspaces).unwrap_or(false);
     }
-    let covers = &workspaces.resource[MAX_ENCODED_COVER_BYTES as usize..];
+    let covers = &workspaces.resource.bytes()[MAX_ENCODED_COVER_BYTES as usize..];
     let full_cover = &*workspaces.content.cover();
     let mut books = [ShelfBook::new("", "", None); MAX_DEVICE_BOOKS];
     for (index, book) in books[..library.length].iter_mut().enumerate() {
@@ -1905,26 +1929,19 @@ fn render_page(
         .file(location.book())
         .ok_or("reader book is missing")?;
     let page = workspaces.content.prepare_page();
-    let reader = store
-        .open_reader(file)
-        .map_err(|_| "reader image source open failed")?;
-    let archive = StreamingZip::open(reader, workspaces.zip)
-        .map_err(|_| "reader image archive open failed")?;
-    layout_xhtml_page_with_images_into(
-        &workspaces.resource[..chapter.length],
-        location.page_index(),
-        app.reader_preferences(),
-        page,
-        |href| {
-            let path = resolve_resource_path::<()>(chapter.path.as_str(), href).ok()?;
-            workspaces
-                .frame_codec
-                .probe_resource(&archive, path.as_str())
-                .ok()
+    prepare_chapter_page(
+        ChapterRequest {
+            book: &file,
+            path: chapter.path.as_str(),
+            page_index: location.page_index(),
+            preferences: app.reader_preferences(),
         },
-    )
-    .map_err(|_| "reader requested page layout failed")?;
-    drop(archive);
+        store,
+        workspaces.resource,
+        workspaces.frame_codec,
+        workspaces.zip,
+        page,
+    )?;
     let mut protected = [CacheSlot::default(); MAX_PAGE_LINES];
     let mut protected_count = 0;
     for image in page.images() {
@@ -1943,7 +1960,7 @@ fn render_page(
             store,
             workspaces.frame_codec,
             workspaces.zip,
-            &mut workspaces.resource[..image.spec().byte_len()],
+            &mut workspaces.resource.bytes()[..image.spec().byte_len()],
             &protected[..protected_count],
         );
     }
@@ -1979,7 +1996,7 @@ fn render_page(
     let mut drawn = 0;
     crate::reader::render_reader_with_images(view, &mut target, |target, offset| {
         for image in page.images() {
-            let pixels = &mut workspaces.resource[..image.spec().byte_len()];
+            let pixels = &mut workspaces.resource.bytes()[..image.spec().byte_len()];
             let bitmap = ImageKey::resource(&file, image.resource(), image.spec())
                 .filter(|key| store.app_data().read_prepared_image(key, pixels).is_ok())
                 .and_then(|_| PackedBitmap::new(image.spec().size(), READER_DEPTH, pixels).ok());

@@ -12,11 +12,80 @@ use crate::{
 };
 use std::{boxed::Box, format};
 
+#[test]
+#[ignore = "set BREWTHINK_CHAPTER_EPUB to an unchanged local EPUB"]
+fn local_epub_streams_every_spine_through_the_persistent_fat_cache() {
+    use crate::{
+        device_epub::{
+            DeviceEpub, DevicePackageScratch, DevicePublication, MAX_DEVICE_RESOURCE_BYTES,
+        },
+        image_cache::ImageBytes,
+        zip_stream::InflateWorkspace,
+    };
+    let path = std::env::var("BREWTHINK_CHAPTER_EPUB").expect("BREWTHINK_CHAPTER_EPUB");
+    let bytes = std::fs::read(&path).unwrap();
+    let (card, file) = store_fixture(Card::formatted_with_layout(180_000, 1_400), &bytes);
+    let mut zip = Box::new(ZipValidationScratch::new());
+    let mut package = Box::new(DevicePackageScratch::new());
+    let mut inflater = Box::new(InflateWorkspace::new());
+    let mut resource = Box::new([0; MAX_DEVICE_RESOURCE_BYTES]);
+    let mut publication = Box::new(DevicePublication::new());
+    let book = DeviceEpub::open(
+        ImageBytes(&bytes),
+        &mut zip,
+        &mut package,
+        &mut inflater,
+        &mut resource,
+        &mut publication,
+    )
+    .unwrap();
+    let mut harness = Harness::new();
+    for index in 0..book.publication().spine_len() {
+        let path = book.publication().spine_item(index).unwrap().path();
+        for preferences in [
+            ReaderPreferences::default(),
+            ReaderPreferences::new(
+                ReaderFont::Mono,
+                ReaderFontSize::Large,
+                ReaderSpacing::Relaxed,
+            ),
+        ] {
+            let first = harness
+                .load(&card, &file, path, 0, preferences)
+                .unwrap_or_else(|error| panic!("spine {index}: {error:?}"));
+            let opening = *harness.page;
+            for page_index in [
+                first.summary.page_count - 1,
+                first.summary.page_count / 2,
+                0,
+            ] {
+                let cached = harness
+                    .load(&card, &file, path, page_index, preferences)
+                    .unwrap();
+                assert_eq!(cached.state, CacheState::Hit);
+                assert_eq!(harness.page.page_index(), page_index);
+            }
+            assert_eq!(*harness.page, opening);
+            std::println!(
+                "spine={index} bytes={} preferences={} pages={}",
+                first.key.source().length(),
+                preferences.packed(),
+                first.summary.page_count
+            );
+        }
+    }
+    original_unchanged(&card, &file, &bytes);
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+}
+
 const MINIMAL: &[u8] = include_bytes!("../../../../web/tests/fixtures/minimal.epub");
 const LARGE: &[u8] = include_bytes!("../../../../web/tests/fixtures/streamed-chapters.epub");
 
 fn fixture(bytes: &[u8]) -> (Card, BookFile) {
-    let card = Card::formatted();
+    store_fixture(Card::formatted(), bytes)
+}
+
+fn store_fixture(card: Card, bytes: &[u8]) -> (Card, BookFile) {
     let store = card.store();
     let data = store.app_data();
     let request = UploadRequest::book(
