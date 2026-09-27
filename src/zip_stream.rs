@@ -257,6 +257,23 @@ where
         self.entry_count as usize
     }
 
+    pub fn directory_crc32(&self) -> Result<u32, ZipError<R::Error>> {
+        let mut checksum = Hasher::new();
+        let mut buffer = [0; 1024];
+        let mut offset = 0;
+        while offset < self.central_size {
+            let count = buffer.len().min((self.central_size - offset) as usize);
+            read_exact(
+                &self.reader,
+                self.central_offset + offset,
+                &mut buffer[..count],
+            )?;
+            checksum.update(&buffer[..count]);
+            offset += count as u32;
+        }
+        Ok(checksum.finalize())
+    }
+
     pub fn first_entry(&self) -> Result<ZipEntry, ZipError<R::Error>> {
         if self.entry_count == 0 {
             return Err(ZipError::EntryNotFound);

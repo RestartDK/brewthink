@@ -13,8 +13,15 @@ const CACHE_CURSOR: &str = "CLOCK.BIN";
 const MAX_CACHE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_CACHE_ENTRIES: usize = 512;
 
-struct FileSource<'file, 'store, D, T, const DIRS: usize, const FILES: usize, const VOLUMES: usize>
-where
+pub(super) struct FileSource<
+    'file,
+    'store,
+    D,
+    T,
+    const DIRS: usize,
+    const FILES: usize,
+    const VOLUMES: usize,
+> where
     D: BlockDevice,
     T: TimeSource,
 {
@@ -32,7 +39,7 @@ impl<
     const VOLUMES: usize,
 > FileSource<'file, 'store, D, T, DIRS, FILES, VOLUMES>
 {
-    fn new(file: &'file File<'store, D, T, DIRS, FILES, VOLUMES>) -> Self {
+    pub(super) fn new(file: &'file File<'store, D, T, DIRS, FILES, VOLUMES>) -> Self {
         Self {
             file,
             next_offset: Cell::new(None),

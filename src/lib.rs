@@ -9,6 +9,8 @@ pub mod bounded_layout;
 #[cfg(any(feature = "device-reader", feature = "epub"))]
 pub mod bounded_xml;
 #[cfg(feature = "device-reader")]
+pub mod chapter_cache;
+#[cfg(feature = "device-reader")]
 pub mod cover;
 #[cfg(feature = "device-reader")]
 pub mod device_epub;

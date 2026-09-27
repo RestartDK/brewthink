@@ -6,6 +6,9 @@ use crate::{
     reader::{ReaderStyle, ReaderTheme},
 };
 
+mod record;
+pub use record::MAX_ENCODED_PAGE_BYTES;
+
 pub use crate::reader::MAX_PAGE_LINES;
 pub const MAX_READER_LINE_BYTES: usize = 320;
 pub const MAX_CHAPTER_TITLE_BYTES: usize = 96;
@@ -200,6 +203,43 @@ pub fn layout_xhtml_page_into(
     layout_xhtml_page_with_images_into(encoded, requested_page, preferences, page, |_| None)
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub enum StreamLayoutError<E> {
+    Read(E),
+    Write(E),
+    Layout(LayoutError),
+}
+
+impl<E> From<XmlError> for StreamLayoutError<E> {
+    fn from(error: XmlError) -> Self {
+        Self::Layout(LayoutError::Xml(error))
+    }
+}
+
+impl<E> From<LayoutError> for StreamLayoutError<E> {
+    fn from(error: LayoutError) -> Self {
+        Self::Layout(error)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChapterSummary {
+    pub page_count: usize,
+    pub title: FixedString<MAX_CHAPTER_TITLE_BYTES>,
+}
+
+#[derive(Clone, Copy)]
+enum PageSelection {
+    One(usize),
+    All,
+}
+
+impl PageSelection {
+    fn includes(self, index: usize) -> bool {
+        matches!(self, Self::All) || matches!(self, Self::One(requested) if requested == index)
+    }
+}
+
 pub fn layout_xhtml_page_with_images_into(
     encoded: &[u8],
     requested_page: usize,
@@ -208,46 +248,115 @@ pub fn layout_xhtml_page_with_images_into(
     mut resolve_image: impl FnMut(&str) -> Option<ImageResource>,
 ) -> Result<(), LayoutError> {
     page.reset(requested_page);
-    let mut sink = PageSink::new(requested_page, preferences, page);
+    let mut layout = XhtmlLayout::new(PageSink::new(
+        PageSelection::One(requested_page),
+        preferences,
+        page,
+        |_: &BoundedPage| Ok::<(), core::convert::Infallible>(()),
+    ));
     let mut reader = XmlReader::new(encoded)?;
-    let mut in_body = false;
-    let mut hidden_depth = 0usize;
-    let mut quote_depth = 0usize;
-    let mut list_depth = 0usize;
+    let result = (|| {
+        while let Some(event) = reader.next_event()? {
+            layout.event(event, &mut |href| Ok(resolve_image(href)))?;
+        }
+        layout.sink.finish()
+    })();
+    match result {
+        Ok(_) => Ok(()),
+        Err(StreamLayoutError::Layout(error)) => Err(error),
+        Err(StreamLayoutError::Read(never) | StreamLayoutError::Write(never)) => match never {},
+    }
+}
 
-    while let Some(event) = reader.next_event()? {
+pub fn layout_xhtml_stream<R: crate::zip_stream::ReadAt>(
+    source: &R,
+    workspace: &mut crate::bounded_xml::stream::XmlWorkspace,
+    preferences: ReaderPreferences,
+    page: &mut BoundedPage,
+    mut resolve_image: impl FnMut(&str) -> Result<Option<ImageResource>, R::Error>,
+    complete: impl FnMut(&BoundedPage) -> Result<(), R::Error>,
+) -> Result<ChapterSummary, StreamLayoutError<R::Error>> {
+    use crate::bounded_xml::stream::{StreamXmlError, XmlStream};
+    page.reset(0);
+    let mut layout = XhtmlLayout::new(PageSink::new(
+        PageSelection::All,
+        preferences,
+        page,
+        complete,
+    ));
+    let mut reader = XmlStream::new(source, workspace);
+    while let Some(event) = reader.next_event().map_err(|error| match error {
+        StreamXmlError::Read(error) => StreamLayoutError::Read(error),
+        StreamXmlError::Xml(error) => StreamLayoutError::from(error),
+    })? {
+        layout.event(event, &mut resolve_image)?;
+    }
+    layout.sink.finish()
+}
+
+struct XhtmlLayout<'a, F> {
+    sink: PageSink<'a, F>,
+    in_body: bool,
+    hidden_depth: usize,
+    quote_depth: usize,
+    list_depth: usize,
+}
+
+impl<'a, E, F: FnMut(&BoundedPage) -> Result<(), E>> XhtmlLayout<'a, F> {
+    fn new(sink: PageSink<'a, F>) -> Self {
+        Self {
+            sink,
+            in_body: false,
+            hidden_depth: 0,
+            quote_depth: 0,
+            list_depth: 0,
+        }
+    }
+
+    fn event(
+        &mut self,
+        event: XmlEvent<'_>,
+        resolve_image: &mut impl FnMut(&str) -> Result<Option<ImageResource>, E>,
+    ) -> Result<(), StreamLayoutError<E>> {
+        let Self {
+            sink,
+            in_body,
+            hidden_depth,
+            quote_depth,
+            list_depth,
+        } = self;
         match event {
             XmlEvent::Start(tag) => {
                 let name = tag.local_name();
-                if hidden_depth > 0 {
-                    hidden_depth += 1;
-                    continue;
+                if *hidden_depth > 0 {
+                    *hidden_depth += 1;
+                    return Ok(());
                 }
                 if name == "body" {
-                    in_body = true;
-                    continue;
+                    *in_body = true;
+                    return Ok(());
                 }
-                if !in_body {
-                    continue;
+                if !*in_body {
+                    return Ok(());
                 }
                 if matches!(name, "script" | "style") {
-                    hidden_depth = 1;
-                    continue;
+                    *hidden_depth = 1;
+                    return Ok(());
                 }
                 match name {
                     "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                         sink.begin_block(ReaderStyle::Heading)?
                     }
                     "blockquote" => {
-                        quote_depth += 1;
+                        *quote_depth += 1;
                         sink.begin_block(ReaderStyle::Quote)?;
                     }
                     "li" => {
-                        list_depth += 1;
+                        *list_depth += 1;
                         sink.begin_block(ReaderStyle::ListItem)?;
                         sink.write_plain("• ")?;
                     }
-                    "p" => sink.begin_block(contextual_style(quote_depth, list_depth))?,
+                    "p" => sink.begin_block(contextual_style(*quote_depth, *list_depth))?,
                     "pre" => sink.begin_block(ReaderStyle::Preformatted)?,
                     "figcaption" | "caption" => sink.begin_block(ReaderStyle::Caption)?,
                     "tr" => sink.begin_block(ReaderStyle::Body)?,
@@ -261,10 +370,14 @@ pub fn layout_xhtml_page_with_images_into(
                             .or(tag.attribute("href")?)
                             .or(tag.attribute("xlink:href")?);
                         let alt = tag.attribute("alt")?;
-                        if let Some(image) = href.and_then(&mut resolve_image) {
+                        let image = match href {
+                            Some(href) => resolve_image(href).map_err(StreamLayoutError::Read)?,
+                            None => None,
+                        };
+                        if let Some(image) = image {
                             sink.image(image, alt)?;
                         } else {
-                            append_image(alt, &mut sink)?;
+                            append_image(alt, sink)?;
                         }
                     }
                     "hr" => {
@@ -276,38 +389,38 @@ pub fn layout_xhtml_page_with_images_into(
                     _ => {}
                 }
             }
-            XmlEvent::Text(text) if in_body && hidden_depth == 0 => sink.write_text(text)?,
+            XmlEvent::Text(text) if *in_body && *hidden_depth == 0 => sink.write_text(text)?,
             XmlEvent::End(name) => {
-                if hidden_depth > 0 {
-                    hidden_depth -= 1;
-                    continue;
+                if *hidden_depth > 0 {
+                    *hidden_depth -= 1;
+                    return Ok(());
                 }
                 if name == "body" {
                     sink.finish_block()?;
-                    in_body = false;
-                    continue;
+                    *in_body = false;
+                    return Ok(());
                 }
-                if !in_body {
-                    continue;
+                if !*in_body {
+                    return Ok(());
                 }
                 match name {
                     "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "p" | "pre" | "figcaption"
                     | "caption" | "tr" => sink.finish_block()?,
                     "li" => {
                         sink.finish_block()?;
-                        list_depth = list_depth.saturating_sub(1);
+                        *list_depth = list_depth.saturating_sub(1);
                     }
                     "blockquote" => {
                         sink.finish_block()?;
-                        quote_depth = quote_depth.saturating_sub(1);
+                        *quote_depth = quote_depth.saturating_sub(1);
                     }
                     _ => {}
                 }
             }
             XmlEvent::Text(_) => {}
         }
+        Ok(())
     }
-    sink.finish()
 }
 
 const fn contextual_style(quote_depth: usize, list_depth: usize) -> ReaderStyle {
@@ -320,7 +433,10 @@ const fn contextual_style(quote_depth: usize, list_depth: usize) -> ReaderStyle 
     }
 }
 
-fn append_image(alt: Option<&str>, sink: &mut PageSink<'_>) -> Result<(), LayoutError> {
+fn append_image<E, F: FnMut(&BoundedPage) -> Result<(), E>>(
+    alt: Option<&str>,
+    sink: &mut PageSink<'_, F>,
+) -> Result<(), StreamLayoutError<E>> {
     if !sink.line_is_empty() {
         sink.write_plain(" ")?;
     }
@@ -332,8 +448,9 @@ fn append_image(alt: Option<&str>, sink: &mut PageSink<'_>) -> Result<(), Layout
     sink.write_plain("]")
 }
 
-struct PageSink<'a> {
-    requested_page: usize,
+struct PageSink<'a, F> {
+    selection: PageSelection,
+    complete: F,
     page_index: usize,
     used_height: usize,
     page_line_count: usize,
@@ -349,14 +466,16 @@ struct PageSink<'a> {
     emitted_any: bool,
 }
 
-impl<'a> PageSink<'a> {
+impl<'a, E, F: FnMut(&BoundedPage) -> Result<(), E>> PageSink<'a, F> {
     const fn new(
-        requested_page: usize,
+        selection: PageSelection,
         preferences: ReaderPreferences,
         page: &'a mut BoundedPage,
+        complete: F,
     ) -> Self {
         Self {
-            requested_page,
+            selection,
+            complete,
             page_index: 0,
             used_height: 0,
             page_line_count: 0,
@@ -373,7 +492,11 @@ impl<'a> PageSink<'a> {
         }
     }
 
-    fn image(&mut self, resource: ImageResource, alt: Option<&str>) -> Result<(), LayoutError> {
+    fn image(
+        &mut self,
+        resource: ImageResource,
+        alt: Option<&str>,
+    ) -> Result<(), StreamLayoutError<E>> {
         self.line_break(false)?;
         let content_width = resource
             .size
@@ -385,12 +508,8 @@ impl<'a> PageSink<'a> {
         let height = height.max(1).min(PAGE_HEIGHT as u64) as usize;
         let spec =
             ImageSpec::new(width, height, ScaleMode::Contain).ok_or(LayoutError::TooManyLines)?;
-        if self.used_height + height > PAGE_HEIGHT || self.page_line_count == MAX_PAGE_LINES {
-            self.page_index += 1;
-            self.used_height = 0;
-            self.page_line_count = 0;
-        }
-        if self.page_index == self.requested_page {
+        self.reserve(height)?;
+        if self.selection.includes(self.page_index) {
             let alt = match alt {
                 Some(value) => FixedString::from_decoded(value).unwrap_or_default(),
                 None => FixedString::new(),
@@ -410,7 +529,7 @@ impl<'a> PageSink<'a> {
         Ok(())
     }
 
-    fn begin_block(&mut self, style: ReaderStyle) -> Result<(), LayoutError> {
+    fn begin_block(&mut self, style: ReaderStyle) -> Result<(), StreamLayoutError<E>> {
         self.line_break(false)?;
         self.style = style;
         self.pending_space = false;
@@ -418,7 +537,7 @@ impl<'a> PageSink<'a> {
         Ok(())
     }
 
-    fn finish_block(&mut self) -> Result<(), LayoutError> {
+    fn finish_block(&mut self) -> Result<(), StreamLayoutError<E>> {
         let emitted = self.line_break(false)?;
         if emitted {
             self.emit(FixedString::new(), ReaderStyle::Body)?;
@@ -429,25 +548,25 @@ impl<'a> PageSink<'a> {
         Ok(())
     }
 
-    fn write_encoded(&mut self, value: &str) -> Result<(), LayoutError> {
+    fn write_encoded(&mut self, value: &str) -> Result<(), StreamLayoutError<E>> {
         self.write_text(XmlText::Encoded(value))
     }
 
-    fn write_text(&mut self, text: XmlText<'_>) -> Result<(), LayoutError> {
+    fn write_text(&mut self, text: XmlText<'_>) -> Result<(), StreamLayoutError<E>> {
         for character in text {
             self.write_character(character?)?;
         }
         Ok(())
     }
 
-    fn write_plain(&mut self, value: &str) -> Result<(), LayoutError> {
+    fn write_plain(&mut self, value: &str) -> Result<(), StreamLayoutError<E>> {
         for character in value.chars() {
             self.write_character(character)?;
         }
         Ok(())
     }
 
-    fn write_character(&mut self, character: char) -> Result<(), LayoutError> {
+    fn write_character(&mut self, character: char) -> Result<(), StreamLayoutError<E>> {
         if self.style == ReaderStyle::Preformatted {
             return self.write_preformatted(character);
         }
@@ -468,7 +587,7 @@ impl<'a> PageSink<'a> {
         Ok(())
     }
 
-    fn flush_word(&mut self) -> Result<(), LayoutError> {
+    fn flush_word(&mut self) -> Result<(), StreamLayoutError<E>> {
         if self.word.is_empty() {
             return Ok(());
         }
@@ -493,7 +612,7 @@ impl<'a> PageSink<'a> {
         Ok(())
     }
 
-    fn write_preformatted(&mut self, character: char) -> Result<(), LayoutError> {
+    fn write_preformatted(&mut self, character: char) -> Result<(), StreamLayoutError<E>> {
         if self.previous_cr && character == '\n' {
             self.previous_cr = false;
             return Ok(());
@@ -514,7 +633,7 @@ impl<'a> PageSink<'a> {
         Ok(())
     }
 
-    fn push_preformatted(&mut self, character: char) -> Result<(), LayoutError> {
+    fn push_preformatted(&mut self, character: char) -> Result<(), StreamLayoutError<E>> {
         let width = self.theme.character_width(self.style, character);
         if !self.current.is_empty()
             && (self.current_width + width > self.theme.line_width(self.style)
@@ -531,12 +650,12 @@ impl<'a> PageSink<'a> {
         self.current.is_empty() && self.word.is_empty()
     }
 
-    fn line_break(&mut self, force_empty: bool) -> Result<bool, LayoutError> {
+    fn line_break(&mut self, force_empty: bool) -> Result<bool, StreamLayoutError<E>> {
         self.flush_word()?;
         self.emit_current(force_empty)
     }
 
-    fn emit_current(&mut self, force_empty: bool) -> Result<bool, LayoutError> {
+    fn emit_current(&mut self, force_empty: bool) -> Result<bool, StreamLayoutError<E>> {
         self.pending_space = false;
         if self.current.is_empty() && !force_empty {
             return Ok(false);
@@ -552,17 +671,13 @@ impl<'a> PageSink<'a> {
         &mut self,
         line: FixedString<MAX_READER_LINE_BYTES>,
         style: ReaderStyle,
-    ) -> Result<(), LayoutError> {
+    ) -> Result<(), StreamLayoutError<E>> {
         let height = self.theme.line_height(style);
-        if self.used_height + height > PAGE_HEIGHT || self.page_line_count == MAX_PAGE_LINES {
-            self.page_index += 1;
-            self.used_height = 0;
-            self.page_line_count = 0;
-        }
-        if self.page_index == self.requested_page {
+        self.reserve(height)?;
+        if self.selection.includes(self.page_index) {
             let index = usize::from(self.page.line_count);
             if index == MAX_PAGE_LINES {
-                return Err(LayoutError::TooManyLines);
+                return Err(LayoutError::TooManyLines.into());
             }
             if style == ReaderStyle::Heading && self.page.chapter_title.is_empty() {
                 self.page.chapter_title = copy_fixed(line.as_str())?;
@@ -582,15 +697,35 @@ impl<'a> PageSink<'a> {
         Ok(())
     }
 
-    fn finish(mut self) -> Result<(), LayoutError> {
+    fn reserve(&mut self, height: usize) -> Result<(), StreamLayoutError<E>> {
+        if self.used_height + height > PAGE_HEIGHT || self.page_line_count == MAX_PAGE_LINES {
+            if matches!(self.selection, PageSelection::All) {
+                (self.complete)(self.page).map_err(StreamLayoutError::Write)?;
+                self.page.lines.fill(None);
+                self.page.line_count = 0;
+            }
+            self.page_index = self
+                .page_index
+                .checked_add(1)
+                .ok_or(LayoutError::TooManyLines)?;
+            if matches!(self.selection, PageSelection::All) {
+                self.page.page_index = self.page_index;
+            }
+            self.used_height = 0;
+            self.page_line_count = 0;
+        }
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<ChapterSummary, StreamLayoutError<E>> {
         self.line_break(false)?;
         let page_count = if self.emitted_any {
             self.page_index + 1
         } else {
             1
         };
-        if self.requested_page >= page_count {
-            return Err(LayoutError::PageOutOfBounds);
+        if matches!(self.selection, PageSelection::One(requested) if requested >= page_count) {
+            return Err(LayoutError::PageOutOfBounds.into());
         }
         if self.page.line_count == 0 {
             let text = FixedString::try_from_str("This section contains no readable text.")?;
@@ -605,7 +740,13 @@ impl<'a> PageSink<'a> {
             self.page.chapter_title = FixedString::try_from_str("Section")?;
         }
         self.page.page_count = page_count;
-        Ok(())
+        if matches!(self.selection, PageSelection::All) {
+            (self.complete)(self.page).map_err(StreamLayoutError::Write)?;
+        }
+        Ok(ChapterSummary {
+            page_count,
+            title: self.page.chapter_title,
+        })
     }
 }
 
@@ -624,6 +765,9 @@ mod regression_tests;
 
 #[cfg(test)]
 mod image_tests;
+
+#[cfg(test)]
+mod stream_tests;
 
 #[cfg(test)]
 mod tests {

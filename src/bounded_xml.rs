@@ -1,3 +1,6 @@
+#[cfg(feature = "device-reader")]
+pub mod stream;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum XmlError {
     InvalidUtf8,
@@ -302,7 +305,7 @@ impl<'a> XmlReader<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub struct FixedString<const CAPACITY: usize> {
     bytes: [u8; CAPACITY],
     length: u16,
@@ -405,6 +408,14 @@ impl<const CAPACITY: usize> FixedString<CAPACITY> {
     }
 }
 
+impl<const CAPACITY: usize> PartialEq for FixedString<CAPACITY> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl<const CAPACITY: usize> Eq for FixedString<CAPACITY> {}
+
 impl<const CAPACITY: usize> Default for FixedString<CAPACITY> {
     fn default() -> Self {
         Self::new()
@@ -465,7 +476,7 @@ fn decode_entity(entity: &str) -> Result<char, XmlError> {
     }
 }
 
-const fn is_xml_character(character: char) -> bool {
+pub(crate) const fn is_xml_character(character: char) -> bool {
     matches!(character, '\t' | '\r' | '\n' | '\u{20}'..='\u{d7ff}' | '\u{e000}'..='\u{fffd}' | '\u{10000}'..='\u{10ffff}')
 }
 

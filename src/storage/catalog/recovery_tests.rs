@@ -1,5 +1,6 @@
 extern crate std;
 
+mod chapter_tests;
 mod image_tests;
 
 use super::*;
