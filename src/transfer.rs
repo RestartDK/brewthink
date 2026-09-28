@@ -3,7 +3,7 @@ use crc32fast::Hasher;
 use crate::image_decoder::ImageFormat;
 
 pub const MAX_IMAGE_BYTES: usize = 96 * 1024;
-const MAX_IMAGE_STEM_BYTES: usize = 8;
+pub const MAX_BOOK_BYTES: usize = 32 * 1024 * 1024;
 const IMAGE_NAME_BYTES: usize = 12;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -16,13 +16,7 @@ pub struct ImageName {
 impl ImageName {
     pub fn parse(value: &str) -> Result<Self, ImageNameError> {
         let (stem, extension) = value.rsplit_once('.').ok_or(ImageNameError)?;
-        if stem.is_empty()
-            || stem.len() > MAX_IMAGE_STEM_BYTES
-            || is_reserved_fat_stem(stem)
-            || !stem
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'~'))
-        {
+        if !valid_fat_stem(stem) {
             return Err(ImageNameError);
         }
         let format = if extension.eq_ignore_ascii_case("jpg") {
@@ -72,6 +66,15 @@ impl ImageName {
     }
 }
 
+fn valid_fat_stem(stem: &str) -> bool {
+    !stem.is_empty()
+        && stem.len() <= 8
+        && !is_reserved_fat_stem(stem)
+        && stem
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'~'))
+}
+
 fn is_reserved_fat_stem(stem: &str) -> bool {
     ["CON", "PRN", "AUX", "NUL"]
         .iter()
@@ -87,14 +90,92 @@ fn is_reserved_fat_stem(stem: &str) -> bool {
 pub struct ImageNameError;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BookName {
+    bytes: [u8; 12],
+    length: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BookNameError;
+
+impl BookName {
+    pub fn parse(value: &str) -> Result<Self, BookNameError> {
+        let (stem, extension) = value.rsplit_once('.').ok_or(BookNameError)?;
+        if !valid_fat_stem(stem) || !extension.eq_ignore_ascii_case("epb") {
+            return Err(BookNameError);
+        }
+        let mut bytes = [0; 12];
+        for (index, byte) in value.bytes().enumerate() {
+            bytes[index] = byte.to_ascii_uppercase();
+        }
+        Ok(Self {
+            bytes,
+            length: value.len() as u8,
+        })
+    }
+
+    pub fn as_str(&self) -> &str {
+        core::str::from_utf8(&self.bytes[..usize::from(self.length)])
+            .expect("book names contain only ASCII")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UploadTarget {
     Image(ImageName),
+    Book(BookName),
+}
+
+impl UploadTarget {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Image(name) => name.as_str(),
+            Self::Book(name) => name.as_str(),
+        }
+    }
+
+    pub const fn kind(self) -> &'static str {
+        match self {
+            Self::Image(_) => "image",
+            Self::Book(_) => "book",
+        }
+    }
+
+    pub const fn maximum_bytes(self) -> usize {
+        match self {
+            Self::Image(_) => MAX_IMAGE_BYTES,
+            Self::Book(_) => MAX_BOOK_BYTES,
+        }
+    }
+
+    pub fn matches_signature(self, bytes: &[u8]) -> bool {
+        match self {
+            Self::Image(name) => ImageFormat::detect(bytes) == Some(name.format()),
+            Self::Book(_) => bytes.starts_with(b"PK\x03\x04"),
+        }
+    }
+
+    pub fn from_padded(bytes: [u8; 12]) -> Option<Self> {
+        let length = bytes
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(bytes.len());
+        let name = core::str::from_utf8(&bytes[..length]).ok()?;
+        ImageName::parse(name)
+            .map(Self::Image)
+            .or_else(|_| BookName::parse(name).map(Self::Book))
+            .ok()
+    }
+
+    pub fn write_padded(self, output: &mut [u8; 12]) {
+        output.fill(0);
+        output[..self.name().len()].copy_from_slice(self.name().as_bytes());
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct UploadRequest {
     target: UploadTarget,
-    format: ImageFormat,
     length: usize,
     crc32: u32,
 }
@@ -103,7 +184,6 @@ impl UploadRequest {
     pub const fn image(name: ImageName, length: usize, crc32: u32) -> Self {
         Self {
             target: UploadTarget::Image(name),
-            format: name.format(),
             length,
             crc32,
         }
@@ -113,8 +193,12 @@ impl UploadRequest {
         self.target
     }
 
-    pub const fn format(self) -> ImageFormat {
-        self.format
+    pub const fn book(name: BookName, length: usize, crc32: u32) -> Self {
+        Self {
+            target: UploadTarget::Book(name),
+            length,
+            crc32,
+        }
     }
 
     pub const fn length(self) -> usize {
@@ -204,7 +288,7 @@ impl FileTransfer {
         if request.length == 0 {
             return Err(FileTransferError::EmptyFile);
         }
-        if request.length > MAX_IMAGE_BYTES {
+        if request.length > request.target.maximum_bytes() {
             return Err(FileTransferError::FileTooLarge);
         }
         sink.begin(request).map_err(FileTransferError::Store)?;
@@ -263,8 +347,10 @@ impl FileTransfer {
                     expected: active.request.crc32,
                     actual: actual_crc,
                 })
-            } else if ImageFormat::detect(&active.signature[..active.signature_length])
-                != Some(active.request.format)
+            } else if !active
+                .request
+                .target
+                .matches_signature(&active.signature[..active.signature_length])
             {
                 Err(FileTransferError::FormatMismatch)
             } else {
@@ -457,6 +543,65 @@ mod tests {
         transfer.append(bytes, &mut sink).unwrap();
         assert!(matches!(
             transfer.finish(&mut sink, &mut [0; 16]),
+            Err(FileTransferError::FormatMismatch)
+        ));
+        assert!(sink.aborted);
+    }
+
+    #[test]
+    fn book_names_cannot_escape_the_books_directory() {
+        use super::BookName;
+        assert_eq!(BookName::parse("book.epb").unwrap().as_str(), "BOOK.EPB");
+        for name in [
+            "../BOOK.EPB",
+            "BOOK.EPUB",
+            "BOOK.PNG",
+            "BOOK NAME.EPB",
+            "TOOLONGGG.EPB",
+            "CON.EPB",
+            ".EPB",
+            "böök.EPB",
+        ] {
+            assert!(BookName::parse(name).is_err(), "{name}");
+        }
+    }
+
+    #[test]
+    fn book_uploads_have_their_own_size_and_signature_limits() {
+        use super::{BookName, MAX_BOOK_BYTES, MAX_IMAGE_BYTES};
+        let name = BookName::parse("BOOK.EPB").unwrap();
+        let mut bytes = std::vec![0; MAX_IMAGE_BYTES + 1];
+        bytes[..4].copy_from_slice(b"PK\x03\x04");
+        let request = UploadRequest::book(name, bytes.len(), crc32fast::hash(&bytes));
+        let mut transfer = FileTransfer::new();
+        let mut sink = MemorySink::default();
+        transfer.begin(request, &mut sink).unwrap();
+        for chunk in bytes.chunks(4096) {
+            transfer.append(chunk, &mut sink).unwrap();
+        }
+        assert_eq!(transfer.finish(&mut sink, &mut [0; 512]).unwrap(), request);
+        assert!(sink.committed);
+        assert!(matches!(
+            transfer.begin(UploadRequest::book(name, MAX_BOOK_BYTES + 1, 0), &mut sink),
+            Err(FileTransferError::FileTooLarge)
+        ));
+        assert!(matches!(
+            transfer.begin(
+                UploadRequest::image(ImageName::parse("ART.PNG").unwrap(), MAX_IMAGE_BYTES + 1, 0),
+                &mut sink
+            ),
+            Err(FileTransferError::FileTooLarge)
+        ));
+        let invalid = b"not an epub";
+        transfer
+            .begin(
+                UploadRequest::book(name, invalid.len(), crc32fast::hash(invalid)),
+                &mut sink,
+            )
+            .unwrap();
+        transfer.append(invalid, &mut sink).unwrap();
+        assert!(matches!(
+            transfer.finish(&mut sink, &mut [0; 512]),
             Err(FileTransferError::FormatMismatch)
         ));
         assert!(sink.aborted);

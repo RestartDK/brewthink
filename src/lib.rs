@@ -20,6 +20,8 @@ pub mod files;
 mod fonts;
 pub mod home;
 pub mod image;
+#[cfg(feature = "device-reader")]
+pub mod image_cache;
 #[cfg(feature = "image-decoder")]
 pub mod image_decoder;
 pub mod image_viewer;
@@ -29,7 +31,7 @@ pub mod library;
 pub mod navigation;
 pub mod power;
 pub mod reader;
-#[cfg(all(feature = "device-reader", any(target_arch = "riscv32", test)))]
+#[cfg(feature = "device-reader")]
 mod scratch;
 pub mod settings;
 #[cfg(feature = "web-sim")]

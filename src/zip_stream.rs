@@ -80,6 +80,10 @@ impl ZipEntry {
         self.uncompressed_size
     }
 
+    pub const fn crc32(self) -> u32 {
+        self.crc32
+    }
+
     pub const fn is_stored(self) -> bool {
         self.compression == COMPRESSION_STORED
     }
@@ -88,6 +92,7 @@ impl ZipEntry {
 #[derive(Debug, Eq, PartialEq)]
 pub enum ZipError<E> {
     Read(E),
+    Write(E),
     Truncated,
     MissingCentralDirectory,
     MultiDisk,
@@ -151,7 +156,6 @@ impl InflateWorkspace {
     /// `storage` must be non-null, aligned, writable for `Self`, and exclusively
     /// owned. No reference to its contents may exist until initialization returns.
     /// The previous contents need not be valid. This type must not require Drop.
-    #[cfg(any(target_arch = "riscv32", test))]
     pub(crate) unsafe fn initialize_in_place(storage: *mut Self) {
         const {
             assert!(!core::mem::needs_drop::<InflateState>());
@@ -171,6 +175,14 @@ impl InflateWorkspace {
 
     fn reset(&mut self) {
         self.state.reset(DataFormat::Raw);
+    }
+
+    pub(crate) fn reset_zlib(&mut self) {
+        self.state.reset(DataFormat::Zlib);
+    }
+
+    pub(crate) fn decode(&mut self, input: &[u8], output: &mut [u8]) -> miniz_oxide::StreamResult {
+        inflate(&mut self.state, input, output, MZFlush::None)
     }
 }
 
@@ -275,28 +287,108 @@ where
         if output_size > output.len() {
             return Err(ZipError::OutputTooSmall);
         }
-        let data_offset = self.entry_data_offset(entry)?;
+        let mut position = 0;
+        self.read_entry_to(entry, inflate_workspace, &mut [0; 512], |bytes| {
+            output[position..position + bytes.len()].copy_from_slice(bytes);
+            position += bytes.len();
+            Ok(())
+        })?;
+        Ok(position)
+    }
+
+    pub fn read_entry_to(
+        &self,
+        entry: ZipEntry,
+        workspace: &mut InflateWorkspace,
+        buffer: &mut [u8],
+        mut sink: impl FnMut(&[u8]) -> Result<(), R::Error>,
+    ) -> Result<(), ZipError<R::Error>> {
+        if buffer.is_empty() {
+            return Err(ZipError::OutputTooSmall);
+        }
+        let offset = self.entry_data_offset(entry)?;
+        let mut position = 0u32;
+        let mut checksum = Hasher::new();
+        let mut emit = |bytes: &[u8]| {
+            position = position
+                .checked_add(bytes.len() as u32)
+                .filter(|&end| end <= entry.uncompressed_size)
+                .ok_or(ZipError::ResourceLengthMismatch)?;
+            checksum.update(bytes);
+            sink(bytes).map_err(ZipError::Write)
+        };
         match entry.compression {
             COMPRESSION_STORED => {
-                read_exact(&self.reader, data_offset, &mut output[..output_size])?;
                 if entry.compressed_size != entry.uncompressed_size {
                     return Err(ZipError::ResourceLengthMismatch);
                 }
+                let mut read = 0;
+                while read < entry.compressed_size {
+                    let count = buffer.len().min((entry.compressed_size - read) as usize);
+                    read_exact(&self.reader, offset + read, &mut buffer[..count])?;
+                    emit(&buffer[..count])?;
+                    read += count as u32;
+                }
             }
-            COMPRESSION_DEFLATE => self.inflate_entry(
-                data_offset,
-                entry.compressed_size,
-                &mut output[..output_size],
-                inflate_workspace,
-            )?,
+            COMPRESSION_DEFLATE => {
+                self.inflate_entry_to(offset, entry.compressed_size, buffer, workspace, &mut emit)?
+            }
             _ => return Err(ZipError::UnsupportedCompression),
         }
-        let mut hasher = Hasher::new();
-        hasher.update(&output[..output_size]);
-        if hasher.finalize() != entry.crc32 {
+        if position != entry.uncompressed_size {
+            return Err(ZipError::ResourceLengthMismatch);
+        }
+        if checksum.finalize() != entry.crc32 {
             return Err(ZipError::CrcMismatch);
         }
-        Ok(output_size)
+        Ok(())
+    }
+
+    pub fn read_entry_prefix(
+        &self,
+        entry: ZipEntry,
+        output: &mut [u8],
+        workspace: &mut InflateWorkspace,
+    ) -> Result<usize, ZipError<R::Error>> {
+        if entry.uncompressed_size as usize <= output.len() {
+            return self.read_entry(entry, output, workspace);
+        }
+        let offset = self.entry_data_offset(entry)?;
+        if entry.is_stored() {
+            if entry.compressed_size != entry.uncompressed_size {
+                return Err(ZipError::ResourceLengthMismatch);
+            }
+            read_exact(&self.reader, offset, output)?;
+            return Ok(output.len());
+        }
+        workspace.reset();
+        let mut input = [0; 512];
+        let mut position = 0;
+        let mut length = 0;
+        let mut read = 0;
+        let mut written = 0;
+        while written < output.len() {
+            if position == length && read < entry.compressed_size {
+                length = input.len().min((entry.compressed_size - read) as usize);
+                read_exact(&self.reader, offset + read, &mut input[..length])?;
+                read += length as u32;
+                position = 0;
+            }
+            let result = workspace.decode(&input[position..length], &mut output[written..]);
+            position += result.bytes_consumed;
+            written += result.bytes_written;
+            match result.status {
+                Ok(MZStatus::Ok | MZStatus::StreamEnd) => {}
+                _ => return Err(ZipError::Decompression),
+            }
+            if result.bytes_consumed == 0 && result.bytes_written == 0 {
+                return Err(ZipError::Decompression);
+            }
+            if result.status == Ok(MZStatus::StreamEnd) && written < output.len() {
+                return Err(ZipError::ResourceLengthMismatch);
+            }
+        }
+        Ok(written)
     }
 
     pub fn into_reader(self) -> R {
@@ -407,20 +499,19 @@ where
             .ok_or(ZipError::InvalidLocalHeader)
     }
 
-    fn inflate_entry(
+    fn inflate_entry_to(
         &self,
         data_offset: u32,
         compressed_size: u32,
         output: &mut [u8],
         workspace: &mut InflateWorkspace,
+        sink: &mut impl FnMut(&[u8]) -> Result<(), ZipError<R::Error>>,
     ) -> Result<(), ZipError<R::Error>> {
         workspace.reset();
         let mut input = [0; 512];
         let mut input_length = 0;
         let mut input_position = 0;
         let mut compressed_position = 0u32;
-        let mut output_position = 0usize;
-        let mut overflow = [0; 1];
 
         loop {
             if input_position == input_length && compressed_position < compressed_size {
@@ -435,32 +526,12 @@ where
                 input_position = 0;
             }
             let input_slice = &input[input_position..input_length];
-            let using_overflow = output_position == output.len();
-            let output_slice = if using_overflow {
-                &mut overflow[..]
-            } else {
-                &mut output[output_position..]
-            };
-            let result = inflate(
-                &mut workspace.state,
-                input_slice,
-                output_slice,
-                MZFlush::None,
-            );
+            let result = workspace.decode(input_slice, output);
             input_position += result.bytes_consumed;
-            if using_overflow {
-                if result.bytes_written != 0 {
-                    return Err(ZipError::ResourceLengthMismatch);
-                }
-            } else {
-                output_position += result.bytes_written;
-            }
+            sink(&output[..result.bytes_written])?;
             match result.status {
                 Ok(MZStatus::StreamEnd) => {
-                    if output_position != output.len()
-                        || input_position != input_length
-                        || compressed_position != compressed_size
-                    {
+                    if input_position != input_length || compressed_position != compressed_size {
                         return Err(ZipError::ResourceLengthMismatch);
                     }
                     return Ok(());
@@ -539,6 +610,7 @@ where
 }
 
 fn safe_path(path: &str) -> bool {
+    let path = path.strip_suffix('/').unwrap_or(path);
     !path.is_empty()
         && !path.starts_with('/')
         && !path.contains(['\\', '\0'])
@@ -856,6 +928,53 @@ mod tests {
             assert!(!safe_path(path));
         }
         assert!(safe_path("OPS/Text/chapter.xhtml"));
+    }
+
+    #[test]
+    fn directory_entries_are_allowed_without_accepting_traversal() {
+        for path in ["META-INF/", "images/", "OPS/images/"] {
+            assert!(super::ZipPath::from_bytes(path.as_bytes()).is_ok());
+        }
+        for path in [
+            "/",
+            "//",
+            "images//",
+            "../images/",
+            "images/../",
+            "images/./",
+            "/images/",
+            "images\\\\secret/",
+        ] {
+            assert!(super::ZipPath::from_bytes(path.as_bytes()).is_err());
+        }
+    }
+
+    #[test]
+    fn streams_zip_output_through_a_tiny_buffer_and_checks_crc() {
+        let bytes = include_bytes!("../web/tests/fixtures/minimal.epub");
+        let mut scratch = Box::new(ZipValidationScratch::new());
+        let archive = StreamingZip::open(SliceFile(bytes), &mut scratch).unwrap();
+        let entry = archive.find("EPUB/chapter.xhtml").unwrap();
+        let mut workspace = Box::new(InflateWorkspace::new());
+        let mut expected = std::vec![0; entry.uncompressed_size() as usize];
+        archive
+            .read_entry(entry, &mut expected, &mut workspace)
+            .unwrap();
+        let mut chunks = std::vec::Vec::new();
+        archive
+            .read_entry_to(entry, &mut workspace, &mut [0; 7], |chunk| {
+                assert!(chunk.len() <= 7);
+                chunks.extend_from_slice(chunk);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(chunks, expected);
+        let mut wrong = entry;
+        wrong.crc32 ^= 1;
+        assert_eq!(
+            archive.read_entry_to(wrong, &mut workspace, &mut [0; 31], |_| Ok(())),
+            Err(super::ZipError::CrcMismatch)
+        );
     }
 
     #[test]

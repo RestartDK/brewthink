@@ -3,7 +3,7 @@ use crate::{
     zip_stream::{InflateWorkspace, ReadAt, StreamingZip, ZipError, ZipValidationScratch},
 };
 
-pub const MAX_DEVICE_SPINE_ITEMS: usize = 64;
+pub const MAX_DEVICE_SPINE_ITEMS: usize = 128;
 pub const MAX_DEVICE_MANIFEST_ITEMS: usize = 512;
 pub const MAX_CONTAINER_BYTES: usize = 2 * 1024;
 pub const MAX_PACKAGE_BYTES: usize = 64 * 1024;
@@ -146,6 +146,21 @@ impl DevicePackageScratch {
         }
     }
 
+    #[cfg(target_arch = "riscv32")]
+    pub(crate) unsafe fn initialize_in_place(storage: *mut Self) {
+        // SAFETY: each field is initialized in the caller's aligned exclusive storage.
+        unsafe {
+            let ids =
+                core::ptr::addr_of_mut!((*storage).spine_ids).cast::<Option<FixedString<48>>>();
+            for index in 0..MAX_DEVICE_SPINE_ITEMS {
+                ids.add(index).write(None);
+            }
+            core::ptr::addr_of_mut!((*storage).manifest_hashes).write_bytes(0, 1);
+            core::ptr::addr_of_mut!((*storage).manifest_length).write(0);
+            core::ptr::addr_of_mut!((*storage).legacy_cover_id).write(None);
+        }
+    }
+
     fn reset(&mut self) {
         self.spine_ids.fill(None);
         self.manifest_length = 0;
@@ -268,8 +283,8 @@ where
 
     pub fn read_chapter_titles(
         &self,
-        titles: &mut [FixedString<{ crate::navigation::CHAPTER_TITLE_BYTES }>;
-                 MAX_DEVICE_SPINE_ITEMS],
+        titles: &mut [FixedString<{ crate::navigation::CHAPTER_TITLE_BYTES }>],
+        first_spine: usize,
         output: &mut [u8],
         inflater: &mut InflateWorkspace,
     ) -> Result<(), DeviceEpubError<R::Error>> {
@@ -288,10 +303,13 @@ where
                 .spine
                 .iter()
                 .position(|item| item.as_ref().is_some_and(|item| item.path == resolved))
-                && titles[index].is_empty()
+                && let Some(target) = index
+                    .checked_sub(first_spine)
+                    .and_then(|index| titles.get_mut(index))
+                && target.is_empty()
                 && let Ok(title) = FixedString::try_from_str(title)
             {
-                titles[index] = title;
+                *target = title;
             }
         });
         if result.is_err() {
@@ -512,7 +530,7 @@ fn resolve_manifest<E>(
     Ok(())
 }
 
-fn resolve_resource_path<E>(
+pub fn resolve_resource_path<E>(
     package_path: &str,
     raw_href: &str,
 ) -> Result<FixedString<MAX_DEVICE_PATH_BYTES>, DeviceEpubError<E>> {

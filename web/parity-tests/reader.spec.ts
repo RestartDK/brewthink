@@ -69,10 +69,13 @@ async function ready(page: Page): Promise<void> {
 
 async function loadShelf(page: Page, fixture: string): Promise<void> {
   await ready(page);
-  await page.locator("#epub-file").setInputFiles(path.join(artifacts, "fixtures", `${fixture}.epub`));
+  const file = fixture === "inline-images" ? path.resolve("tests/fixtures/inline-images.epub") : path.join(artifacts, "fixtures", `${fixture}.epub`);
+  await page.locator("#epub-file").setInputFiles(file);
   await expect(page.locator("#file-summary")).toHaveText(`${fixture}.epub`);
+  await expect(page.locator("#display-placeholder")).toBeHidden();
+  await page.locator(".device-viewport").focus();
   await page.keyboard.press("Enter");
-  await expect(page.locator("#selected-title")).toHaveText("Parity &amp; literal");
+  await expect(page.locator("#selected-title")).toHaveText(fixture === "inline-images" ? "Streaming illustrations" : "Parity &amp; literal");
 }
 
 async function openReader(page: Page, fixture: string, hasCover: boolean): Promise<void> {
@@ -85,15 +88,17 @@ async function openReader(page: Page, fixture: string, hasCover: boolean): Promi
   await expect(page.locator("#preview-heading")).toContainText(headings.reader);
 }
 
-for (const variant of [0, 1]) {
-  test(`matches every native page and chapter transition for typography ${variant}`, async ({ page }) => {
-    const rows = (await readFile(path.join(artifacts, "text/pages.txt"), "utf8")).trim().split("\n").map((row) => {
+const paginationCases = ["text", "inline-images"].flatMap((fixture) =>
+  [0, 1].map((variant) => ({ fixture, variant })));
+for (const { fixture, variant } of paginationCases) {
+  test(`${fixture} matches every native page and chapter transition for typography ${variant}`, async ({ page }) => {
+    const rows = (await readFile(path.join(artifacts, fixture, "pages.txt"), "utf8")).trim().split("\n").map((row) => {
       const values = row.split(" ");
       if (values.length !== 3) throw new Error(`invalid oracle row: ${row}`);
       const packed = unsigned(values[0]);
       const spine = unsigned(values[1]);
       const count = unsigned(values[2]);
-      if (count === 0 || spine >= 64) throw new Error(`invalid bounded page case: ${row}`);
+      if (count === 0 || spine >= 128) throw new Error(`invalid bounded page case: ${row}`);
       return { packed, spine, count };
     });
     const preferences = [...new Set(rows.map((row) => row.packed))][variant];
@@ -101,19 +106,19 @@ for (const variant of [0, 1]) {
     const cases = rows.filter((row) => row.packed === preferences);
     expect(cases.map((entry) => entry.spine)).toEqual(Array.from({ length: cases.length }, (_, index) => index));
     await page.addInitScript((packed) => localStorage.setItem("brewthink.reader-preferences.v1", String(packed)), preferences);
-    await openReader(page, "text", true);
+    await openReader(page, fixture, true);
     for (const entry of cases) {
       for (let index = 0; index < entry.count; index += 1) {
         await expect(page.locator("#selection-position")).toHaveText(`Chapter ${entry.spine + 1} / ${cases.length}`);
         await expect(page.locator("#view-position")).toHaveText(`${index + 1} / ${entry.count}`);
-        await expectFrame(page, "text", `${preferences}-${entry.spine}-${index}`);
+        await expectFrame(page, fixture, `${preferences}-${entry.spine}-${index}`);
         if (entry.spine === 0 && index === 0) {
-          await captureFrame(page, path.join(artifacts, `reader-${variant}.png`));
+          await captureFrame(page, path.join(artifacts, `${fixture}-reader-${variant}.png`));
           await page.keyboard.press("p");
           await expect(page.locator("#preview-heading")).toContainText(headings.sleep);
-          await expectFrame(page, "text", "sleep");
+          await expectFrame(page, fixture, "sleep");
           await page.getByRole("button", { name: "Wake", exact: true }).click();
-          await expectFrame(page, "text", `${preferences}-0-0`);
+          await expectFrame(page, fixture, `${preferences}-0-0`);
         }
         await page.keyboard.press("ArrowRight");
       }
@@ -121,7 +126,7 @@ for (const variant of [0, 1]) {
   });
 }
 
-for (const fixture of ["text", "jpeg"]) {
+for (const fixture of ["text", "jpeg", "frame-limit", "shelf-limit", "oversized-cover", "compressed-oversized-cover"]) {
   test(`${fixture} keeps native original-resolution opening and sleep pixels`, async ({ page }) => {
     await loadShelf(page, fixture);
     await page.keyboard.press("Enter");
@@ -190,23 +195,27 @@ for (const fixture of ["text", "malformed-nav"]) {
 }
 
 for (const fixture of ["shelf-only-cover"]) {
-  test(`${fixture} preserves the shelf image but skips opening and uses native sleep fallback`, async ({ page }) => {
+  test(`${fixture} now retains the original cover for opening and sleep`, async ({ page }) => {
     await loadShelf(page, "text");
     const shelf = await packedFrame(page);
     await loadShelf(page, fixture);
     expect(await packedFrame(page)).toEqual(shelf);
     await captureFrame(page, path.join(artifacts, `${fixture}-shelf.png`));
     await page.keyboard.press("Enter");
-    await expect(page.locator("#preview-heading")).toContainText(headings.reader);
+    await expect(page.locator("#preview-heading")).toContainText("Book cover");
     await expectFrame(page, fixture, `opening-${defaultPreferences}`);
+    const opening = await packedFrame(page);
+    await page.keyboard.press("Enter");
     await page.keyboard.press("p");
-    await expect(page.locator("#selected-title")).toHaveText("Brewthink");
     await expectFrame(page, fixture, "sleep");
+    expect(await packedFrame(page)).toEqual(opening);
   });
 }
 
 for (const { fixture, reason } of [
   { fixture: "malformed", reason: "Malformed" },
+  { fixture: "oversized-chapter", reason: "ResourceTooLarge" },
+  { fixture: "too-many-chapters", reason: "TooManySpineItems" },
 ]) {
   test(`rejects ${fixture} at the device boundary`, async ({ page }) => {
     await ready(page);

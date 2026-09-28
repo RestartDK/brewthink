@@ -1,10 +1,13 @@
-use std::{boxed::Box, format, string::String, vec, vec::Vec};
+use std::{boxed::Box, format, rc::Rc, string::String, vec, vec::Vec};
+
+mod images;
+use images::BookImages;
 
 use crate::{
     app::ReaderPreferences,
     bounded_layout::{BoundedPage, LayoutError, layout_xhtml_page},
     bounded_xml::FixedString,
-    cover::{self, COVER_BYTES, CoverDecodeWorkspace, JpegDecodeWorkspace, encoded_cover_fits},
+    cover::{self, COVER_BYTES},
     device_epub::{
         DeviceEpub, DeviceEpubError, DevicePackageScratch, DevicePublication,
         MAX_DEVICE_RESOURCE_BYTES, MAX_DEVICE_SPINE_ITEMS,
@@ -12,10 +15,10 @@ use crate::{
     image::{
         Dither, PackedBitmap, PackedImage, READER_DEPTH, RenderOptions, RgbImage, ScaleMode, Size,
     },
-    image_decoder::{ImageDecodeError, ImageFormat, decode_jpeg, decode_png},
+    image_cache::ImageSpec,
+    image_decoder::ImageDecodeError,
     navigation::CHAPTER_TITLE_BYTES,
     reader::{FRAME_HEIGHT, FRAME_WIDTH},
-    storage::MAX_DEVICE_IMAGE_BYTES,
     zip_stream::{InflateWorkspace, ReadAt, StreamingZip, ZipError, ZipValidationScratch},
 };
 use core::convert::Infallible;
@@ -99,6 +102,7 @@ pub struct Book {
 impl Book {
     pub fn from_epub(encoded: &[u8], file_name: &str) -> Result<Self, SimulatorError> {
         let reader = MemoryFile::try_from(encoded)?;
+        let images = Rc::new(BookImages::new(encoded, file_name)?);
         let mut zip = Box::new(ZipValidationScratch::new());
         let mut package = Box::new(DevicePackageScratch::new());
         let mut inflater = Box::new(InflateWorkspace::new());
@@ -117,7 +121,7 @@ impl Book {
         let mut titles =
             Box::new([FixedString::<CHAPTER_TITLE_BYTES>::new(); MAX_DEVICE_SPINE_ITEMS]);
         let navigation_error = epub
-            .read_chapter_titles(&mut titles, &mut resource[..], &mut inflater)
+            .read_chapter_titles(&mut titles[..], 0, &mut resource[..], &mut inflater)
             .err();
         let mut chapters = Vec::with_capacity(publication.spine_len());
         for index in 0..publication.spine_len() {
@@ -128,15 +132,16 @@ impl Book {
                 "" => format!("Chapter {}", index + 1),
                 title => title.into(),
             };
-            chapters.push(Chapter::from_xhtml(&resource[..length], title)?);
+            let mut chapter = Chapter::from_xhtml(&resource[..length], title)?;
+            chapter.path = publication
+                .spine_item(index)
+                .expect("spine index checked")
+                .path()
+                .into();
+            chapter.images = Some(Rc::clone(&images));
+            chapters.push(chapter);
         }
-        let cover = Cover::read(
-            reader,
-            publication.cover_path(),
-            &mut zip,
-            &mut inflater,
-            &mut resource,
-        );
+        let cover = Cover::read(&images, publication.cover_path());
         Ok(Self {
             file_name: file_name.into(),
             file_size: reader.length,
@@ -152,6 +157,8 @@ impl Book {
 pub struct Chapter {
     title: String,
     xhtml: Box<[u8]>,
+    path: String,
+    images: Option<Rc<BookImages>>,
 }
 
 impl Chapter {
@@ -164,6 +171,8 @@ impl Chapter {
         Ok(Self {
             title,
             xhtml: xhtml.into(),
+            path: String::new(),
+            images: None,
         })
     }
 
@@ -176,7 +185,32 @@ impl Chapter {
         index: usize,
         preferences: ReaderPreferences,
     ) -> Result<BoundedPage, LayoutError> {
-        layout_xhtml_page(&self.xhtml, index, preferences)
+        match &self.images {
+            Some(images) => images.layout(&self.path, &self.xhtml, index, preferences),
+            None => layout_xhtml_page(&self.xhtml, index, preferences),
+        }
+    }
+
+    pub fn draw_images(
+        &self,
+        page: &BoundedPage,
+        target: &mut PackedImage<'_>,
+        offset: usize,
+    ) -> usize {
+        let mut drawn = 0;
+        for image in page.images() {
+            let result = self.images.as_ref().map(|images| {
+                images.with_image(image.resource(), image.spec(), |bitmap| {
+                    crate::reader::render_inline_image(image, Some(bitmap), target, offset)
+                })
+            });
+            if matches!(result, Some(Ok(true))) {
+                drawn += 1;
+            } else {
+                crate::reader::render_inline_image(image, None, target, offset);
+            }
+        }
+        drawn
     }
 }
 
@@ -222,87 +256,36 @@ impl Cover {
         }
     }
 
-    fn read(
-        reader: MemoryFile<'_>,
-        path: Option<&str>,
-        zip: &mut ZipValidationScratch,
-        inflater: &mut InflateWorkspace,
-        resource: &mut [u8; MAX_DEVICE_RESOURCE_BYTES],
-    ) -> Self {
+    fn read(images: &BookImages, path: Option<&str>) -> Self {
         let Some(path) = path else {
             return Self::Missing;
         };
-        match Self::decode(reader, path, zip, inflater, resource) {
+        match Self::decode(images, path) {
             Ok(cover) => cover,
+            Err(SimulatorError::Image(ImageDecodeError::FormatMismatch)) => Self::Unsupported,
+            Err(SimulatorError::Image(ImageDecodeError::DimensionsOutOfRange)) => Self::TooLarge,
             Err(error) => Self::Failed(error),
         }
     }
 
-    fn decode(
-        reader: MemoryFile<'_>,
-        path: &str,
-        zip: &mut ZipValidationScratch,
-        inflater: &mut InflateWorkspace,
-        resource: &mut [u8; MAX_DEVICE_RESOURCE_BYTES],
-    ) -> Result<Self, SimulatorError> {
-        let archive = StreamingZip::open(reader, zip).map_err(SimulatorError::Zip)?;
-        let entry = archive.find(path).map_err(SimulatorError::Zip)?;
-        if !encoded_cover_fits(entry.compressed_size(), entry.uncompressed_size()) {
-            return Ok(Self::TooLarge);
-        }
-        let length = archive
-            .read_entry(entry, resource, inflater)
-            .map_err(SimulatorError::Zip)?;
-        let encoded = &resource[..length];
-        let Some(format) = ImageFormat::detect(encoded) else {
-            return Ok(Self::Unsupported);
-        };
+    fn decode(images: &BookImages, path: &str) -> Result<Self, SimulatorError> {
+        let resource = images.resource(path)?;
         let mut shelf = Box::new([0xff; COVER_BYTES]);
-        match format {
-            ImageFormat::Png => {
-                cover::decode_png_cover(encoded, &mut shelf, &mut CoverDecodeWorkspace::new())
-            }
-            ImageFormat::Jpeg => {
-                cover::decode_jpeg_cover(encoded, &mut shelf, &mut JpegDecodeWorkspace::new())
-            }
-        }
-        .map_err(SimulatorError::Image)?;
-        let original = if entry.uncompressed_size() as usize > MAX_DEVICE_IMAGE_BYTES {
-            OriginalFrame::TooLarge
-        } else {
-            OriginalFrame::decode(encoded, format)
-        };
-        Ok(Self::Decoded { shelf, original })
-    }
-}
-
-impl OriginalFrame {
-    fn decode(encoded: &[u8], format: ImageFormat) -> Self {
-        let mut pixels = Box::new([0xff; FRAME_BYTES]);
-        let mut target = PackedImage::new(frame_size(), READER_DEPTH, &mut pixels[..])
-            .expect("the packed frame buffer has the exact required length");
-        let options = RenderOptions {
-            scale: ScaleMode::Contain,
-            dither: Dither::None,
-        };
-        let decoded = match format {
-            ImageFormat::Png => decode_png(
-                encoded,
-                &mut target,
-                options,
-                &mut CoverDecodeWorkspace::new(),
-            ),
-            ImageFormat::Jpeg => decode_jpeg(
-                encoded,
-                &mut target,
-                options,
-                &mut JpegDecodeWorkspace::new(),
-            ),
-        };
-        match decoded {
-            Ok(_) => Self::Decoded(pixels),
-            Err(error) => Self::Failed(error),
-        }
+        let spec = ImageSpec::new(cover::COVER_WIDTH, cover::COVER_HEIGHT, ScaleMode::Cover)
+            .expect("cover dimensions");
+        images.with_image(&resource, spec, |bitmap| {
+            shelf.copy_from_slice(bitmap.as_bytes())
+        })?;
+        let mut frame = Box::new([0xff; FRAME_BYTES]);
+        let spec = ImageSpec::new(FRAME_WIDTH, FRAME_HEIGHT, ScaleMode::Contain)
+            .expect("frame dimensions");
+        images.with_image(&resource, spec, |bitmap| {
+            frame.copy_from_slice(bitmap.as_bytes())
+        })?;
+        Ok(Self::Decoded {
+            shelf,
+            original: OriginalFrame::Decoded(frame),
+        })
     }
 }
 

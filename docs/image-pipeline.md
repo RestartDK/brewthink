@@ -24,7 +24,7 @@ BREWCTL/1 SCREEN width=480 height=800 bytes=96000 crc32=<hex> bpp=2 encoding=pla
 
 `device-control screen` checks dimensions, packing, payload length, CRC, and terminal success before it writes a PNG. It also accepts the legacy 48,000-byte monochrome response without depth fields. Unsupported depths and encodings fail. Host connections set raw terminal mode for binary transfers and restore the saved settings on normal exit.
 
-These screenshots prove the intended framebuffer, not what the physical panel displayed. The integrated reader has not been flashed. See [grayscale depth investigation](grayscale-depth.md) for the separate photographed experiments.
+These screenshots prove the intended framebuffer, not what the physical panel displayed. Device deployment and verification status belong in the live checkpoint; the streaming-image changes still require physical acceptance. See [grayscale depth investigation](grayscale-depth.md) for the separate photographed experiments.
 
 ## Prepare a four-shade host image
 
@@ -63,7 +63,7 @@ It does not write hardware. Flashing still uses the guarded app1 write/readback 
 
 The host-only `prepare-image` binary accepts JPEG, PNG, BMP, and PNM. It detects the format from the file contents. The portable `brewthink::image` module performs scaling and tone conversion for host, WASM, and firmware callers.
 
-The runtime decoder accepts JPEG and non-interlaced PNG. It detects the format from magic bytes, enforces a 1,536-pixel dimension and 1,572,864-pixel work limit, composites PNG alpha onto white, scales with `contain` or `cover`, and quantizes to the target depth. Reader images use four shades without spatial dithering. EPUB covers, the Files image viewer, and custom sleep images call this shared decoder with different scaling policies.
+The runtime decoder accepts baseline JPEG and non-interlaced PNG through bounded readers. It detects magic bytes, limits encoded input to 8 MiB, dimensions to 4,096 pixels, and source area to 8 Mi pixels. PNG scanline capacity imposes a further limit depending on sample depth and channels. Alpha composites onto white. Reader images use four shades without spatial dithering. Covers, inline illustrations, Files images, and sleep images share decoding and prepared-pixel rendering. GIF, progressive JPEG, and interlaced PNG remain unsupported.
 
 The preparation and firmware build perform these steps:
 
@@ -101,19 +101,21 @@ Rotation accepts `0`, `90`, `180`, or `270`. Scale accepts `contain` or `cover`.
 
 A 720 × 720 RGB8 decode needs 1,555,200 bytes before decoder overhead. The X4 has 400 KB SRAM and no PSRAM, so runtime decoding never allocates a full RGB image.
 
-PNG emits pixels from bounded deflate and scanline workspaces. JPEG emits grayscale blocks from a bounded decoder workspace. Both write directly into the packed destination. The reader retains one 96,000-byte logical frame and an 11,616-byte full cover. Publication parsing and image codecs reuse the frame allocation before composition. Catalogs, page layout, and the selected cover share mutually exclusive scratch. Three half-resolution shelf covers occupy the resource tail beyond the encoded-cover limit.
+PNG uses bounded deflate and scanline workspaces; JPEG emits blocks from a bounded workspace. Both write directly into packed output. The existing 96,000-byte frame allocation overlays extraction, probing, decoding, publication, and package workspaces before composition. Preparing an EPUB image first streams its ZIP entry to SD, checks length and CRC, then decodes after closing the source archive. Encoded image size no longer determines SRAM use.
 
-Full-frame decoding reads at most 96 KiB of encoded data into the resource buffer and uses its tail for decoder scratch. This budget applies to image viewing and the original-resolution opening/sleep cover paths. Shelf covers can use up to 128 KiB because their smaller output leaves the frame allocation available for codec scratch. A cover between those limits may appear on the shelf, but opening proceeds to text and sleep follows its fallback plan rather than enlarging the thumbnail. Chapter resources remain bounded to 140 KiB. The simulator applies the same encoded limits and native PNG/JPEG decoding rules to imported covers. Its native-pixel comparisons verify that adapter, not device SRAM, SD behavior, or physical display output. Host inspection and image-conversion tools remain separate; see [simulator parity](simulator-parity.md).
+Prepared planar pixels persist under `/brew/cache`. Full render/source identity and header/payload checksums determine cache hits. The quota is 32 MiB of logical image-file bytes or 512 recognized entries, with round-robin eviction and current-page slot protection. Staging and FAT allocation overhead are additional. See [streaming reader images](reader-images.md) for cache publication, recovery, and limitations.
+
+Chapter XHTML remains bounded to 140 KiB, with 128 spine items and a 16-title firmware navigation window. The Files catalog and USB image-upload protocol retain their separate 96 KiB file limit; this is no longer the EPUB decoder limit. The browser retains sources, staging chunks, and a volatile prepared-image cache in host memory. It does not demonstrate bounded SD behavior or device SRAM use; see [simulator parity](simulator-parity.md).
 
 `Scratch` tracks byte and typed use. A return from typed use initializes every byte before exposing a byte slice, including any former padding. `DeviceEpub` borrows caller-owned publication storage, and `FatStorage::scan_into` fills the supplied catalog without large value returns.
 
-The release stack check reports 12,304 bytes required, including an 8,192-byte reserve, and 25,984 bytes available. This is a check of selected compiled frames, not whole-program stack analysis.
+The release gate measures the exact candidate, including image/cache, storage, decoder, and their selected dependency owners. It retains the 8,192-byte reserve. `PASS_LIMITED` is not a whole-program stack bound; use the candidate's bound evidence rather than historical totals.
 
 ## Verification and remaining limits
 
 Synthetic PNG/JPEG ramps test exact four-level preservation and uniform patch interiors. Controller tests check all transmitted pixels in every rotation and the grayscale-to-monochrome baseline transition. Browser tests count four tones through image, cover, and sleep paths. Pseudo-terminal tests run the actual screenshot and image-preparation executables without connecting to hardware.
 
-The embedded source-pixel shrinking algorithm remains phase-dependent. This PR removes binary dithering from reader images; it does not fix every resampling defect or establish optical repeatability.
+The embedded source-pixel shrinking algorithm remains phase-dependent. Streaming and caching do not fix the shrinking algorithm, add zoom/pan, or establish optical repeatability.
 
 ## Historical monochrome sample
 

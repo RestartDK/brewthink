@@ -377,6 +377,138 @@ fn upload_transcodes_to_the_image_limit() {
     }));
     assert!(String::from_utf8_lossy(&result.stdout).contains("transcoded=yes"));
 }
+fn receive_book(peer: &mut Peer, expected: &[u8], name: &str) {
+    let command = String::from_utf8(peer.line()).unwrap();
+    let fields: Vec<_> = command.split_whitespace().collect();
+    assert_eq!(fields[..3], ["BREWCTL/1", "upload", "book"]);
+    assert_eq!(fields[3], name);
+    assert_eq!(fields[4].parse::<usize>().unwrap(), expected.len());
+    assert_eq!(
+        u32::from_str_radix(fields[5], 16).unwrap(),
+        crc32fast::hash(expected)
+    );
+    peer.write(
+        format!(
+            "BREWCTL/1 READY command=upload chunk=4096 bytes={}\n",
+            expected.len()
+        )
+        .as_bytes(),
+    );
+    let mut received = Vec::new();
+    while received.len() < expected.len() {
+        received.extend(peer.read(4096.min(expected.len() - received.len())));
+        peer.write(
+            format!("BREWCTL/1 ACK command=upload received={}\n", received.len()).as_bytes(),
+        );
+    }
+    assert_eq!(received, expected);
+}
+
+#[test]
+fn book_upload_streams_unchanged_epubs_larger_than_the_image_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library book with a long filename.epub");
+    let bytes = fs::read(root().join("web/tests/fixtures/parity/shelf-limit.epub")).unwrap();
+    assert!(bytes.len() > 96 * 1024);
+    fs::write(&path, &bytes).unwrap();
+    let name = format!("{:08X}.EPB", crc32fast::hash(&bytes));
+    let result = client(&["put-book", path.to_str().unwrap()], move |peer| {
+        receive_book(peer, &bytes, &name);
+        peer.write(b"BREWCTL/1 DONE command=upload status=ok\n");
+    });
+    success(result);
+}
+
+#[test]
+fn batch_books_waits_for_each_verified_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let bytes = fs::read(root().join("web/tests/fixtures/minimal.epub")).unwrap();
+    fs::write(dir.path().join("FIRST.epub"), &bytes).unwrap();
+    fs::write(dir.path().join("SECOND.EPUB"), &bytes).unwrap();
+    fs::write(dir.path().join("ignored.txt"), b"not a book").unwrap();
+    success(client(
+        &["put-books", dir.path().to_str().unwrap()],
+        move |peer| {
+            for name in ["FIRST.EPB", "SECOND.EPB"] {
+                receive_book(peer, &bytes, name);
+                peer.write(b"BREWCTL/1 DONE command=upload status=ok\n");
+            }
+        },
+    ));
+}
+
+#[test]
+fn book_upload_reports_device_rejection_and_failed_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("BOOK.epub");
+    let bytes = fs::read(root().join("web/tests/fixtures/minimal.epub")).unwrap();
+    fs::write(&path, &bytes).unwrap();
+    let rejected = client(&["put-book", path.to_str().unwrap()], |peer| {
+        assert!(peer.line().starts_with(b"BREWCTL/1 upload book "));
+        peer.write(b"BREWCTL/1 ERROR command=parse reason=invalid-upload\nBREWCTL/1 DONE command=parse status=error\n");
+    });
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("device rejected"));
+    let failed = client(&["put-book", path.to_str().unwrap()], move |peer| {
+        receive_book(peer, &bytes, "BOOK.EPB");
+        peer.write(b"BREWCTL/1 ERROR command=upload reason=checksum-mismatch\nBREWCTL/1 DONE command=upload status=error\n");
+    });
+    assert!(!failed.status.success());
+}
+
+#[test]
+fn verify_book_checks_existing_bytes_without_sending_a_payload() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("BOOK.epub");
+    let bytes = fs::read(root().join("web/tests/fixtures/minimal.epub")).unwrap();
+    fs::write(&path, &bytes).unwrap();
+    let expected = format!(
+        "BREWCTL/1 verify book BOOK.EPB {} {:08x}\n",
+        bytes.len(),
+        crc32fast::hash(&bytes)
+    );
+    for status in ["ok", "error"] {
+        let expected = expected.clone();
+        let result = client(&["verify-book", path.to_str().unwrap()], move |peer| {
+            assert_eq!(peer.line(), expected.as_bytes());
+            peer.write(format!("BREWCTL/1 DONE command=verify status={status}\n").as_bytes());
+        });
+        assert_eq!(result.status.success(), status == "ok");
+    }
+}
+
+#[test]
+fn books_preflight_never_opens_a_device_and_rejects_invalid_archives() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::copy(
+        root().join("web/tests/fixtures/parity/oversized-chapter.epub"),
+        dir.path().join("BOOK.epub"),
+    )
+    .unwrap();
+    let result = success(run(
+        Command::new(tools().join("device-control")).args([
+            "--port",
+            "/no-device",
+            "check-books",
+            dir.path().to_str().unwrap(),
+        ]),
+        Duration::from_secs(20),
+    ));
+    assert!(String::from_utf8_lossy(&result.stdout).contains("ResourceTooLarge"));
+    fs::write(dir.path().join("BAD.epub"), b"PK\x03\x04broken").unwrap();
+    let result = run(
+        Command::new(tools().join("device-control")).args([
+            "--port",
+            "/no-device",
+            "put-books",
+            dir.path().to_str().unwrap(),
+        ]),
+        Duration::from_secs(20),
+    );
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("InvalidZip"));
+}
+
 fn exchange(reply: &[u8], command: &str) -> Output {
     let pty = Pty::new();
     let command = command.to_string();

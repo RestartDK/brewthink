@@ -1,3 +1,6 @@
+#[path = "memory/vendored.rs"]
+mod vendored;
+
 use brewthink_host::memory::*;
 use serde_json::{Value, json};
 use std::{

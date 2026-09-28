@@ -1,27 +1,27 @@
 use std::{convert::Infallible, error::Error, fs, path::Path};
 
+#[path = "simulator_oracle/images.rs"]
+mod images;
+use images::Images;
+
 use brewthink::{
     app::{
         App, AppEffect, AppInput, AppPreferences, AppView, Direction, ReaderFont, ReaderFontSize,
         ReaderPreferences, ReaderSpacing, ResumePoint, SleepScreenMode,
     },
-    bounded_layout::layout_xhtml_page,
     bounded_xml::FixedString,
-    cover::{COVER_HEIGHT, COVER_WIDTH, MAX_ENCODED_COVER_BYTES, encoded_cover_fits},
     device_epub::{
         DeviceEpub, DevicePackageScratch, DevicePublication, MAX_DEVICE_RESOURCE_BYTES,
         MAX_DEVICE_SPINE_ITEMS,
     },
-    image::{Dither, PackedBitmap, PackedImage, READER_DEPTH, RenderOptions, ScaleMode, Size},
-    image_decoder::{self, ImageFormat, JpegDecodeWorkspace, PngDecodeWorkspace},
+    image::{PackedBitmap, PackedImage, READER_DEPTH, Size},
     input::UsbState,
     navigation::CHAPTER_TITLE_BYTES,
     power::BatteryStatus,
-    reader::{ReaderLine, ReaderView},
+    reader::{ReaderLine, ReaderView, render_reader_with_images},
     sleep::SleepView,
-    storage::MAX_DEVICE_IMAGE_BYTES,
     ui::{AppFrame, render_app},
-    zip_stream::{InflateWorkspace, ReadAt, StreamingZip, ZipValidationScratch},
+    zip_stream::{InflateWorkspace, ReadAt, ZipValidationScratch},
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -63,6 +63,7 @@ struct Oracle<'publication, 'bytes> {
     resource: Box<[u8; MAX_DEVICE_RESOURCE_BYTES]>,
     titles: [FixedString<CHAPTER_TITLE_BYTES>; MAX_DEVICE_SPINE_ITEMS],
     cover: Option<Vec<u8>>,
+    images: Images<'bytes>,
 }
 
 impl Oracle<'_, '_> {
@@ -79,8 +80,18 @@ impl Oracle<'_, '_> {
                         .book
                         .read_spine(spine_index, &mut self.resource[..], &mut self.inflater)
                         .map_err(|error| format!("{error:?}"))?;
-                    let first =
-                        layout_xhtml_page(&self.resource[..length], 0, app.reader_preferences())?;
+                    let path = self
+                        .book
+                        .publication()
+                        .spine_item(spine_index)
+                        .ok_or("missing spine")?
+                        .path();
+                    let first = self.images.layout(
+                        path,
+                        &self.resource[..length],
+                        0,
+                        app.reader_preferences(),
+                    )?;
                     app.chapter_loaded(self.book.publication().spine_len(), first.page_count())
                         .map_err(|error| format!("{error:?}"))?
                 }
@@ -145,14 +156,23 @@ impl Oracle<'_, '_> {
                         &mut self.inflater,
                     )
                     .map_err(|error| format!("{error:?}"))?;
-                let page = layout_xhtml_page(
+                let path = self
+                    .book
+                    .publication()
+                    .spine_item(location.spine_index())
+                    .ok_or("missing spine")?
+                    .path();
+                let page = self.images.layout(
+                    path,
                     &self.resource[..length],
                     location.page_index(),
                     app.reader_preferences(),
                 )?;
                 let lines = page
                     .lines()
-                    .map(|line| ReaderLine::new(line.text(), line.style()))
+                    .map(|line| {
+                        ReaderLine::new(line.text(), line.style()).with_top(line.top() as u16)
+                    })
                     .collect::<Vec<_>>();
                 let fallback = format!("Chapter {}", chapter_index + 1);
                 let title = self
@@ -170,8 +190,10 @@ impl Oracle<'_, '_> {
                 if let AppView::ReaderDrawer(drawer) = app.view() {
                     view = view.with_drawer(drawer);
                 }
-                render_app(AppFrame::Reader(view), &mut target)
-                    .map_err(|error| format!("{error:?}"))?;
+                render_reader_with_images(view, &mut target, |target, offset| {
+                    self.images.draw(&page, target, offset)
+                })
+                .map_err(|error| format!("{error:?}"))?;
             }
             AppView::BookCover { .. } => {
                 let cover = self.cover.as_ref().ok_or("opening cover is missing")?;
@@ -216,80 +238,6 @@ impl Oracle<'_, '_> {
         )?;
         Ok(())
     }
-}
-
-fn native_covers(file: File<'_>, path: Option<&str>, output: &Path) -> Result<Option<Vec<u8>>> {
-    let mut statuses = String::new();
-    let mut full_frame = None;
-    let mut scratch = Box::new(ZipValidationScratch::new());
-    let archive = StreamingZip::open(file, &mut scratch).map_err(|error| format!("{error:?}"))?;
-    for (name, size, maximum, scale) in [
-        (
-            "shelf",
-            Size::new(COVER_WIDTH, COVER_HEIGHT).unwrap(),
-            MAX_ENCODED_COVER_BYTES as usize,
-            ScaleMode::Cover,
-        ),
-        (
-            "cover",
-            Size::new(480, 800).unwrap(),
-            MAX_DEVICE_IMAGE_BYTES,
-            ScaleMode::Contain,
-        ),
-    ] {
-        let decoded = (|| -> Result<Option<Vec<u8>>> {
-            let Some(path) = path else {
-                return Ok(None);
-            };
-            let entry = archive.find(path).map_err(|error| format!("{error:?}"))?;
-            if !encoded_cover_fits(entry.compressed_size(), entry.uncompressed_size())
-                || entry.uncompressed_size() as usize > maximum
-            {
-                return Ok(None);
-            }
-            let mut encoded = vec![0; maximum];
-            let length = archive
-                .read_entry(entry, &mut encoded, &mut InflateWorkspace::new())
-                .map_err(|error| format!("{error:?}"))?;
-            let encoded = &encoded[..length];
-            let mut bytes = vec![0xff; READER_DEPTH.byte_len(size).unwrap()];
-            let mut target = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
-            let options = RenderOptions {
-                scale,
-                dither: Dither::None,
-            };
-            match ImageFormat::detect(encoded) {
-                Some(ImageFormat::Png) => image_decoder::decode_png(
-                    encoded,
-                    &mut target,
-                    options,
-                    &mut PngDecodeWorkspace::new(),
-                ),
-                Some(ImageFormat::Jpeg) => image_decoder::decode_jpeg(
-                    encoded,
-                    &mut target,
-                    options,
-                    &mut JpegDecodeWorkspace::new(),
-                ),
-                None => return Err("unsupported cover format".into()),
-            }
-            .map_err(|error| format!("{error:?}"))?;
-            Ok(Some(bytes))
-        })();
-        match decoded {
-            Ok(Some(bytes)) => {
-                statuses.push_str(&format!("{name}: decoded {} bytes\n", bytes.len()));
-                fs::write(output.join(format!("{name}.bin")), &bytes)?;
-                if name == "cover" {
-                    full_frame = Some(bytes);
-                }
-            }
-            Ok(None) => statuses.push_str(&format!("{name}: missing or outside encoded budget\n")),
-            Err(error) => statuses.push_str(&format!("{name}: {error}\n")),
-        }
-    }
-    fs::write(output.join("covers.txt"), statuses)?;
-    Ok(full_frame)
 }
 
 fn drawer_trace(oracle: &mut Oracle<'_, '_>, output: &Path) -> Result<()> {
@@ -389,15 +337,17 @@ fn main() -> Result<()> {
     )
     .map_err(|error| format!("{error:?}"))?;
     let mut titles = [FixedString::new(); MAX_DEVICE_SPINE_ITEMS];
-    let navigation = book.read_chapter_titles(&mut titles, &mut resource[..], &mut inflater);
+    let navigation = book.read_chapter_titles(&mut titles[..], 0, &mut resource[..], &mut inflater);
     fs::write(output.join("navigation.txt"), format!("{navigation:?}\n"))?;
-    let cover = native_covers(file, book.publication().cover_path(), output)?;
+    let mut images = Images::new(file);
+    let cover = images.covers(book.publication().cover_path(), output)?;
     let mut oracle = Oracle {
         book,
         inflater,
         resource,
         titles,
         cover,
+        images,
     };
     let mut cases = String::new();
     for preferences in [

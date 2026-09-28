@@ -57,6 +57,42 @@ fn missing_and_malformed_navigation_leave_chapter_fallbacks_available() {
 }
 
 #[cfg(feature = "device-reader")]
+#[test]
+fn full_spine_navigation_can_be_read_in_sixteen_title_windows() {
+    use std::{format, string::String, vec};
+    let mut package = String::from(
+        "<package><metadata><title>Navigation windows</title></metadata><manifest><item id='nav' href='text/nav.xhtml' media-type='application/xhtml+xml' properties='nav'/>",
+    );
+    let mut spine = String::from("<spine>");
+    let mut nav = String::from("<html><nav type='toc'>");
+    let mut paths = Vec::new();
+    for index in 0..128 {
+        package.push_str(&format!("<item id='c{index}' href='text/chapter-{index}.xhtml' media-type='application/xhtml+xml'/>"));
+        spine.push_str(&format!("<itemref idref='c{index}'/>"));
+        nav.push_str(&format!(
+            "<a href='chapter-{index}.xhtml'>Chapter {index}</a>"
+        ));
+        paths.push(format!("OPS/text/chapter-{index}.xhtml"));
+    }
+    package.push_str("</manifest>");
+    package.push_str(&spine);
+    package.push_str("</spine></package>");
+    nav.push_str("</nav></html>");
+    let mut files = vec![
+        ("mimetype", b"application/epub+zip".as_slice()),
+        ("META-INF/container.xml", CONTAINER.as_bytes()),
+        ("OPS/book.opf", package.as_bytes()),
+        ("OPS/text/nav.xhtml", nav.as_bytes()),
+    ];
+    files.extend(
+        paths
+            .iter()
+            .map(|path| (path.as_str(), b"<html><body>Text</body></html>".as_slice())),
+    );
+    assert_device_title(&epub(&files), "Chapter 0");
+}
+
+#[cfg(feature = "device-reader")]
 fn assert_device_title(encoded: &[u8], expected: &str) {
     use crate::{bounded_xml::FixedString, device_epub::*, zip_stream::*};
     use std::boxed::Box;
@@ -88,7 +124,24 @@ fn assert_device_title(encoded: &[u8], expected: &str) {
     )
     .unwrap();
     let mut titles = [FixedString::new(); MAX_DEVICE_SPINE_ITEMS];
-    let result = book.read_chapter_titles(&mut titles, buffer.as_mut(), &mut inflater);
+    let result = book.read_chapter_titles(&mut titles[..], 0, buffer.as_mut(), &mut inflater);
     assert!(result.is_ok() || expected.is_empty());
     assert_eq!(titles[0].as_str(), expected);
+    if result.is_ok() {
+        let count = book.publication().spine_len();
+        let mut window = [FixedString::new(); 16];
+        for first in (0..count)
+            .step_by(16)
+            .chain([count.saturating_sub(8), count, 0])
+        {
+            book.read_chapter_titles(&mut window, first, buffer.as_mut(), &mut inflater)
+                .unwrap();
+            for (index, title) in window.iter().enumerate() {
+                assert_eq!(
+                    title.as_str(),
+                    titles.get(first + index).map_or("", FixedString::as_str)
+                );
+            }
+        }
+    }
 }

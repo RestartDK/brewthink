@@ -1,6 +1,8 @@
 use crate::{
     app::ReaderPreferences,
     bounded_xml::{FixedString, XmlError, XmlEvent, XmlReader, XmlText},
+    image::ScaleMode,
+    image_cache::{ImageResource, ImageSpec},
     reader::{ReaderStyle, ReaderTheme},
 };
 
@@ -13,6 +15,39 @@ const PAGE_HEIGHT: usize = crate::reader::BODY_BOTTOM - crate::reader::BODY_TOP;
 pub struct BoundedReaderLine {
     text: FixedString<MAX_READER_LINE_BYTES>,
     style: ReaderStyle,
+    top: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoundedImage {
+    resource: ImageResource,
+    spec: ImageSpec,
+    top: u16,
+    alt: FixedString<128>,
+}
+
+impl BoundedImage {
+    pub fn path(&self) -> &str {
+        self.resource.path.as_str()
+    }
+    pub const fn resource(&self) -> &ImageResource {
+        &self.resource
+    }
+    pub const fn spec(&self) -> ImageSpec {
+        self.spec
+    }
+    pub const fn top(&self) -> usize {
+        self.top as usize
+    }
+    pub fn alt(&self) -> &str {
+        self.alt.as_str()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PageElement {
+    Text(BoundedReaderLine),
+    Image(BoundedImage),
 }
 
 impl BoundedReaderLine {
@@ -23,11 +58,15 @@ impl BoundedReaderLine {
     pub const fn style(&self) -> ReaderStyle {
         self.style
     }
+
+    pub const fn top(&self) -> usize {
+        self.top as usize
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BoundedPage {
-    lines: [Option<BoundedReaderLine>; MAX_PAGE_LINES],
+    lines: [Option<PageElement>; MAX_PAGE_LINES],
     line_count: u8,
     page_index: usize,
     page_count: usize,
@@ -55,7 +94,7 @@ impl BoundedPage {
     pub(crate) unsafe fn initialize_in_place(page: *mut Self) {
         // SAFETY: the caller provides writable aligned storage; every field is initialized.
         unsafe {
-            let lines = core::ptr::addr_of_mut!((*page).lines).cast::<Option<BoundedReaderLine>>();
+            let lines = core::ptr::addr_of_mut!((*page).lines).cast::<Option<PageElement>>();
             for index in 0..MAX_PAGE_LINES {
                 lines.add(index).write(None);
             }
@@ -77,7 +116,23 @@ impl BoundedPage {
     }
 
     pub fn lines(&self) -> impl Iterator<Item = &BoundedReaderLine> {
-        self.lines[..usize::from(self.line_count)].iter().flatten()
+        self.lines[..usize::from(self.line_count)]
+            .iter()
+            .flatten()
+            .filter_map(|element| match element {
+                PageElement::Text(line) => Some(line),
+                PageElement::Image(_) => None,
+            })
+    }
+
+    pub fn images(&self) -> impl Iterator<Item = &BoundedImage> {
+        self.lines[..usize::from(self.line_count)]
+            .iter()
+            .flatten()
+            .filter_map(|element| match element {
+                PageElement::Image(image) => Some(image),
+                PageElement::Text(_) => None,
+            })
     }
 
     pub const fn page_index(&self) -> usize {
@@ -142,6 +197,16 @@ pub fn layout_xhtml_page_into(
     preferences: ReaderPreferences,
     page: &mut BoundedPage,
 ) -> Result<(), LayoutError> {
+    layout_xhtml_page_with_images_into(encoded, requested_page, preferences, page, |_| None)
+}
+
+pub fn layout_xhtml_page_with_images_into(
+    encoded: &[u8],
+    requested_page: usize,
+    preferences: ReaderPreferences,
+    page: &mut BoundedPage,
+    mut resolve_image: impl FnMut(&str) -> Option<ImageResource>,
+) -> Result<(), LayoutError> {
     page.reset(requested_page);
     let mut sink = PageSink::new(requested_page, preferences, page);
     let mut reader = XmlReader::new(encoded)?;
@@ -190,7 +255,18 @@ pub fn layout_xhtml_page_into(
                     "br" => {
                         sink.line_break(true)?;
                     }
-                    "img" => append_image(tag.attribute("alt")?, &mut sink)?,
+                    "img" | "image" => {
+                        let href = tag
+                            .attribute("src")?
+                            .or(tag.attribute("href")?)
+                            .or(tag.attribute("xlink:href")?);
+                        let alt = tag.attribute("alt")?;
+                        if let Some(image) = href.and_then(&mut resolve_image) {
+                            sink.image(image, alt)?;
+                        } else {
+                            append_image(alt, &mut sink)?;
+                        }
+                    }
                     "hr" => {
                         sink.finish_block()?;
                         sink.begin_block(ReaderStyle::Body)?;
@@ -295,6 +371,43 @@ impl<'a> PageSink<'a> {
             pending_space: false,
             emitted_any: false,
         }
+    }
+
+    fn image(&mut self, resource: ImageResource, alt: Option<&str>) -> Result<(), LayoutError> {
+        self.line_break(false)?;
+        let content_width = resource
+            .size
+            .width()
+            .min(crate::reader::BODY_WIDTH_PIXELS / 8 * 8);
+        let width = content_width.div_ceil(8) * 8;
+        let height = (resource.size.height() as u64).saturating_mul(content_width as u64)
+            / resource.size.width() as u64;
+        let height = height.max(1).min(PAGE_HEIGHT as u64) as usize;
+        let spec =
+            ImageSpec::new(width, height, ScaleMode::Contain).ok_or(LayoutError::TooManyLines)?;
+        if self.used_height + height > PAGE_HEIGHT || self.page_line_count == MAX_PAGE_LINES {
+            self.page_index += 1;
+            self.used_height = 0;
+            self.page_line_count = 0;
+        }
+        if self.page_index == self.requested_page {
+            let alt = match alt {
+                Some(value) => FixedString::from_decoded(value).unwrap_or_default(),
+                None => FixedString::new(),
+            };
+            self.page.lines[self.page.line_count as usize] =
+                Some(PageElement::Image(BoundedImage {
+                    resource,
+                    spec,
+                    top: self.used_height as u16,
+                    alt,
+                }));
+            self.page.line_count += 1;
+        }
+        self.used_height += height;
+        self.page_line_count += 1;
+        self.emitted_any = true;
+        Ok(())
     }
 
     fn begin_block(&mut self, style: ReaderStyle) -> Result<(), LayoutError> {
@@ -454,7 +567,11 @@ impl<'a> PageSink<'a> {
             if style == ReaderStyle::Heading && self.page.chapter_title.is_empty() {
                 self.page.chapter_title = copy_fixed(line.as_str())?;
             }
-            self.page.lines[index] = Some(BoundedReaderLine { text: line, style });
+            self.page.lines[index] = Some(PageElement::Text(BoundedReaderLine {
+                text: line,
+                style,
+                top: self.used_height as u16,
+            }));
             self.page.line_count += 1;
         } else if style == ReaderStyle::Heading && self.page.chapter_title.is_empty() {
             self.page.chapter_title = copy_fixed(line.as_str())?;
@@ -477,10 +594,11 @@ impl<'a> PageSink<'a> {
         }
         if self.page.line_count == 0 {
             let text = FixedString::try_from_str("This section contains no readable text.")?;
-            self.page.lines[0] = Some(BoundedReaderLine {
+            self.page.lines[0] = Some(PageElement::Text(BoundedReaderLine {
                 text,
                 style: ReaderStyle::Body,
-            });
+                top: 0,
+            }));
             self.page.line_count = 1;
         }
         if self.page.chapter_title.is_empty() {
@@ -503,6 +621,9 @@ fn copy_fixed<const CAPACITY: usize>(value: &str) -> Result<FixedString<CAPACITY
 
 #[cfg(test)]
 mod regression_tests;
+
+#[cfg(test)]
+mod image_tests;
 
 #[cfg(test)]
 mod tests {

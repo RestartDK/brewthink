@@ -208,11 +208,17 @@ pub struct CompilerInputs {
     pub sysroot: PathBuf,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct DependencyInputs {
-    pub source: String,
-    pub archive_sha256: String,
-    pub files_digest: String,
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum DependencyInputs {
+    Registry {
+        source: String,
+        archive_sha256: String,
+        files_digest: String,
+    },
+    Vendored {
+        path: String,
+        files_digest: String,
+    },
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -527,6 +533,66 @@ pub fn registry_sources(package: &Package, checksum: &str) -> Result<String> {
     );
     Ok(json_hash(&json!(declared)))
 }
+pub fn vendored_sources(
+    package: &Package,
+    workspace: &Path,
+    source: &SourceInputs,
+) -> Result<DependencyInputs> {
+    const PATH: &str = "vendor/embedded-sdmmc-0.10.0";
+    let root = workspace.join(PATH);
+    ensure!(
+        package.source.is_none()
+            && package.name == "embedded-sdmmc"
+            && package.version == "0.10.0"
+            && package.manifest_path == root.join("Cargo.toml")
+            && root.canonicalize()? == root,
+        "unreviewed path dependency"
+    );
+    fn collect(
+        directory: &Path,
+        workspace: &Path,
+        source: &SourceInputs,
+        result: &mut Hashes,
+    ) -> Result<()> {
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            ensure!(
+                kind.is_dir() || kind.is_file(),
+                "vendored dependency contains a symlink or special file"
+            );
+            let path = entry.path();
+            if kind.is_dir() {
+                collect(&path, workspace, source, result)?;
+            } else {
+                let name = path
+                    .strip_prefix(workspace)?
+                    .to_str()
+                    .context("non-UTF8 vendor path")?
+                    .to_owned();
+                let actual = hash(&path)?;
+                ensure!(
+                    source.files_sha256.get(&name).and_then(Option::as_ref) == Some(&actual),
+                    "vendored source is missing or differs from the workspace snapshot: {name}"
+                );
+                result.insert(name, actual);
+            }
+        }
+        Ok(())
+    }
+    let mut hashes = Hashes::new();
+    collect(&root, workspace, source, &mut hashes)?;
+    ensure!(
+        hashes.contains_key(&format!("{PATH}/Cargo.toml"))
+            && hashes.contains_key(&format!("{PATH}/src/lib.rs")),
+        "incomplete vendored dependency"
+    );
+    Ok(DependencyInputs::Vendored {
+        path: PATH.into(),
+        files_digest: json_hash(&json!(hashes)),
+    })
+}
+
 pub fn generated_inputs(target: &Path) -> Result<Hashes> {
     let mut result = Hashes::new();
     for directory in [
@@ -760,6 +826,13 @@ impl ReaderBuild {
             {
                 continue;
             }
+            if package.source.is_none() {
+                dependencies.insert(
+                    package.id.clone(),
+                    vendored_sources(package, &self.root, &source)?,
+                );
+                continue;
+            }
             let source = package
                 .source
                 .as_deref()
@@ -781,7 +854,7 @@ impl ReaderBuild {
                 .context("missing locked registry checksum")?;
             dependencies.insert(
                 package.id.clone(),
-                DependencyInputs {
+                DependencyInputs::Registry {
                     source: source.into(),
                     archive_sha256: checksum.into(),
                     files_digest: registry_sources(package, checksum)?,

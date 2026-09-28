@@ -2,7 +2,7 @@
 
 UI gray is a screen-anchored 2 × 2 black-and-white pattern. The light-gray selection has 25% black coverage. The same conversion applies to shelf covers and settings thumbnails, so they do not force grayscale refresh during navigation.
 
-Full-screen covers, image-viewer content and sleep images retain four genuine logical shades. The framebuffer remains 96,000 bytes. No waveform, voltage, phase timing, or image decoder changes are required. Inline EPUB illustrations remain text placeholders; this change does not add their renderer.
+Full-screen covers, image-viewer content and sleep images retain four genuine logical shades. The framebuffer remains 96,000 bytes. No waveform, voltage, phase timing, or image decoder changes are required. Inline EPUB illustrations now use the shared image renderer. Like other image content, they retain four shades in Reader and are dithered behind the interactive drawer.
 
 ## Device measurements
 

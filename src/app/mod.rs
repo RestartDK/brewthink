@@ -1734,6 +1734,16 @@ impl App {
         }
     }
 
+    pub fn replace_book_catalog(&mut self, book_count: usize) -> AppEffect {
+        self.library = match self.library.selected {
+            Some(selected) => LibraryState::with_selected(book_count, selected.index())
+                .unwrap_or_else(|_| LibraryState::new(book_count)),
+            None => LibraryState::new(book_count),
+        };
+        self.files.replace_count(book_count + self.image_count);
+        self.current_render_effect()
+    }
+
     pub fn replace_image_catalog(
         &mut self,
         image_count: usize,
@@ -1846,6 +1856,20 @@ mod tests {
         assert!(state.move_selection(Direction::Down));
         assert_eq!(state.selected().unwrap().index(), 2);
         assert!(!state.move_selection(Direction::Down));
+    }
+
+    #[test]
+    fn uploaded_books_refresh_the_home_catalog_without_changing_preferences() {
+        let preferences = AppPreferences::default();
+        let image = ImageId::new(1);
+        let mut app = App::with_catalog(0, 2, Some(image), preferences);
+        assert_eq!(app.replace_book_catalog(2), AppEffect::Render);
+        assert_eq!(app.library().book_count(), 2);
+        assert_eq!(app.library().selected(), Some(super::BookId::new(0)));
+        assert_eq!(app.files.file_count(), 4);
+        assert_eq!(app.preferences(), preferences);
+        assert_eq!(app.selected_sleep_image(), Some(image));
+        assert!(matches!(app.view(), AppView::Home(_)));
     }
 
     #[test]

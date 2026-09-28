@@ -10,9 +10,11 @@ use crate::{
 use core::cell::Cell;
 #[cfg(feature = "device-reader")]
 use crc32fast::Hasher;
-use embedded_sdmmc::{BlockDevice, Error, LfnBuffer, Mode, TimeSource, VolumeIdx, VolumeManager};
 #[cfg(feature = "device-reader")]
-use embedded_sdmmc::{Directory, File, Volume};
+use embedded_sdmmc::Volume;
+use embedded_sdmmc::{
+    BlockDevice, Directory, Error, File, LfnBuffer, Mode, TimeSource, VolumeIdx, VolumeManager,
+};
 
 pub const BOOK_DIRECTORY: &str = "books";
 pub const FILE_DIRECTORY: &str = "files";
@@ -375,7 +377,7 @@ where
         let volume = self.manager.open_volume(VolumeIdx(0))?;
         let root = volume.open_root_dir()?;
         let books = root.open_dir(BOOK_DIRECTORY)?;
-        let file = books.open_long_name_file_in_dir(book.name().as_str(), Mode::ReadOnly)?;
+        let file = Self::open_book_file(&books, book.name())?;
         drop(books);
         drop(root);
         Ok(FatFileReader {
@@ -389,7 +391,7 @@ where
         let volume = self.manager.open_volume(VolumeIdx(0))?;
         let root = volume.open_root_dir()?;
         let books = root.open_dir(BOOK_DIRECTORY)?;
-        let file = books.open_long_name_file_in_dir(name.as_str(), Mode::ReadOnly)?;
+        let file = Self::open_book_file(&books, name)?;
         Ok(file.length())
     }
 
@@ -402,9 +404,24 @@ where
         let volume = self.manager.open_volume(VolumeIdx(0))?;
         let root = volume.open_root_dir()?;
         let books = root.open_dir(BOOK_DIRECTORY)?;
-        let file = books.open_long_name_file_in_dir(name.as_str(), Mode::ReadOnly)?;
+        let file = Self::open_book_file(&books, name)?;
         file.seek_from_start(offset)?;
         file.read(output)
+    }
+
+    fn open_book_file<'a>(
+        directory: &Directory<'a, D, T, MAX_DIRS, MAX_FILES, MAX_VOLUMES>,
+        name: &BookFileName,
+    ) -> Result<File<'a, D, T, MAX_DIRS, MAX_FILES, MAX_VOLUMES>, Error<D::Error>> {
+        match directory.open_long_name_file_in_dir(name.as_str(), Mode::ReadOnly) {
+            Err(Error::NotFound) => {
+                match embedded_sdmmc::ShortFileName::create_from_str(name.as_str()) {
+                    Ok(short) => directory.open_file_in_dir(short, Mode::ReadOnly),
+                    Err(_) => Err(Error::NotFound),
+                }
+            }
+            result => result,
+        }
     }
 
     pub fn with_device<R>(&self, function: impl FnOnce(&mut D) -> R) -> R {
@@ -490,6 +507,7 @@ where
     #[cfg(feature = "device-reader")]
     fn with_upload_directories<R>(
         &self,
+        target: UploadTarget,
         function: impl FnOnce(
             &Directory<'_, D, T, MAX_DIRS, MAX_FILES, MAX_VOLUMES>,
             &Directory<'_, D, T, MAX_DIRS, MAX_FILES, MAX_VOLUMES>,
@@ -504,7 +522,7 @@ where
             .open_dir(APP_DATA_DIRECTORY)
             .map_err(AppDataError::Filesystem)?;
         let files = root
-            .open_dir(FILE_DIRECTORY)
+            .open_dir(upload_directory(target))
             .map_err(AppDataError::Filesystem)?;
         root.close().map_err(AppDataError::Filesystem)?;
         let result = function(&app, &files).map_err(AppDataError::Filesystem);
@@ -545,6 +563,7 @@ pub enum AppDataError<E: core::error::Error> {
     ChecksumMismatch,
     IncompleteWrite,
     TargetExists,
+    Image(crate::image_decoder::ImageDecodeError),
 }
 
 #[cfg(feature = "device-reader")]
@@ -558,6 +577,7 @@ impl<E: core::error::Error> fmt::Display for AppDataError<E> {
             Self::ChecksumMismatch => f.write_str("file checksum mismatch"),
             Self::IncompleteWrite => f.write_str("incomplete file write"),
             Self::TargetExists => f.write_str("a different target file already exists"),
+            Self::Image(error) => write!(f, "image: {error:?}"),
         }
     }
 }
@@ -572,7 +592,8 @@ impl<E: core::error::Error + 'static> core::error::Error for AppDataError<E> {
             | Self::InvalidMetadata
             | Self::ChecksumMismatch
             | Self::IncompleteWrite
-            | Self::TargetExists => None,
+            | Self::TargetExists
+            | Self::Image(_) => None,
         }
     }
 }
@@ -602,7 +623,7 @@ where
     pub fn scan_images<const CAPACITY: usize>(
         &self,
     ) -> Result<ImageCatalog<CAPACITY>, AppDataError<D::Error>> {
-        self.recover_image_upload(&mut [0; 512])?;
+        self.recover_upload(&mut [0; 512])?;
         self.storage.with_files_directory(|directory| {
             let mut catalog = ImageCatalog::empty();
             let mut storage = [0; 768];
@@ -752,14 +773,22 @@ where
         Ok(())
     }
 
-    pub fn begin_image_upload(&self, request: UploadRequest) -> Result<(), AppDataError<D::Error>> {
-        let UploadTarget::Image(name) = request.target();
+    pub fn verify_upload(
+        &self,
+        request: UploadRequest,
+        scratch: &mut [u8],
+    ) -> Result<(), AppDataError<D::Error>> {
+        self.verify_named_file(request.target(), request.length(), request.crc32(), scratch)
+    }
+
+    pub fn begin_upload(&self, request: UploadRequest) -> Result<(), AppDataError<D::Error>> {
+        let target = request.target();
         self.storage
             .ensure_layout()
             .map_err(AppDataError::Filesystem)?;
-        self.recover_image_upload(&mut [0; 512])?;
-        if self.named_file_exists(name.as_str())? {
-            match self.verify_named_file(name, request.length(), request.crc32(), &mut [0; 512]) {
+        self.recover_upload(&mut [0; 512])?;
+        if self.named_file_exists(target)? {
+            match self.verify_named_file(target, request.length(), request.crc32(), &mut [0; 512]) {
                 Ok(()) => {}
                 Err(
                     AppDataError::ChecksumMismatch
@@ -771,69 +800,67 @@ where
                 Err(error) => return Err(error),
             }
         }
-        self.delete_if_present(AppDataFile::ImageUploadTemp)?;
-        self.write_file(AppDataFile::ImageUploadTemp, &[])
+        self.delete_if_present(AppDataFile::UploadTemp)?;
+        self.write_file(AppDataFile::UploadTemp, &[])
     }
 
-    pub fn append_image_upload(&self, bytes: &[u8]) -> Result<(), AppDataError<D::Error>> {
-        self.append_file(AppDataFile::ImageUploadTemp, bytes)
+    pub fn append_upload(&self, bytes: &[u8]) -> Result<(), AppDataError<D::Error>> {
+        self.append_file(AppDataFile::UploadTemp, bytes)
     }
 
-    pub fn abort_image_upload(&self) -> Result<(), AppDataError<D::Error>> {
-        self.recover_image_upload(&mut [0; 512])
+    pub fn abort_upload(&self) -> Result<(), AppDataError<D::Error>> {
+        self.recover_upload(&mut [0; 512])
     }
 
-    pub fn commit_image_upload(
+    pub fn commit_upload(
         &self,
         request: UploadRequest,
         scratch: &mut [u8],
     ) -> Result<(), AppDataError<D::Error>> {
-        let UploadTarget::Image(name) = request.target();
+        let target = request.target();
         self.verify_file(
-            AppDataFile::ImageUploadTemp,
+            AppDataFile::UploadTemp,
             request.length(),
             request.crc32(),
             scratch,
         )?;
-        if self.named_file_exists(name.as_str())? {
-            self.verify_named_file(name, request.length(), request.crc32(), scratch)?;
-            self.delete_if_present(AppDataFile::ImageUploadTemp)?;
+        if self.named_file_exists(target)? {
+            self.verify_named_file(target, request.length(), request.crc32(), scratch)?;
+            self.delete_if_present(AppDataFile::UploadTemp)?;
             return Ok(());
         }
-        let transaction = ImageUploadRecord {
-            name,
+        let transaction = UploadRecord {
+            target,
             length: request.length(),
             crc32: request.crc32(),
         };
-        self.write_file(AppDataFile::ImageUploadTransaction, &transaction.encode())?;
-        let mut transaction_readback = [0; IMAGE_UPLOAD_RECORD_BYTES];
-        if self.read_file(
-            AppDataFile::ImageUploadTransaction,
-            &mut transaction_readback,
-        )? != transaction_readback.len()
-            || ImageUploadRecord::decode(transaction_readback) != Some(transaction)
+        self.write_file(AppDataFile::UploadTransaction, &transaction.encode())?;
+        let mut transaction_readback = [0; UPLOAD_RECORD_BYTES];
+        if self.read_file(AppDataFile::UploadTransaction, &mut transaction_readback)?
+            != transaction_readback.len()
+            || UploadRecord::decode(transaction_readback) != Some(transaction)
         {
             return Err(AppDataError::IncompleteWrite);
         }
-        self.copy_file_to_named(AppDataFile::ImageUploadTemp, name.as_str(), scratch)?;
-        self.verify_named_file(name, request.length(), request.crc32(), scratch)?;
-        self.delete_if_present(AppDataFile::ImageUploadTransaction)?;
-        self.delete_if_present(AppDataFile::ImageUploadTemp)?;
+        self.copy_file_to_named(AppDataFile::UploadTemp, target, scratch)?;
+        self.verify_named_file(target, request.length(), request.crc32(), scratch)?;
+        self.delete_if_present(AppDataFile::UploadTransaction)?;
+        self.delete_if_present(AppDataFile::UploadTemp)?;
         Ok(())
     }
 
-    fn recover_image_upload(&self, scratch: &mut [u8]) -> Result<(), AppDataError<D::Error>> {
+    fn recover_upload(&self, scratch: &mut [u8]) -> Result<(), AppDataError<D::Error>> {
         if scratch.is_empty() {
             return Err(AppDataError::IncompleteWrite);
         }
-        let mut bytes = [0; IMAGE_UPLOAD_RECORD_BYTES];
-        let transaction = match self.read_file(AppDataFile::ImageUploadTransaction, &mut bytes) {
+        let mut bytes = [0; UPLOAD_RECORD_BYTES];
+        let transaction = match self.read_file(AppDataFile::UploadTransaction, &mut bytes) {
             Ok(0)
             | Err(AppDataError::DirectoryMissing | AppDataError::Filesystem(Error::NotFound)) => {
                 None
             }
-            Ok(IMAGE_UPLOAD_RECORD_BYTES) => {
-                Some(ImageUploadRecord::decode(bytes).ok_or(AppDataError::InvalidMetadata)?)
+            Ok(UPLOAD_RECORD_BYTES) => {
+                Some(UploadRecord::decode(bytes).ok_or(AppDataError::InvalidMetadata)?)
             }
             Ok(_) | Err(AppDataError::Filesystem(Error::NotEnoughSpace)) => {
                 return Err(AppDataError::InvalidMetadata);
@@ -842,7 +869,7 @@ where
         };
         if let Some(transaction) = transaction {
             match self.verify_named_file(
-                transaction.name,
+                transaction.target,
                 transaction.length,
                 transaction.crc32,
                 scratch,
@@ -853,13 +880,13 @@ where
                     | AppDataError::IncompleteWrite
                     | AppDataError::InvalidMetadata,
                 ) => {
-                    self.delete_named_if_present(transaction.name.as_str())?;
+                    self.delete_named_if_present(transaction.target)?;
                 }
                 Err(error) => return Err(error),
             }
         }
-        self.delete_if_present(AppDataFile::ImageUploadTransaction)?;
-        self.delete_if_present(AppDataFile::ImageUploadTemp)
+        self.delete_if_present(AppDataFile::UploadTransaction)?;
+        self.delete_if_present(AppDataFile::UploadTemp)
     }
 
     fn read_records<const N: usize, R>(
@@ -980,12 +1007,12 @@ where
 
     fn verify_named_file(
         &self,
-        name: ImageName,
+        target: UploadTarget,
         expected_length: usize,
         expected_crc32: u32,
         scratch: &mut [u8],
     ) -> Result<(), AppDataError<D::Error>> {
-        let (length, crc32) = self.file_digest_named(name.as_str(), scratch)?;
+        let (length, crc32) = self.file_digest_named(target, scratch)?;
         if length != expected_length {
             return Err(AppDataError::IncompleteWrite);
         }
@@ -993,8 +1020,8 @@ where
             return Err(AppDataError::ChecksumMismatch);
         }
         let mut signature = [0; 8];
-        let signature_length = self.read_named_prefix(name.as_str(), &mut signature)?;
-        if ImageFormat::detect(&signature[..signature_length]) != Some(name.format()) {
+        let signature_length = self.read_named_prefix(target, &mut signature)?;
+        if !target.matches_signature(&signature[..signature_length]) {
             return Err(AppDataError::InvalidMetadata);
         }
         Ok(())
@@ -1002,40 +1029,42 @@ where
 
     fn read_named_prefix(
         &self,
-        name: &str,
+        target: UploadTarget,
         output: &mut [u8],
     ) -> Result<usize, AppDataError<D::Error>> {
-        self.storage.with_files_directory(|directory| {
-            let source = directory.open_file_in_dir(name, Mode::ReadOnly)?;
-            let length = source.read(output)?;
-            source.close()?;
-            Ok(length)
-        })
+        self.storage
+            .with_directory(upload_directory(target), |directory| {
+                let source = directory.open_file_in_dir(target.name(), Mode::ReadOnly)?;
+                let length = source.read(output)?;
+                source.close()?;
+                Ok(length)
+            })
     }
 
     fn file_digest_named(
         &self,
-        name: &str,
+        target: UploadTarget,
         scratch: &mut [u8],
     ) -> Result<(usize, u32), AppDataError<D::Error>> {
         if scratch.is_empty() {
             return Err(AppDataError::IncompleteWrite);
         }
-        self.storage.with_files_directory(|directory| {
-            let source = directory.open_file_in_dir(name, Mode::ReadOnly)?;
-            let mut length = 0usize;
-            let mut hasher = Hasher::new();
-            while !source.is_eof() {
-                let count = source.read(scratch)?;
-                if count == 0 {
-                    break;
+        self.storage
+            .with_directory(upload_directory(target), |directory| {
+                let source = directory.open_file_in_dir(target.name(), Mode::ReadOnly)?;
+                let mut length = 0usize;
+                let mut hasher = Hasher::new();
+                while !source.is_eof() {
+                    let count = source.read(scratch)?;
+                    if count == 0 {
+                        break;
+                    }
+                    length = length.saturating_add(count);
+                    hasher.update(&scratch[..count]);
                 }
-                length = length.saturating_add(count);
-                hasher.update(&scratch[..count]);
-            }
-            source.close()?;
-            Ok((length, hasher.finalize()))
-        })
+                source.close()?;
+                Ok((length, hasher.finalize()))
+            })
     }
 
     fn write_file(&self, file: AppDataFile, bytes: &[u8]) -> Result<(), AppDataError<D::Error>> {
@@ -1083,15 +1112,15 @@ where
     fn copy_file_to_named(
         &self,
         source: AppDataFile,
-        target: &str,
+        target: UploadTarget,
         scratch: &mut [u8],
     ) -> Result<(), AppDataError<D::Error>> {
         if scratch.is_empty() {
             return Err(AppDataError::IncompleteWrite);
         }
-        self.storage.with_upload_directories(|app, files| {
+        self.storage.with_upload_directories(target, |app, files| {
             let source = app.open_file_in_dir(source.name(), Mode::ReadOnly)?;
-            let target = files.open_file_in_dir(target, Mode::ReadWriteCreateOrTruncate)?;
+            let target = files.open_file_in_dir(target.name(), Mode::ReadWriteCreate)?;
             while !source.is_eof() {
                 let count = source.read(scratch)?;
                 if count == 0 {
@@ -1104,20 +1133,24 @@ where
         })
     }
 
-    fn named_file_exists(&self, name: &str) -> Result<bool, AppDataError<D::Error>> {
+    fn named_file_exists(&self, target: UploadTarget) -> Result<bool, AppDataError<D::Error>> {
         self.storage
-            .with_files_directory(|directory| match directory.find_directory_entry(name) {
-                Ok(_) => Ok(true),
-                Err(Error::NotFound) => Ok(false),
-                Err(error) => Err(error),
+            .with_directory(upload_directory(target), |directory| {
+                match directory.find_directory_entry(target.name()) {
+                    Ok(_) => Ok(true),
+                    Err(Error::NotFound) => Ok(false),
+                    Err(error) => Err(error),
+                }
             })
     }
 
-    fn delete_named_if_present(&self, name: &str) -> Result<(), AppDataError<D::Error>> {
+    fn delete_named_if_present(&self, target: UploadTarget) -> Result<(), AppDataError<D::Error>> {
         self.storage
-            .with_files_directory(|directory| match directory.delete_entry_in_dir(name) {
-                Ok(()) | Err(Error::NotFound) => Ok(()),
-                Err(error) => Err(error),
+            .with_directory(upload_directory(target), |directory| {
+                match directory.delete_entry_in_dir(target.name()) {
+                    Ok(()) | Err(Error::NotFound) => Ok(()),
+                    Err(error) => Err(error),
+                }
             })
     }
 
@@ -1140,8 +1173,8 @@ enum AppDataFile {
     ImageSelection,
     ImageSelectionTemp,
     ImageSelectionBackup,
-    ImageUploadTemp,
-    ImageUploadTransaction,
+    UploadTemp,
+    UploadTransaction,
 }
 
 #[cfg(feature = "device-reader")]
@@ -1154,8 +1187,8 @@ impl AppDataFile {
             Self::ImageSelection => "SELECT.BIN",
             Self::ImageSelectionTemp => "SELECT.TMP",
             Self::ImageSelectionBackup => "SELECT.BAK",
-            Self::ImageUploadTemp => "UPLOAD.TMP",
-            Self::ImageUploadTransaction => "UPLOAD.TXN",
+            Self::UploadTemp => "UPLOAD.TMP",
+            Self::UploadTransaction => "UPLOAD.TXN",
         }
     }
 }
@@ -1167,9 +1200,9 @@ const IMAGE_SELECTION_MAGIC: u32 = 0x4254_5331;
 #[cfg(feature = "device-reader")]
 const IMAGE_SELECTION_BYTES: usize = 20;
 #[cfg(feature = "device-reader")]
-const IMAGE_UPLOAD_MAGIC: u32 = 0x4254_5531;
+const UPLOAD_MAGIC: u32 = 0x4254_5531;
 #[cfg(feature = "device-reader")]
-const IMAGE_UPLOAD_RECORD_BYTES: usize = 28;
+const UPLOAD_RECORD_BYTES: usize = 28;
 
 #[cfg(feature = "device-reader")]
 fn decode_preferences(bytes: [u8; 12]) -> Option<AppPreferences> {
@@ -1208,25 +1241,25 @@ fn decode_image_selection(bytes: [u8; IMAGE_SELECTION_BYTES]) -> Option<ImageNam
 
 #[cfg(feature = "device-reader")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ImageUploadRecord {
-    name: ImageName,
+struct UploadRecord {
+    target: UploadTarget,
     length: usize,
     crc32: u32,
 }
 
 #[cfg(feature = "device-reader")]
-impl ImageUploadRecord {
-    fn encode(self) -> [u8; IMAGE_UPLOAD_RECORD_BYTES] {
-        let mut bytes = [0; IMAGE_UPLOAD_RECORD_BYTES];
-        bytes[0..4].copy_from_slice(&IMAGE_UPLOAD_MAGIC.to_le_bytes());
-        self.name.write_padded(
+impl UploadRecord {
+    fn encode(self) -> [u8; UPLOAD_RECORD_BYTES] {
+        let mut bytes = [0; UPLOAD_RECORD_BYTES];
+        bytes[0..4].copy_from_slice(&UPLOAD_MAGIC.to_le_bytes());
+        self.target.write_padded(
             (&mut bytes[4..16])
                 .try_into()
                 .expect("upload name slice is fixed"),
         );
         bytes[16..20].copy_from_slice(
             &u32::try_from(self.length)
-                .expect("image upload length is bounded")
+                .expect("upload length is bounded")
                 .to_le_bytes(),
         );
         bytes[20..24].copy_from_slice(&self.crc32.to_le_bytes());
@@ -1235,18 +1268,19 @@ impl ImageUploadRecord {
         bytes
     }
 
-    fn decode(bytes: [u8; IMAGE_UPLOAD_RECORD_BYTES]) -> Option<Self> {
-        if u32::from_le_bytes(bytes[0..4].try_into().ok()?) != IMAGE_UPLOAD_MAGIC
+    fn decode(bytes: [u8; UPLOAD_RECORD_BYTES]) -> Option<Self> {
+        if u32::from_le_bytes(bytes[0..4].try_into().ok()?) != UPLOAD_MAGIC
             || crc32fast::hash(&bytes[..24]) != u32::from_le_bytes(bytes[24..28].try_into().ok()?)
         {
             return None;
         }
         let length = usize::try_from(u32::from_le_bytes(bytes[16..20].try_into().ok()?)).ok()?;
-        if length == 0 || length > MAX_DEVICE_IMAGE_BYTES {
+        let target = UploadTarget::from_padded(bytes[4..16].try_into().ok()?)?;
+        if length == 0 || length > target.maximum_bytes() {
             return None;
         }
         Some(Self {
-            name: ImageName::from_padded(bytes[4..16].try_into().ok()?).ok()?,
+            target,
             length,
             crc32: u32::from_le_bytes(bytes[20..24].try_into().ok()?),
         })
@@ -1272,25 +1306,34 @@ where
     type Error = AppDataError<D::Error>;
 
     fn begin(&mut self, request: UploadRequest) -> Result<(), Self::Error> {
-        self.begin_image_upload(request)
+        self.begin_upload(request)
     }
 
     fn append(&mut self, _request: UploadRequest, bytes: &[u8]) -> Result<(), Self::Error> {
-        self.append_image_upload(bytes)
+        self.append_upload(bytes)
     }
 
     fn commit(&mut self, request: UploadRequest, scratch: &mut [u8]) -> Result<(), Self::Error> {
-        self.commit_image_upload(request, scratch)
+        self.commit_upload(request, scratch)
     }
 
     fn abort(&mut self, _request: UploadRequest) -> Result<(), Self::Error> {
-        self.abort_image_upload()
+        self.abort_upload()
+    }
+}
+
+#[cfg(feature = "device-reader")]
+fn upload_directory(target: UploadTarget) -> &'static str {
+    match target {
+        UploadTarget::Image(_) => FILE_DIRECTORY,
+        UploadTarget::Book(_) => BOOK_DIRECTORY,
     }
 }
 
 fn is_epub(name: &str) -> bool {
-    name.rsplit_once('.')
-        .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("epub"))
+    name.rsplit_once('.').is_some_and(|(_, extension)| {
+        extension.eq_ignore_ascii_case("epub") || extension.eq_ignore_ascii_case("epb")
+    })
 }
 
 struct ShortName {
@@ -1323,6 +1366,9 @@ impl fmt::Write for ShortName {
     }
 }
 
+#[cfg(feature = "device-reader")]
+mod images;
+
 #[cfg(all(test, feature = "device-reader"))]
 mod recovery_tests;
 
@@ -1338,7 +1384,7 @@ mod tests {
     };
     #[cfg(feature = "device-reader")]
     use super::{
-        ImageCatalog, ImageUploadRecord, MAX_DEVICE_IMAGE_BYTES, decode_image_selection,
+        ImageCatalog, MAX_DEVICE_IMAGE_BYTES, UploadRecord, decode_image_selection,
         encode_image_selection,
     };
     #[cfg(feature = "device-reader")]
@@ -1390,15 +1436,15 @@ mod tests {
         selection[8] ^= 1;
         assert_eq!(decode_image_selection(selection), None);
 
-        let record = ImageUploadRecord {
-            name,
+        let record = UploadRecord {
+            target: crate::transfer::UploadTarget::Image(name),
             length: MAX_DEVICE_IMAGE_BYTES,
             crc32: 0x1234_5678,
         };
         let mut encoded = record.encode();
-        assert_eq!(ImageUploadRecord::decode(encoded), Some(record));
+        assert_eq!(UploadRecord::decode(encoded), Some(record));
         encoded[20] ^= 1;
-        assert_eq!(ImageUploadRecord::decode(encoded), None);
+        assert_eq!(UploadRecord::decode(encoded), None);
     }
 
     #[cfg(feature = "device-reader")]

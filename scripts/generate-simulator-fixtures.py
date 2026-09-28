@@ -105,7 +105,7 @@ def fixtures():
         "ncx": epub(text, navigation="ncx"),
         "malformed": epub(b'<html><body><p>wrong</other></body></html>'),
         "oversized-chapter": epub(b'<body>' + b'x' * (140 * 1024) + b'</body>'),
-        "too-many-chapters": epub(b'<body>text</body>', spine_count=65),
+        "too-many-chapters": epub(b'<body>text</body>', spine_count=129),
     }
 
 

@@ -1,4 +1,6 @@
 use super::*;
+use crate::cover::CoverDecodeWorkspace;
+use crate::image_decoder::{ImageFormat, JpegDecodeWorkspace, decode_jpeg, decode_png};
 use crate::{
     app::{ReaderFont, ReaderFontSize, ReaderSpacing},
     bounded_xml::XmlError,
@@ -97,6 +99,36 @@ fn decoded_parts(cover: &Cover) -> (&[u8; COVER_BYTES], &OriginalFrame) {
 }
 
 #[test]
+fn chapter_title_windows_map_spine_indices_and_clear_unused_entries() {
+    let mut zip = Box::new(ZipValidationScratch::new());
+    let mut package = Box::new(DevicePackageScratch::new());
+    let mut inflater = Box::new(InflateWorkspace::new());
+    let mut resource = Box::new([0; MAX_DEVICE_RESOURCE_BYTES]);
+    let mut publication = Box::new(DevicePublication::new());
+    let book = DeviceEpub::open(
+        MemoryFile::try_from(TEXT).unwrap(),
+        &mut zip,
+        &mut package,
+        &mut inflater,
+        &mut resource,
+        &mut publication,
+    )
+    .unwrap();
+    let mut window = [FixedString::<CHAPTER_TITLE_BYTES>::new(); 1];
+    for (index, title) in [
+        (0, "Opening"),
+        (1, "Closing"),
+        (2, ""),
+        (usize::MAX, ""),
+        (0, "Opening"),
+    ] {
+        book.read_chapter_titles(&mut window, index, &mut resource[..], &mut inflater)
+            .unwrap();
+        assert_eq!(window[0].as_str(), title);
+    }
+}
+
+#[test]
 fn metadata_chapters_and_pages_match_the_device_pipeline() {
     let imported = Book::from_epub(EPUB, "minimal.epub").unwrap();
     let mut zip = Box::new(ZipValidationScratch::new());
@@ -115,7 +147,7 @@ fn metadata_chapters_and_pages_match_the_device_pipeline() {
     .unwrap();
     let mut titles = Box::new([FixedString::<CHAPTER_TITLE_BYTES>::new(); MAX_DEVICE_SPINE_ITEMS]);
     device
-        .read_chapter_titles(&mut titles, &mut resource[..], &mut inflater)
+        .read_chapter_titles(&mut titles[..], 0, &mut resource[..], &mut inflater)
         .unwrap();
     assert!(imported.navigation_error.is_none());
     assert_eq!(imported.title, device.publication().title());
@@ -254,7 +286,7 @@ fn png_and_jpeg_frames_match_the_native_contain_decode() {
 }
 
 #[test]
-fn frame_gate_is_the_uncompressed_size_and_shelf_gate_is_128_kib() {
+fn streamed_covers_cross_the_former_frame_and_shelf_input_limits() {
     let cases = [
         ("frame-limit.epub", FRAME_LIMIT, 98_304, true, true),
         (
@@ -262,16 +294,10 @@ fn frame_gate_is_the_uncompressed_size_and_shelf_gate_is_128_kib() {
             SHELF_ONLY_COVER,
             98_305,
             true,
-            false,
+            true,
         ),
-        ("shelf-limit.epub", SHELF_LIMIT, 131_072, true, false),
-        (
-            "oversized-cover.epub",
-            OVERSIZED_COVER,
-            131_073,
-            false,
-            false,
-        ),
+        ("shelf-limit.epub", SHELF_LIMIT, 131_072, true, true),
+        ("oversized-cover.epub", OVERSIZED_COVER, 131_073, true, true),
     ];
     for (name, epub, size, shelf_expected, frame_expected) in cases {
         let entry = zip_entry(epub, PARITY_COVER_PATH);
@@ -307,7 +333,7 @@ fn frame_gate_is_the_uncompressed_size_and_shelf_gate_is_128_kib() {
 }
 
 #[test]
-fn compressed_size_above_128_kib_rejects_the_cover_before_reading() {
+fn a_large_compressed_entry_with_tiny_output_streams_without_the_old_gate() {
     let entry = zip_entry(COMPRESSED_OVERSIZED_COVER, PARITY_COVER_PATH);
     assert_eq!(entry.compressed, 131_225);
     assert_eq!(entry.uncompressed, 145);
@@ -317,9 +343,14 @@ fn compressed_size_above_128_kib_rejects_the_cover_before_reading() {
         "compressed-oversized-cover.epub",
     )
     .unwrap();
-    assert!(matches!(book.cover, Cover::TooLarge));
-    assert!(book.cover.bitmap().is_none());
-    assert!(book.cover.frame_bitmap().is_none());
+    assert_eq!(
+        book.cover.bitmap().unwrap().as_bytes(),
+        &native_shelf(&entry.bytes).unwrap()[..]
+    );
+    assert_eq!(
+        book.cover.frame_bitmap().unwrap().as_bytes(),
+        &native_frame(&entry.bytes).unwrap()[..]
+    );
 }
 
 #[test]

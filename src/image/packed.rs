@@ -138,6 +138,22 @@ impl<'a> PackedImage<'a> {
         self.bytes.fill(0xFF);
     }
 
+    pub fn blit(&mut self, source: PackedBitmap<'_>, left: usize, top: usize) {
+        let width = source
+            .size()
+            .width()
+            .min(self.size.width().saturating_sub(left));
+        let height = source
+            .size()
+            .height()
+            .min(self.size.height().saturating_sub(top));
+        for y in 0..height {
+            for x in 0..width {
+                self.set_luma(left + x, top + y, source.luma(x, y));
+            }
+        }
+    }
+
     pub fn set_luma(&mut self, x: usize, y: usize, luma: u8) {
         self.set_luma_dithered(x, y, luma, Dither::None);
     }
