@@ -412,7 +412,13 @@ impl<'a> BufferedDisplay<'a> {
         let applied = match (self.baseline, requested) {
             (BaselineState::NeedsReset | BaselineState::Asleep, _) => {
                 self.controller = Ssd1677::with_profile(self.controller.profile).initialize(bus)?;
-                RefreshMode::FullClean
+                match (self.baseline, requested) {
+                    (
+                        BaselineState::Asleep,
+                        RefreshMode::Differential | RefreshMode::QuickClean,
+                    ) => RefreshMode::QuickClean,
+                    _ => RefreshMode::FullClean,
+                }
             }
             (BaselineState::Unknown, RefreshMode::Differential) => RefreshMode::QuickClean,
             _ => requested,
@@ -1085,6 +1091,43 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, Event::Command(CMD_MASTER_ACTIVATION, _)))
         );
+    }
+
+    #[test]
+    fn reset_recovery_preserves_explicit_full_clean_and_failed_grayscale_safety() {
+        for profile in [X4DriveProfile::StockParity, X4DriveProfile::OpenX4FastDu] {
+            for baseline in [BaselineState::Asleep, BaselineState::NeedsReset] {
+                for requested in [
+                    RefreshMode::FullClean,
+                    RefreshMode::QuickClean,
+                    RefreshMode::Differential,
+                ] {
+                    let mut bus = FakeBus::default();
+                    let controller = Ssd1677::with_profile(profile).initialize(&mut bus).unwrap();
+                    let mut display =
+                        BufferedDisplay::with_controller_ram(controller, Rotation::Degrees0);
+                    display.baseline = baseline;
+                    bus.events.clear();
+                    let applied = display
+                        .refresh(&mut bus, &[0xA5; FRAME_BYTES], requested)
+                        .unwrap();
+                    let expected = match (baseline, requested) {
+                        (
+                            BaselineState::Asleep,
+                            RefreshMode::QuickClean | RefreshMode::Differential,
+                        ) => RefreshMode::QuickClean,
+                        _ => RefreshMode::FullClean,
+                    };
+                    assert_eq!(applied, expected);
+                    assert_eq!(bus.events.first(), Some(&Event::Reset));
+                    assert_eq!(display.baseline_state(), BaselineState::Synchronized);
+                    assert_eq!(
+                        plane_bytes(&bus.events, CMD_WRITE_RAM_RED),
+                        vec![0xA5; FRAME_BYTES * 2]
+                    );
+                }
+            }
+        }
     }
 
     #[test]
