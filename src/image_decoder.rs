@@ -379,6 +379,8 @@ fn rounded_ratio(value: usize, numerator: usize, denominator: usize) -> usize {
 #[cfg(test)]
 mod cover_tests;
 #[cfg(test)]
+mod scaling_tests;
+#[cfg(test)]
 mod tests {
     extern crate std;
 
