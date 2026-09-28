@@ -8,6 +8,7 @@ pub const MAX_DEVICE_MANIFEST_ITEMS: usize = 512;
 pub const MAX_CONTAINER_BYTES: usize = 2 * 1024;
 pub const MAX_PACKAGE_BYTES: usize = 64 * 1024;
 pub const MAX_DEVICE_RESOURCE_BYTES: usize = 140 * 1024;
+pub const MAX_CHAPTER_BYTES: u32 = 16 * 1024 * 1024;
 pub const MAX_DEVICE_PATH_BYTES: usize = 128;
 
 const EPUB_MIMETYPE: &[u8] = b"application/epub+zip";
@@ -279,6 +280,29 @@ where
             .spine_item(index)
             .ok_or(DeviceEpubError::SpineOutOfBounds)?;
         self.read_path(item.path(), output, inflater)
+    }
+
+    pub fn read_spine_to(
+        &self,
+        index: usize,
+        inflater: &mut InflateWorkspace,
+        buffer: &mut [u8],
+        write: impl FnMut(&[u8]) -> Result<(), R::Error>,
+    ) -> Result<(), DeviceEpubError<R::Error>> {
+        let item = self
+            .publication
+            .spine_item(index)
+            .ok_or(DeviceEpubError::SpineOutOfBounds)?;
+        let entry = self
+            .archive
+            .find(item.path())
+            .map_err(DeviceEpubError::Zip)?;
+        if entry.uncompressed_size() > MAX_CHAPTER_BYTES {
+            return Err(DeviceEpubError::ResourceTooLarge);
+        }
+        self.archive
+            .read_entry_to(entry, inflater, buffer, write)
+            .map_err(DeviceEpubError::Zip)
     }
 
     pub fn read_chapter_titles(

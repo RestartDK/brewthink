@@ -1,0 +1,106 @@
+Frame Objects:
+  fi#0: size=4, align=4, at location [SP-4]
+  fi#1: size=4, align=4, at location [SP-8]
+save/restore points:
+save points are empty
+restore points are empty
+Function Live Ins: $x10
+
+bb.0 (%ir-block.1):
+  successors: %bb.5(0x30000000), %bb.1(0x50000000); %bb.5(37.50%), %bb.1(62.50%)
+  liveins: $x10, $x1
+  DBG_VALUE $x10, 0, !"self", !DIExpression()
+  $x11 = ADDI $x10, 0
+  DBG_VALUE $x11, 0, !"self", !DIExpression()
+  renamable $x13 = LW $x10, 8
+  DBG_VALUE $noreg, $noreg, !"self", !DIExpression(DW_OP_LLVM_fragment, 0, 32)
+  DBG_VALUE $noreg, $noreg, !"self", !DIExpression(DW_OP_LLVM_fragment, 32, 32)
+  DBG_VALUE $noreg, $noreg, !"slice", !DIExpression(DW_OP_LLVM_fragment, 0, 32)
+  DBG_VALUE $noreg, $noreg, !"slice", !DIExpression(DW_OP_LLVM_fragment, 32, 32)
+  DBG_VALUE $noreg, $noreg, !"slice", !DIExpression(DW_OP_LLVM_fragment, 0, 32)
+  DBG_VALUE $noreg, $noreg, !"self", !DIExpression(DW_OP_LLVM_fragment, 0, 32)
+  DBG_VALUE $noreg, $noreg, !"slice", !DIExpression(DW_OP_LLVM_fragment, 32, 32)
+  DBG_VALUE $noreg, $noreg, !"self", !DIExpression(DW_OP_LLVM_fragment, 32, 32)
+  renamable $x10 = LW $x10, 0
+  DBG_VALUE $x13, $noreg, !"index", !DIExpression()
+  DBG_VALUE $x13, $noreg, !"self", !DIExpression()
+  DBG_VALUE $x13, $noreg, !"end", !DIExpression()
+  DBG_VALUE $x13, $noreg, !"self", !DIExpression()
+  DBG_VALUE $x13, $noreg, !"index", !DIExpression()
+  BEQ renamable $x13, $x0, %bb.5
+
+bb.1 (%ir-block.8):
+; predecessors: %bb.0
+  successors: %bb.2(0x40000000), %bb.4(0x40000000); %bb.2(50.00%), %bb.4(50.00%)
+  liveins: $x10, $x11, $x13, $x1
+  DBG_VALUE $x13, $noreg, !"index", !DIExpression()
+  DBG_VALUE $x13, $noreg, !"self", !DIExpression()
+  DBG_VALUE $x13, $noreg, !"end", !DIExpression()
+  DBG_VALUE $x13, $noreg, !"self", !DIExpression()
+  DBG_VALUE $x13, $noreg, !"index", !DIExpression()
+  DBG_VALUE $x11, 0, !"self", !DIExpression()
+  renamable $x11 = LW killed renamable $x11, 4
+  DBG_VALUE $x11, $noreg, !"self", !DIExpression(DW_OP_LLVM_fragment, 32, 32)
+  DBG_VALUE $x11, $noreg, !"slice", !DIExpression(DW_OP_LLVM_fragment, 32, 32)
+  DBG_VALUE $x11, $noreg, !"slice", !DIExpression(DW_OP_LLVM_fragment, 32, 32)
+  DBG_VALUE $x11, $noreg, !"self", !DIExpression(DW_OP_LLVM_fragment, 32, 32)
+  BGEU renamable $x13, renamable $x11, %bb.4
+
+bb.2 (%ir-block.12):
+; predecessors: %bb.1
+  successors: %bb.5(0x7ffff800), %bb.3(0x00000800); %bb.5(100.00%), %bb.3(0.00%)
+  liveins: $x10, $x11, $x13, $x1
+  DBG_VALUE $x11, $noreg, !"self", !DIExpression(DW_OP_LLVM_fragment, 32, 32)
+  DBG_VALUE $x11, $noreg, !"slice", !DIExpression(DW_OP_LLVM_fragment, 32, 32)
+  DBG_VALUE $x11, $noreg, !"slice", !DIExpression(DW_OP_LLVM_fragment, 32, 32)
+  DBG_VALUE $x11, $noreg, !"self", !DIExpression(DW_OP_LLVM_fragment, 32, 32)
+  DBG_VALUE $x13, $noreg, !"index", !DIExpression()
+  DBG_VALUE $x13, $noreg, !"self", !DIExpression()
+  DBG_VALUE $x13, $noreg, !"end", !DIExpression()
+  DBG_VALUE $x13, $noreg, !"self", !DIExpression()
+  DBG_VALUE $x13, $noreg, !"index", !DIExpression()
+  renamable $x12 = nuw ADD renamable $x10, renamable $x13
+  renamable $x12 = LB killed renamable $x12, 0
+  renamable $x14 = ADDI $x0, -65
+  DBG_VALUE $noreg, $noreg, !"self", !DIExpression()
+  BLT killed renamable $x14, killed renamable $x12, %bb.5
+
+bb.3 (%ir-block.16):
+; predecessors: %bb.4, %bb.2
+  liveins: $x10, $x11, $x13, $x1
+  DBG_VALUE $x11, $noreg, !"slice", !DIExpression(DW_OP_LLVM_fragment, 32, 32)
+  DBG_VALUE $x11, $noreg, !"self", !DIExpression(DW_OP_LLVM_fragment, 32, 32)
+  DBG_VALUE $x13, $noreg, !"end", !DIExpression()
+  DBG_VALUE $x13, $noreg, !"self", !DIExpression()
+  DBG_VALUE $x13, $noreg, !"index", !DIExpression()
+  $x2 = frame-setup ADDI $x2, -16
+  frame-setup CFI_INSTRUCTION def_cfa_offset 16
+  frame-setup SW killed $x1, $x2, 12 :: (store (s32) into %stack.0)
+  frame-setup SW killed $x8, $x2, 8 :: (store (s32) into %stack.1)
+  frame-setup CFI_INSTRUCTION offset $x1, -4
+  frame-setup CFI_INSTRUCTION offset $x8, -8
+  $x8 = frame-setup ADDI $x2, 16
+  frame-setup CFI_INSTRUCTION def_cfa $x8, 0
+  renamable $x14 = LUI target-flags(riscv-hi) @anon.60b08a3234956c47136dbc5f0aab7454.624
+  renamable $x14 = ADDI killed renamable $x14, target-flags(riscv-lo) @anon.60b08a3234956c47136dbc5f0aab7454.624
+  $x12 = ADDI $x0, 0
+  PseudoCALL target-flags(riscv-call) @_RNvNtCs57AslucmIUK_4core3str16slice_error_fail, <regmask $vlenb $x0 $x1 $x8 $x9 $x18 $x19 $x20 $x21 $x22 $x23 $x24 $x25 $x26 $x27 $x0_h $x1_h $x8_h $x9_h $x18_h $x19_h $x20_h $x21_h $x22_h $x23_h $x24_h $x25_h $x26_h $x27_h $x0_w $x1_w $x8_w $x9_w and 16 more...>, implicit-def dead $x1, implicit $x10, implicit $x11, implicit $x12, implicit $x13, implicit $x14, implicit-def $x2
+
+bb.4 (%ir-block.10):
+; predecessors: %bb.1
+  successors: %bb.5(0x7ffff800), %bb.3(0x00000800); %bb.5(100.00%), %bb.3(0.00%)
+  liveins: $x10, $x11, $x13, $x1
+  DBG_VALUE $x11, $noreg, !"slice", !DIExpression(DW_OP_LLVM_fragment, 32, 32)
+  DBG_VALUE $x11, $noreg, !"slice", !DIExpression(DW_OP_LLVM_fragment, 32, 32)
+  DBG_VALUE $x11, $noreg, !"self", !DIExpression(DW_OP_LLVM_fragment, 32, 32)
+  DBG_VALUE $x13, $noreg, !"self", !DIExpression()
+  DBG_VALUE $x13, $noreg, !"end", !DIExpression()
+  DBG_VALUE $x13, $noreg, !"self", !DIExpression()
+  DBG_VALUE $x13, $noreg, !"index", !DIExpression()
+  BNE renamable $x13, renamable $x11, %bb.3
+
+bb.5 (%ir-block.17):
+; predecessors: %bb.0, %bb.4, %bb.2
+  liveins: $x10, $x13, $x1
+  $x11 = ADDI killed renamable $x13, 0
+  PseudoTAIL target-flags(riscv-call) @_RNvNtCs9CsxrzLAxIM_9brewthink11bounded_xml10local_name, <regmask $vlenb $x0 $x1 $x8 $x9 $x18 $x19 $x20 $x21 $x22 $x23 $x24 $x25 $x26 $x27 $x0_h $x1_h $x8_h $x9_h $x18_h $x19_h $x20_h $x21_h $x22_h $x23_h $x24_h $x25_h $x26_h $x27_h $x0_w $x1_w $x8_w $x9_w and 16 more...>, implicit $x2, implicit $x10, implicit $x11

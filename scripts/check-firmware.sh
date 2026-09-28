@@ -20,8 +20,8 @@ heartbeat none controller-ram
 heartbeat none host-ram
 storage-usb sd-diagnostic controller-ram
 storage-write-test sd-write-diagnostic controller-ram
-reader-app device-reader controller-ram
 grayscale-bench grayscale-bench controller-ram
+reader-app device-reader controller-ram
 CONFIGURATIONS
 
 REJECTION_LOG="artifacts/ci/reader-host-ram-rejection.txt"

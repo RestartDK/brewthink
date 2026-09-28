@@ -564,6 +564,7 @@ pub enum AppDataError<E: core::error::Error> {
     IncompleteWrite,
     TargetExists,
     Image(crate::image_decoder::ImageDecodeError),
+    Chapter(crate::bounded_layout::LayoutError),
 }
 
 #[cfg(feature = "device-reader")]
@@ -578,6 +579,7 @@ impl<E: core::error::Error> fmt::Display for AppDataError<E> {
             Self::IncompleteWrite => f.write_str("incomplete file write"),
             Self::TargetExists => f.write_str("a different target file already exists"),
             Self::Image(error) => write!(f, "image: {error:?}"),
+            Self::Chapter(error) => write!(f, "chapter: {error}"),
         }
     }
 }
@@ -593,7 +595,8 @@ impl<E: core::error::Error + 'static> core::error::Error for AppDataError<E> {
             | Self::ChecksumMismatch
             | Self::IncompleteWrite
             | Self::TargetExists
-            | Self::Image(_) => None,
+            | Self::Image(_)
+            | Self::Chapter(_) => None,
         }
     }
 }
@@ -1366,6 +1369,8 @@ impl fmt::Write for ShortName {
     }
 }
 
+#[cfg(feature = "device-reader")]
+mod chapters;
 #[cfg(feature = "device-reader")]
 mod images;
 

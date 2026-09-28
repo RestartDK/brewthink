@@ -9,7 +9,7 @@ use crate::{
     image_decoder::{self, ImageDecodeError, ImageFormat, JpegDecodeWorkspace, stream},
     scratch::Scratch,
     storage::{BookFile, ImageFile},
-    zip_stream::{InflateWorkspace, ReadAt, StreamingZip, ZipEntry},
+    zip_stream::{InflateWorkspace, ReadAt, StreamingZip, ZipEntry, ZipError},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -18,6 +18,21 @@ pub struct ImageResource {
     pub size: Size,
     pub crc32: u32,
     pub bytes: u32,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum ImageProbeError<E> {
+    Read(E),
+    Image(ImageDecodeError),
+}
+
+impl<E> From<ZipError<E>> for ImageProbeError<E> {
+    fn from(error: ZipError<E>) -> Self {
+        match error {
+            ZipError::Read(error) | ZipError::Write(error) => Self::Read(error),
+            _ => Self::Image(ImageDecodeError::InvalidImage),
+        }
+    }
 }
 
 pub enum ImageSource<'a> {
@@ -57,28 +72,27 @@ impl ImageWorkspace {
         &mut self,
         archive: &StreamingZip<R>,
         entry: ZipEntry,
-    ) -> Result<Size, ImageDecodeError> {
+    ) -> Result<Size, ImageProbeError<R::Error>> {
         if entry.uncompressed_size() > stream::MAX_IMAGE_FILE_BYTES {
-            return Err(ImageDecodeError::InvalidImage);
+            return Err(ImageProbeError::Image(ImageDecodeError::InvalidImage));
         }
         // SAFETY: the initializer establishes both fields before a reference is formed.
         let workspace = unsafe { self.storage.initialize(ProbeWorkspace::initialize_in_place) };
         let length = archive
             .read_entry_prefix(entry, &mut workspace.prefix, &mut workspace.inflate)
-            .map_err(|_| ImageDecodeError::InvalidImage)?;
-        stream::dimensions(&ImageBytes(&workspace.prefix[..length]))
+            .map_err(ImageProbeError::from)?;
+        stream::dimensions(&ImageBytes(&workspace.prefix[..length])).map_err(ImageProbeError::Image)
     }
 
     pub fn probe_resource<R: ReadAt>(
         &mut self,
         archive: &StreamingZip<R>,
         path: &str,
-    ) -> Result<ImageResource, ImageDecodeError> {
-        let entry = archive
-            .find(path)
-            .map_err(|_| ImageDecodeError::InvalidImage)?;
+    ) -> Result<ImageResource, ImageProbeError<R::Error>> {
+        let entry = archive.find(path).map_err(ImageProbeError::from)?;
         Ok(ImageResource {
-            path: FixedString::try_from_str(path).map_err(|_| ImageDecodeError::InvalidImage)?,
+            path: FixedString::try_from_str(path)
+                .map_err(|_| ImageProbeError::Image(ImageDecodeError::InvalidImage))?,
             size: self.probe(archive, entry)?,
             crc32: entry.crc32(),
             bytes: entry.uncompressed_size(),

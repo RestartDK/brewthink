@@ -1,5 +1,6 @@
 extern crate std;
 
+mod chapter_tests;
 mod image_tests;
 
 use super::*;
@@ -32,11 +33,17 @@ struct Card(Rc<RefCell<MemoryCard>>);
 
 impl Card {
     fn formatted() -> Self {
-        let mut bytes = vec![0; 70_001 * 512];
+        Self::formatted_with_layout(70_000, 550)
+    }
+
+    fn formatted_with_layout(sectors: u32, fat_sectors: u32) -> Self {
+        let clusters = sectors - 32 - 2 * fat_sectors;
+        assert!(clusters >= 65_525 && fat_sectors * 128 >= clusters + 2);
+        let mut bytes = vec![0; (sectors as usize + 1) * 512];
         bytes[510..512].copy_from_slice(&[0x55, 0xaa]);
         bytes[450] = 0x0c;
         bytes[454..458].copy_from_slice(&1u32.to_le_bytes());
-        bytes[458..462].copy_from_slice(&70_000u32.to_le_bytes());
+        bytes[458..462].copy_from_slice(&sectors.to_le_bytes());
         let boot = &mut bytes[512..1024];
         boot[..3].copy_from_slice(&[0xeb, 0x3c, 0x90]);
         boot[3..11].copy_from_slice(b"MSDOS5.0");
@@ -46,8 +53,8 @@ impl Card {
         boot[16] = 2;
         boot[21] = 0xf8;
         boot[28..32].copy_from_slice(&1u32.to_le_bytes());
-        boot[32..36].copy_from_slice(&70_000u32.to_le_bytes());
-        boot[36..40].copy_from_slice(&550u32.to_le_bytes());
+        boot[32..36].copy_from_slice(&sectors.to_le_bytes());
+        boot[36..40].copy_from_slice(&fat_sectors.to_le_bytes());
         boot[44..48].copy_from_slice(&2u32.to_le_bytes());
         boot[48..50].copy_from_slice(&1u16.to_le_bytes());
         boot[50..52].copy_from_slice(&6u16.to_le_bytes());
@@ -60,11 +67,11 @@ impl Card {
         let info = &mut bytes[1024..1536];
         info[..4].copy_from_slice(&0x4161_5252u32.to_le_bytes());
         info[484..488].copy_from_slice(&0x6141_7272u32.to_le_bytes());
-        info[488..492].copy_from_slice(&68_867u32.to_le_bytes());
+        info[488..492].copy_from_slice(&(clusters - 1).to_le_bytes());
         info[492..496].copy_from_slice(&3u32.to_le_bytes());
         info[508..512].copy_from_slice(&0xaa55_0000u32.to_le_bytes());
         bytes.copy_within(1024..1536, 8 * 512);
-        for sector in [33, 583] {
+        for sector in [33, 33 + fat_sectors as usize] {
             for (index, entry) in [0x0fff_fff8u32, 0x0fff_ffff, 0x0fff_ffff]
                 .iter()
                 .enumerate()

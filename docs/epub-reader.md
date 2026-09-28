@@ -74,14 +74,14 @@ The device path uses:
 3. Incremental stored/DEFLATE reads with CRC checks and output limits.
 4. Pull-based XML tokenization into fixed-capacity publication and page state.
 5. No-heap PNG/JPEG decoding, alpha compositing, resizing, grayscale conversion, and dithering into a packed destination.
-6. Page-at-a-time layout with at most 50 retained lines and no chapter DOM.
+6. Incremental layout with at most 50 retained page elements, no chapter DOM, and [SD-backed source/page caches](streamed-chapters.md).
 7. A checksummed RTC-fast-memory resume record.
 
-The final monochrome framebuffer is 48,000 bytes. ZIP inflation and PNG/JPEG decoding share one phase-checked union workspace because they never run concurrently. The release image retains about 50 KiB for stack after a 16-book catalog; no successful allocator exists in firmware.
+The logical four-tone framebuffer is 96,000 bytes. ZIP inflation and PNG/JPEG decoding share that phase-checked workspace because they never run concurrently. Chapter parsing, page records, and the index reuse the existing 140 KiB resource scratch. Available stack and the retained 8,192-byte reserve are checked against the exact linked artifact; no successful allocator exists in firmware.
 
 ## Initial limits
 
-Host parsing currently applies these limits:
+The separate `epub::EpubBook` inspection API applies these limits:
 
 | Item | Limit |
 | --- | ---: |
@@ -91,10 +91,8 @@ Host parsing currently applies these limits:
 | OPF package XML | 2 MiB |
 | Extracted resource | 16 MiB |
 | ZIP entry inflation ratio | 200:1 |
-| Simulator cover dimensions | 2,048 × 2,048 |
-| Simulator image decoder allocation | 32 MiB |
 
-The X4 path applies lower fixed limits:
+The X4 path applies these fixed limits. The simulator shares its ZIP/XML/layout and image bounds, but uses host allocation and volatile caches rather than the device's scratch and FAT quotas:
 
 | Item | X4 limit |
 | --- | ---: |
@@ -104,13 +102,17 @@ The X4 path applies lower fixed limits:
 | Publication resource path | 128 bytes |
 | Container XML | 2 KiB |
 | OPF package XML | 64 KiB |
-| Extracted resource | 140 KiB |
+| Resource scratch payload | 140 KiB |
+| Extracted chapter on SD | 16 MiB |
+| Pages per chapter | 8,192 |
+| Page-cache file | 32 MiB |
+| Chapter-cache logical quota | 64 MiB / 128 files |
 | Encoded EPUB image | 8 MiB |
 | Linear spine items per book | 128 |
 | Resident navigation titles | 16 |
 | Cached catalog spine paths | 64 / 2 KiB total |
 | Manifest items | 512 |
-| Retained lines per page | 50 |
+| Retained text/image elements per page | 50 |
 | UTF-8 bytes per retained line | 320 |
 | Image dimension / area | 4,096 pixels / 8 Mi pixels, subject to PNG row capacity |
 

@@ -53,6 +53,8 @@ pub const SCOPES: &[&str] = &[
     "brewthink::zip_stream::",
     "brewthink::scratch::",
     "brewthink::bounded_layout::",
+    "brewthink::bounded_xml::",
+    "brewthink::chapter_cache::",
 ];
 const BRANCHES: &[&str] = &[
     "beq", "bne", "blt", "bge", "bltu", "bgeu", "beqz", "bnez", "blez", "bgez", "bltz", "bgtz",
@@ -586,8 +588,31 @@ impl std::fmt::Display for StackFrameError {
 impl std::error::Error for StackFrameError {}
 
 pub fn stack_frame(body: &[String], transfers: &Transfers) -> Result<u64> {
+    stack_frame_with_terminal_calls(body, transfers, &Set::new())
+}
+
+pub(crate) fn stack_frame_with_terminal_calls(
+    body: &[String],
+    transfers: &Transfers,
+    terminal_calls: &Set<u32>,
+) -> Result<u64> {
     let parsed = instructions(body)?;
-    let (successors, unresolved) = frame_cfg(&parsed, transfers)?;
+    let (mut successors, unresolved) = frame_cfg(&parsed, transfers)?;
+    let mut matched = 0;
+    for (index, instruction) in parsed.iter().enumerate() {
+        if terminal_calls.contains(&instruction.address) {
+            ensure!(
+                is_call(&instruction.opcode, &instruction.operands),
+                "nonreturning site is not a call"
+            );
+            successors[index].clear();
+            matched += 1;
+        }
+    }
+    ensure!(
+        matched == terminal_calls.len(),
+        "nonreturning site is absent from disassembly"
+    );
     let mut constants_at = Map::from([(0, Map::from([("zero".into(), 0)]))]);
     let mut pending = VecDeque::from([0]);
     while let Some(i) = pending.pop_front() {

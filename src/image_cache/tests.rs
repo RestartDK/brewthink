@@ -1,6 +1,56 @@
 use super::*;
 
 #[test]
+fn image_probe_preserves_input_errors_instead_of_classifying_them_as_bad_images() {
+    use crate::zip_stream::ZipValidationScratch;
+    use core::cell::Cell;
+
+    struct Source<'a> {
+        bytes: &'a [u8],
+        fail: &'a Cell<bool>,
+    }
+    impl ReadAt for Source<'_> {
+        type Error = &'static str;
+        fn len(&self) -> u32 {
+            self.bytes.len() as u32
+        }
+        fn read_at(&self, offset: u32, output: &mut [u8]) -> Result<usize, Self::Error> {
+            if self.fail.get() {
+                return Err("injected read error");
+            }
+            let start = (offset as usize).min(self.bytes.len());
+            let count = output.len().min(self.bytes.len() - start);
+            output[..count].copy_from_slice(&self.bytes[start..start + count]);
+            Ok(count)
+        }
+    }
+    let fail = Cell::new(false);
+    let archive = StreamingZip::open(
+        Source {
+            bytes: include_bytes!("../../web/tests/fixtures/inline-images.epub"),
+            fail: &fail,
+        },
+        &mut ZipValidationScratch::new(),
+    )
+    .unwrap();
+    let entry = archive.find("OPS/images/diagram.png").unwrap();
+    let mut workspace = ImageWorkspace::new();
+    assert_eq!(
+        workspace.probe(&archive, entry).unwrap(),
+        Size::new(320, 240).unwrap()
+    );
+    fail.set(true);
+    for error in [
+        workspace.probe(&archive, entry).unwrap_err(),
+        workspace
+            .probe_resource(&archive, "OPS/images/diagram.png")
+            .unwrap_err(),
+    ] {
+        assert_eq!(error, ImageProbeError::Read("injected read error"));
+    }
+}
+
+#[test]
 fn cache_records_bind_every_header_byte_pixels_and_full_render_identity() {
     let spec = ImageSpec::new(8, 8, ScaleMode::Contain).unwrap();
     let key = ImageKey::file("ONE.PNG", 100, 5, spec).unwrap();

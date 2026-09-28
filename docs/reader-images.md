@@ -9,7 +9,7 @@ Covers, inline EPUB illustrations, Files images, and sleep images share `ImageWo
 3. Identify the source and target. A book key includes filename/size, entry path/length/CRC, render dimensions, scaling, and renderer version. Standalone files are CRC-scanned in bounded chunks.
 4. Read a valid prepared entry, or stream the ZIP entry to `/brew/cache/IMAGE.TMP`. Full extraction checks compressed consumption, output length, and CRC.
 5. Close extraction handles, reuse the 96,000-byte phase workspace for decoding, and produce planar pixels. No full RGB image or encoded EPUB image is held in firmware SRAM.
-6. Publish and read back the prepared entry. Compose text and cached image blocks, then draw the reader drawer over them. Resource scratch reused for pixels requires XHTML reload before later layout.
+6. Publish and read back the prepared entry. Compose text and cached image blocks, then draw the reader drawer over them. Text now comes from [persisted chapter pages](streamed-chapters.md); pixel scratch reuse does not require an XHTML reload.
 
 PNG supports non-interlaced applicable 1–16-bit samples, palette/transparency, white alpha compositing, chunk CRCs, zlib validation, and PNG filters. Baseline JPEG uses a reader-backed decoder. Encoded input is bounded to 8 MiB, dimensions to 4,096, and source area to 8 Mi pixels; PNG row capacity can reject images inside those bounds. GIF, progressive JPEG, and interlaced PNG are unsupported. The Files catalog and USB image-upload boundary still cap standalone files at 96 KiB.
 
@@ -39,4 +39,4 @@ All four uploaded books matched their original byte counts and CRCs before and a
 
 The reader does not expose the storage diagnostic's raw-SD export. The separate `/TSC3/IDENTITY.BIN` record therefore lacks a post-reader byte comparison. No image or reader command targeted it, and no additional diagnostic was flashed to force that check.
 
-Chapter XHTML remains limited to 140 KiB. The simulator validates all chapters at import, so oversized later chapters reject the whole book there; firmware loads chapters on demand. The unchanged DDIA sample has twelve oversized resources, and Everyday Things has a 175,238-byte index. These limits are not hidden or bypassed. Source-pixel shrinking remains phase-dependent; area-averaged shrinking and zoom/pan are later work.
+[Streamed chapters](streamed-chapters.md) replace the 140 KiB XHTML limit with bounded processing and SD storage. The simulator still validates all chapters at import; firmware prepares chapters on demand. Source-pixel shrinking remains phase-dependent; area-averaged shrinking and zoom/pan are later work.

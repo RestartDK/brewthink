@@ -59,8 +59,6 @@ impl ReadAt for File<'_> {
 
 struct Oracle<'publication, 'bytes> {
     book: DeviceEpub<'publication, File<'bytes>>,
-    inflater: Box<InflateWorkspace>,
-    resource: Box<[u8; MAX_DEVICE_RESOURCE_BYTES]>,
     titles: [FixedString<CHAPTER_TITLE_BYTES>; MAX_DEVICE_SPINE_ITEMS],
     cover: Option<Vec<u8>>,
     images: Images<'bytes>,
@@ -76,22 +74,13 @@ impl Oracle<'_, '_> {
         loop {
             effect = match effect {
                 AppEffect::LoadChapter { spine_index, .. } => {
-                    let length = self
-                        .book
-                        .read_spine(spine_index, &mut self.resource[..], &mut self.inflater)
-                        .map_err(|error| format!("{error:?}"))?;
                     let path = self
                         .book
                         .publication()
                         .spine_item(spine_index)
                         .ok_or("missing spine")?
                         .path();
-                    let first = self.images.layout(
-                        path,
-                        &self.resource[..length],
-                        0,
-                        app.reader_preferences(),
-                    )?;
+                    let first = self.images.layout(path, 0, app.reader_preferences())?;
                     app.chapter_loaded(self.book.publication().spine_len(), first.page_count())
                         .map_err(|error| format!("{error:?}"))?
                 }
@@ -148,26 +137,15 @@ impl Oracle<'_, '_> {
                     }
                     _ => unreachable!(),
                 };
-                let length = self
-                    .book
-                    .read_spine(
-                        location.spine_index(),
-                        &mut self.resource[..],
-                        &mut self.inflater,
-                    )
-                    .map_err(|error| format!("{error:?}"))?;
                 let path = self
                     .book
                     .publication()
                     .spine_item(location.spine_index())
                     .ok_or("missing spine")?
                     .path();
-                let page = self.images.layout(
-                    path,
-                    &self.resource[..length],
-                    location.page_index(),
-                    app.reader_preferences(),
-                )?;
+                let page =
+                    self.images
+                        .layout(path, location.page_index(), app.reader_preferences())?;
                 let lines = page
                     .lines()
                     .map(|line| {
@@ -254,6 +232,8 @@ fn drawer_trace(oracle: &mut Oracle<'_, '_>, output: &Path) -> Result<()> {
         ("jump-row", vec![Move(Down)]),
         ("jump-next", vec![Move(Right)]),
         ("jump-applied", vec![Confirm]),
+        ("previous-end", vec![Move(Left)]),
+        ("next-start", vec![Move(Right)]),
         ("end-open", vec![Confirm]),
         ("end-position", vec![Move(Right); 20]),
         ("end-applied", vec![Confirm]),
@@ -313,10 +293,17 @@ fn drawer_trace(oracle: &mut Oracle<'_, '_>, output: &Path) -> Result<()> {
     Ok(())
 }
 
+enum OutputMode {
+    AllPages,
+    DrawerTrace,
+}
+
 fn main() -> Result<()> {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
-    let [input, output] = arguments.as_slice() else {
-        return Err("usage: simulator-oracle <epub> <output-directory>".into());
+    let (input, output, mode) = match arguments.as_slice() {
+        [input, output] => (input, output, OutputMode::AllPages),
+        [input, output, flag] if flag == "--trace-only" => (input, output, OutputMode::DrawerTrace),
+        _ => return Err("usage: simulator-oracle <epub> <output-directory> [--trace-only]".into()),
     };
     let output = Path::new(output);
     fs::create_dir_all(output)?;
@@ -343,12 +330,14 @@ fn main() -> Result<()> {
     let cover = images.covers(book.publication().cover_path(), output)?;
     let mut oracle = Oracle {
         book,
-        inflater,
-        resource,
         titles,
         cover,
         images,
     };
+    match mode {
+        OutputMode::DrawerTrace => return drawer_trace(&mut oracle, output),
+        OutputMode::AllPages => {}
+    }
     let mut cases = String::new();
     for preferences in [
         ReaderPreferences::default(),

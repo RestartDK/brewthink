@@ -2,7 +2,7 @@
 
 Imported EPUBs use `DeviceEpub`, `StreamingZip`, bounded XML/layout, and the native PNG/JPEG decoders. The browser has no separate imported-book parser, paginator, or image decoder. Host inspection and conversion tools remain separate.
 
-`simulator::Book` owns chapter XHTML bounded to 140 KiB per resource and 128 spine items. `Chapter::page` uses the image-aware bounded layout. EPUB 3 navigation and EPUB 2 NCX supply chapter names; missing names use `Chapter n`. Malformed navigation clears partial names and emits a typed browser warning without rejecting readable text.
+`simulator::Book` retains the EPUB and chapter descriptors, with one volatile staged chapter/page cache per book. `Chapter::page` uses the shared streaming XML/layout and page codec. The chapter limit is 16 MiB, with at most 8,192 pages and 128 spine items; the 140 KiB firmware scratch is not a chapter-length limit. EPUB 3 navigation and EPUB 2 NCX supply chapter names; missing names use `Chapter n`. Malformed navigation clears partial names and emits a typed browser warning without rejecting readable text.
 
 ## Images and UI
 
@@ -20,17 +20,17 @@ From the development shell, with web dependencies and Chromium installed:
 bash scripts/check-simulator-parity.sh
 ```
 
-The script regenerates the 17 deterministic parity EPUBs and compares them with committed fixtures. The excessive-spine case contains 129 entries. A separately authored inline-image fixture contains a 230,728-byte PNG; regenerate it with `python3 scripts/generate-inline-image-fixture.py`.
+The script regenerates the 17 deterministic parity EPUBs and compares them with committed fixtures. The excessive-spine case contains 129 entries. A separately authored inline-image fixture contains a 230,728-byte PNG; regenerate it with `python3 scripts/generate-inline-image-fixture.py`. `scripts/generate-streamed-chapter-fixture.py` generates a 756,222-byte chapter with an illustration and a 225,090-byte paragraph chapter. The large fixtures use `simulator-oracle --trace-only` to compare navigation endpoints without saving thousands of full frames.
 
 `simulator-oracle` runs without `web-sim`. It reads through device APIs and uses a separate host staging adapter, image-aware layout, and the shared native renderer. It does not call `simulator::Book` or `Cover`. Playwright compares all 96,000 framebuffer bytes against its references. This verifies the adapter and WASM boundary, not an independent implementation of the codecs or paginator.
 
 Coverage includes:
 
 - Every text and inline-fixture page across two typography configurations and both chapter transitions.
-- Drawer drafts, cancel, chapter jumps, position endpoints, typography, and sleep/wake.
+- Drawer drafts, cancel, chapter jumps, backward/forward chapter endpoints, typography, and sleep/wake, including chapters above the former text-buffer limit.
 - EPUB 3/NCX titles and missing/malformed navigation fallback.
 - PNG/JPEG opening and cover-only sleep, including inputs at and beyond the former encoded gates.
-- Malformed XML, oversized XHTML, and excessive spine rejection.
+- Malformed XML and excessive spine rejection; formerly oversized XHTML is accepted.
 - All 256 four-shade two-by-two shelf patterns in host tests.
 - Exact illustration pixels, page return, and cover-only sleep in `web/tests/inline-images.spec.ts`.
 
@@ -38,6 +38,6 @@ The parity workflow owns a strict-port production preview. `BREWTHINK_PARITY_POR
 
 ## Limits
 
-This is reading-path parity, not ESP32 emulation. The browser checks all chapter resources at import; the device reads chapters on demand. The unchanged DDIA sample has twelve oversized XHTML resources, and Everyday Things has a 175,238-byte index. Both currently fail simulator import even though their image resources decode successfully. The limits are not bypassed by converting the originals.
+This is reading-path parity, not ESP32 emulation. The browser checks all chapter resources at import, retaining only one staged chapter per book; the device prepares chapters on demand. Neither path rewrites or converts EPUB originals. [Streamed chapters](streamed-chapters.md) documents the current bounds and persistence tests.
 
 Browser memory does not demonstrate bounded device SRAM, persistent SD cache reuse, FAT fault handling, USB timing, display waveforms, optical separation, refresh latency, or physical power-loss behavior. Those require separate tests and device acceptance. Source-pixel shrinking remains phase-dependent; zoom/pan and improved area averaging are not part of this change.

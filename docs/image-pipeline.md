@@ -105,7 +105,7 @@ PNG uses bounded deflate and scanline workspaces; JPEG emits blocks from a bound
 
 Prepared planar pixels persist under `/brew/cache`. Full render/source identity and header/payload checksums determine cache hits. The quota is 32 MiB of logical image-file bytes or 512 recognized entries, with round-robin eviction and current-page slot protection. Staging and FAT allocation overhead are additional. See [streaming reader images](reader-images.md) for cache publication, recovery, and limitations.
 
-Chapter XHTML remains bounded to 140 KiB, with 128 spine items and a 16-title firmware navigation window. The Files catalog and USB image-upload protocol retain their separate 96 KiB file limit; this is no longer the EPUB decoder limit. The browser retains sources, staging chunks, and a volatile prepared-image cache in host memory. It does not demonstrate bounded SD behavior or device SRAM use; see [simulator parity](simulator-parity.md).
+[Chapter XHTML streams through an SD-backed page cache](streamed-chapters.md), with a 16 MiB chapter limit, 128 spine items, and a 16-title firmware navigation window. The Files catalog and USB image-upload protocol retain their separate 96 KiB file limit; this is no longer the EPUB decoder limit. The browser retains sources, staging chunks, and a volatile prepared-image cache in host memory. It does not demonstrate bounded SD behavior or device SRAM use; see [simulator parity](simulator-parity.md).
 
 `Scratch` tracks byte and typed use. A return from typed use initializes every byte before exposing a byte slice, including any former padding. `DeviceEpub` borrows caller-owned publication storage, and `FatStorage::scan_into` fills the supplied catalog without large value returns.
 

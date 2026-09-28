@@ -84,7 +84,14 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - run: sudo apt-get update && sudo apt-get install -y llvm libudev-dev
+      - name: Install compiler-matched LLVM tools
+        run: |
+          rustup component add llvm-tools-preview
+          host=$(rustc -vV | awk '/^host:/ { print $2 }')
+          llvm_bin="$(rustc --print sysroot)/lib/rustlib/$host/bin"
+          echo "$llvm_bin" >> "$GITHUB_PATH"
+          "$llvm_bin/llvm-objdump" --version
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev
       - run: cargo install espflash --version 4.5.0 --locked
       - run: python3 -m pip install esptool==5.3.1
       - run: cargo fetch --locked

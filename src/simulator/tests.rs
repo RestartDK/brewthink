@@ -3,7 +3,9 @@ use crate::cover::CoverDecodeWorkspace;
 use crate::image_decoder::{ImageFormat, JpegDecodeWorkspace, decode_jpeg, decode_png};
 use crate::{
     app::{ReaderFont, ReaderFontSize, ReaderSpacing},
+    bounded_layout::layout_xhtml_page,
     bounded_xml::XmlError,
+    chapter_cache::MAX_CHAPTER_BYTES,
 };
 
 const EPUB: &[u8] = include_bytes!("../../web/tests/fixtures/minimal.epub");
@@ -200,11 +202,13 @@ fn metadata_chapters_and_pages_match_the_device_pipeline() {
 }
 
 #[test]
-fn chapter_resource_limit_and_malformed_xml_are_not_hidden() {
-    let oversized = vec![b' '; MAX_DEVICE_RESOURCE_BYTES + 1];
+fn streamed_chapter_limit_and_malformed_xml_are_not_hidden() {
+    let formerly_oversized = format!("<body>{}</body>", " ".repeat(MAX_DEVICE_RESOURCE_BYTES + 1));
+    assert!(Chapter::from_xhtml(formerly_oversized.as_bytes(), "Chapter 1".into()).is_ok());
+    let oversized = vec![b' '; MAX_CHAPTER_BYTES as usize + 1];
     assert!(matches!(
         Chapter::from_xhtml(&oversized, "Chapter 1".into()),
-        Err(SimulatorError::Epub(DeviceEpubError::ResourceTooLarge))
+        Err(SimulatorError::Layout(LayoutError::ChapterCapacity))
     ));
     assert!(matches!(
         Chapter::from_xhtml(b"<body><p>text</bad></body>", "Chapter 1".into()),
@@ -212,6 +216,49 @@ fn chapter_resource_limit_and_malformed_xml_are_not_hidden() {
             XmlError::Malformed
         )))
     ));
+}
+
+#[test]
+fn oversized_book_pages_survive_chapter_return_and_reflow() {
+    let book = Book::from_epub(
+        include_bytes!("../../web/tests/fixtures/streamed-chapters.epub"),
+        "streamed.epub",
+    )
+    .unwrap();
+    assert_eq!(book.chapters.len(), 3);
+    let preferences = ReaderPreferences::default();
+    let first = book.chapters[0].page(0, preferences).unwrap();
+    assert!(first.page_count() > 1000);
+    assert_eq!(first.images().count(), 1);
+    let last = book.chapters[0]
+        .page(first.page_count() - 1, preferences)
+        .unwrap();
+    assert!(
+        last.lines()
+            .any(|line| line.text().contains("FINAL CHAPTER"))
+    );
+    let paragraph = book.chapters[1].page(0, preferences).unwrap();
+    assert!(paragraph.page_count() > 100);
+    let last = book.chapters[1]
+        .page(paragraph.page_count() - 1, preferences)
+        .unwrap();
+    assert!(
+        last.lines()
+            .any(|line| line.text().contains("PARAGRAPH MARKER"))
+    );
+    assert_eq!(book.chapters[0].page(0, preferences).unwrap(), first);
+    let reflow = book.chapters[0]
+        .page(
+            0,
+            ReaderPreferences::new(
+                ReaderFont::Mono,
+                ReaderFontSize::Large,
+                ReaderSpacing::Relaxed,
+            ),
+        )
+        .unwrap();
+    assert_ne!(reflow.page_count(), first.page_count());
+    assert_eq!(book.chapters[0].page(0, preferences).unwrap(), first);
 }
 
 #[test]
@@ -410,7 +457,7 @@ fn sample_chapters_use_the_bounded_pipeline_after_reflow() {
             assert!(page.chapter_title().contains(&book.title));
             assert!(matches!(
                 chapter.page(page.page_count(), ReaderPreferences::default()),
-                Err(LayoutError::PageOutOfBounds)
+                Err(SimulatorError::Layout(LayoutError::PageOutOfBounds))
             ));
         }
     }

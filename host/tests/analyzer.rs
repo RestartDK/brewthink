@@ -3,6 +3,9 @@ use brewthink_host::{machine, stack};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+#[path = "analyzer/nonreturning.rs"]
+mod nonreturning;
+
 fn decode(value: &mut Value) {
     match value {
         Value::Array(items) => items.iter_mut().for_each(decode),
@@ -230,12 +233,15 @@ fn signed_comparison_is_stack_neutral_but_cannot_define_the_stack_pointer() {
 }
 
 #[test]
-fn image_storage_and_codec_owners_remain_in_the_measured_call_graph() {
+fn chapter_image_storage_and_codec_owners_remain_in_the_measured_call_graph() {
     let cases: Vec<Value> = serde_json::from_str(include_str!("fixtures/analyzer.json")).unwrap();
     let case = cases.iter().find(|case| case["test"] == "test_reader_stack.ReaderStackTests.test_integrated_orchestration_and_identity_frames_are_selected").unwrap();
     let encoded = serde_json::to_string(case).unwrap();
     for owner in [
         "brewthink::storage::catalog::prepare_image",
+        "brewthink::chapter_cache::ChapterHeader::decode",
+        "brewthink::bounded_xml::stream::XmlStream::next",
+        "brewthink::bounded_layout::layout_xhtml_stream",
         "brewthink::image_cache::prepare",
         "brewthink::image_decoder::decode",
         "brewthink::reader::render",

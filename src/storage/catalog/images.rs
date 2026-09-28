@@ -1,8 +1,8 @@
 use super::*;
 use crate::{
     image_cache::{
-        CACHE_HEADER_BYTES, CacheSlot, CacheState, ImageKey, ImageResource, ImageSource, ImageSpec,
-        ImageWorkspace, PreparedImage,
+        CACHE_HEADER_BYTES, CacheSlot, CacheState, ImageKey, ImageProbeError, ImageResource,
+        ImageSource, ImageSpec, ImageWorkspace, PreparedImage,
     },
     image_decoder::stream::{self, MAX_IMAGE_FILE_BYTES},
     zip_stream::{ReadAt, StreamingZip, ZipValidationScratch},
@@ -13,8 +13,15 @@ const CACHE_CURSOR: &str = "CLOCK.BIN";
 const MAX_CACHE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_CACHE_ENTRIES: usize = 512;
 
-struct FileSource<'file, 'store, D, T, const DIRS: usize, const FILES: usize, const VOLUMES: usize>
-where
+pub(super) struct FileSource<
+    'file,
+    'store,
+    D,
+    T,
+    const DIRS: usize,
+    const FILES: usize,
+    const VOLUMES: usize,
+> where
     D: BlockDevice,
     T: TimeSource,
 {
@@ -32,7 +39,7 @@ impl<
     const VOLUMES: usize,
 > FileSource<'file, 'store, D, T, DIRS, FILES, VOLUMES>
 {
-    fn new(file: &'file File<'store, D, T, DIRS, FILES, VOLUMES>) -> Self {
+    pub(super) fn new(file: &'file File<'store, D, T, DIRS, FILES, VOLUMES>) -> Self {
         Self {
             file,
             next_offset: Cell::new(None),
@@ -78,7 +85,10 @@ where
         let archive = StreamingZip::open(reader, zip).map_err(|_| AppDataError::InvalidMetadata)?;
         workspace
             .probe_resource(&archive, path)
-            .map_err(AppDataError::Image)
+            .map_err(|error| match error {
+                ImageProbeError::Read(error) => AppDataError::Filesystem(error),
+                ImageProbeError::Image(error) => AppDataError::Image(error),
+            })
     }
 
     pub fn prepare_image(

@@ -1,6 +1,25 @@
 # Brewthink checkpoint
 
-## Latest observed hardware, streamed reader images, 2026-09-27
+## Latest observed hardware, streamed chapters, 2026-09-27
+
+This supersedes the image-only installation below. Branch `daniel/streamed-chapters` builds on image PR [#25](https://github.com/RestartDK/brewthink/pull/25). The main checkout and original upload worktree remain separate. Revalidate live device/port/ownership before hardware work; this record is not a reservation or another flash authorization.
+
+- Installed reader: **618,944 bytes**, SHA-256 `f32375175922e0241b566a153c23391fd9efb98b6a1e12bccf072a00110eadfd`. App1 write `0x650000..0x6E71BF`, affected sectors through `0x6E7FFF`.
+- The complete pre-write snapshot matched the previous image reader. Exact readback and every byte outside the reviewed sectors passed. App1 sequence 2, stock/app0, otadata and other partitions remained unchanged. No eFuse write occurred.
+- Private backup: `backup/streamed-chapters-20260927T224858Z/` in `/Users/danielkumlin/.herdr/worktrees/brew-text`. Acceptance records and native captures: `artifacts/streamed-chapters/`.
+- Installation memory evidence: `artifacts/ci/reader-app-controller-ram.bin.memory.V8xfUN/evidence`, `PASS_LIMITED`, 21,344 bytes accounted against 28,832 available, with the unchanged 8,192-byte reserve. All 271 selected frames were measured; 1,639 frontier sites remain. This is not a whole-program stack bound. Later host-tool/documentation commits need their own source binding; do not reuse a stale bundle.
+- The first flash preflight stopped before device access because a later matrix build changed generated inputs. The matrix now builds the reader last. Fresh evidence passed before the successful install; no guard was relaxed.
+- The resource payload remains 143,360 bytes and the frame remains 96,000 bytes. Firmware, simulator, oracle, upload preflight and inspection use [streamed chapters](docs/streamed-chapters.md).
+- All 184 spines across unchanged DDIA, Hamming, Everyday Things and Coffee originals passed the emulated FAT cache under two typography settings, including endpoint/middle hits and original-byte checks. Host checks, 19 native/WASM parity tests, 13 production-browser tests, one development-reload test, embedded Clippy and six firmware configurations passed.
+- On the X4, DDIA spine 22 reached pages 1/663 and 663/663; Everyday Things spine 18 reached pages 1/147 and 147/147. All four endpoint frames matched browser pixels exactly. Page and drawer return frames stayed identical. The DDIA drawer showed the correct Index title beyond the 16-title window.
+- Hamming spine 10/page index 18 and Coffee spine 8/page index 7 matched the browser, including illustration pixels. Their page/drawer returns stayed identical. Restart/reopen returned the same Coffee frame and reported cache hits.
+- All four stored uploaded EPUBs matched the unchanged Mac originals by complete size/CRC before and after the cache workload. Five library entries remain, including the Hamming duplicate. No resend, conversion or original replacement occurred.
+- A complete 16 MiB read after the reading/cache workload matched the post-install snapshot. That comparison precedes the final reset/reopen and sleep checks; no later full-flash comparison is claimed.
+- Final state: asleep on the current Coffee cover. Automatic mode stayed at packed preferences `65792`; pre-sleep cover CRC `5aae41d0` matched the opening cover, the tap completed, and USB disconnected. Press physical Power to wake. This is logical/pre-sleep evidence, not an optical or post-sleep capture.
+- `/TSC3/IDENTITY.BIN` was not targeted. Reader firmware lacks raw-SD export, so its post-reader byte equality remains unverified. Do not replace it or flash a diagnostic merely to fill that evidence gap.
+- Both hardware leases ended normally. `/tmp/brewthink-x4-501.lock` remains in place. Do not rerun the one-off installer against its old image-reader baseline.
+
+## Historical image-reader installation, 2026-09-27
 
 This image worktree records an authorized reader installation over the separate C3 diagnostic. The main checkout's Tailscale checkpoint and the original upload worktree were not edited. Revalidate actual hardware and shared ownership before another session; this record is not a reservation or flash authorization.
 
@@ -13,7 +32,7 @@ This image worktree records an authorized reader installation over the separate 
 - Exact-artifact memory evidence is `PASS_LIMITED`, 22,384 bytes accounted against 28,896 available, with the unchanged 8,192-byte reserve. All 201 selected frames were measured; 1,497 frontier sites remain. This is not a whole-program stack bound.
 - The final command entered sleep from Coffee spine 8, page index 7. Automatic sleep mode stayed unchanged. The pre-sleep current-cover CRC `5aae41d0` matched its opening frame. USB disconnected afterward. The X4 is asleep; use physical Power to wake it. No post-sleep capture or optical-quality claim is made.
 - `/TSC3/IDENTITY.BIN` was not targeted. A read-only verification attempt stopped because raw-SD export belongs to the separate storage diagnostic, not the reader. Its post-reader byte equality remains unverified; do not regenerate or replace that identity.
-- DDIA still has twelve XHTML resources above the 140 KiB limit; Everyday Things has a 175,238-byte index. The simulator rejects their whole-book import; firmware encounters limits on demand. GIF, progressive JPEG and interlaced PNG remain unsupported. Area-averaged shrinking and zoom/pan are later work.
+- At this image-only installation, DDIA had twelve XHTML resources above the 140 KiB limit; Everyday Things had a 175,238-byte index. That build rejected their simulator import and encountered firmware limits on demand. The chapter installation above supersedes this text-length limitation. GIF, progressive JPEG and interlaced PNG remain unsupported. Area-averaged shrinking and zoom/pan are later work.
 - The shared persistent flock was held across backup, flash, reset and captures, then released. `/tmp/brewthink-x4-501.lock` was retained. No serial monitor or simulator server is left running.
 
 This supersedes the older installation records below for this acceptance run.
