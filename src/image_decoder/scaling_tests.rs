@@ -62,6 +62,25 @@ fn streamed_pixel_rectangles_match_the_wide_integer_reference() {
 }
 
 #[test]
+fn axis_edges_match_wide_division_without_overflow_at_extreme_scales() {
+    for source in [1, 2, 3, 7, 127, MAX_IMAGE_DIMENSION] {
+        for scaled in [1, 2, 440, 480, 3_276_800, usize::MAX] {
+            for target in [1, 480, 800, usize::MAX] {
+                let axis = AxisTransform::new(source, scaled, target);
+                let offset = (target as i128 - scaled as i128) / 2;
+                for position in 0..=source {
+                    let expected = (offset + position as i128 * scaled as i128 / source as i128)
+                        .clamp(0, target as i128) as usize;
+                    assert_eq!(axis.edge(position), expected);
+                }
+                assert_eq!(axis.range(source), 0..0);
+                assert_eq!(axis.range(usize::MAX), 0..0);
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "CPU microbenchmark; not device or end-to-end image latency"]
 fn benchmark_streamed_image_scaling() {
     let source = Size::new(1200, 1574).unwrap();
