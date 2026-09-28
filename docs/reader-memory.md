@@ -45,6 +45,8 @@ The producer and analyzer live in the independent `host/` Cargo package. Its lau
 
 Both `build-reader-app1.sh` and the generic builder's `reader-app` path package this exact proved ELF, not a subsequent Cargo rebuild. They recheck the completed evidence after image generation and retain the stack report beside the image. No build command flashes hardware. Runtime integration, source changes or changed generated inputs require fresh evidence. The firmware matrix builds the reader last because another release configuration can change the generated files bound by the proof, even when the reader's source stays unchanged.
 
+CI uses the pinned Rust toolchain's `llvm-tools-preview` component. Ubuntu LLVM 18.1.3 can mislabel RV32 calls with negative PC-relative offsets as unrelated symbols at wrapped addresses. Those annotations fail the exact callee checks; do not weaken the checks to accept them.
+
 LLVM implementation references: [frame finalization](https://github.com/llvm/llvm-project/blob/llvmorg-22.1.6/llvm/lib/CodeGen/PrologEpilogInserter.cpp), [frame layout remarks](https://github.com/llvm/llvm-project/blob/llvmorg-22.1.6/llvm/lib/CodeGen/StackFrameLayoutAnalysisPass.cpp), and [RISC-V frame lowering](https://github.com/llvm/llvm-project/blob/llvmorg-22.1.6/llvm/lib/Target/RISCV/RISCVFrameLowering.cpp). The ignored `--stack-size-section` experiment and nightly-only `-Z emit-stack-sizes` are not used; neither missing output nor a toolchain change is a substitute for evidence.
 
 ## Initialization validity and ownership
