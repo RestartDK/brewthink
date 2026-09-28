@@ -936,7 +936,7 @@ mod tests {
     }
 
     #[test]
-    fn grayscale_to_text_resets_and_cleans_before_partial_refresh() {
+    fn grayscale_to_text_uses_one_quick_clean_before_partial_refresh() {
         use crate::image::{PackedImage, PixelDepth, Size};
         let mut bus = FakeBus::default();
         let controller = Ssd1677::with_profile(X4DriveProfile::StockParity)
@@ -964,9 +964,21 @@ mod tests {
                 image.bitmap(),
                 RefreshMode::Differential
             ),
-            Ok(RefreshMode::FullClean)
+            Ok(RefreshMode::QuickClean)
         );
         assert_eq!(bus.events.first(), Some(&Event::Reset));
+        assert!(
+            bus.events
+                .contains(&Event::Command(CMD_DISPLAY_UPDATE_CTRL2, vec![0xD7]))
+        );
+        assert!(
+            !bus.events
+                .contains(&Event::Command(CMD_DISPLAY_UPDATE_CTRL2, vec![0xF7]))
+        );
+        assert_eq!(
+            plane_bytes(&bus.events, CMD_WRITE_RAM_RED),
+            vec![0xFF; FRAME_BYTES * 2]
+        );
         assert_eq!(display.baseline_state(), BaselineState::Synchronized);
         bus.events.clear();
         assert_eq!(
@@ -1027,8 +1039,7 @@ mod tests {
                 )
                 .unwrap();
             let expected = match step {
-                0 => RefreshMode::FullClean,
-                16 => RefreshMode::QuickClean,
+                0 | 16 => RefreshMode::QuickClean,
                 _ => RefreshMode::Differential,
             };
             assert_eq!(applied, expected, "Home move {step}");
