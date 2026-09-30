@@ -138,3 +138,23 @@ fn packed_render_specs_cannot_exceed_the_frame_or_require_fractional_strides() {
         96_000
     );
 }
+
+#[test]
+fn cache_slots_accept_only_eight_hex_digits_with_the_image_extension() {
+    for (name, expected) in [
+        ("00000000.IMG", Ok(CacheSlot(0))),
+        ("89ABCDEF.IMG", Ok(CacheSlot(0x89ab_cdef))),
+        ("FFFFFFFF.IMG", Ok(CacheSlot(u32::MAX))),
+        ("NOTES.IMG", Err(InvalidCacheName)),
+        ("GGGGGGGG.IMG", Err(InvalidCacheName)),
+        ("1234567.IMG", Err(InvalidCacheName)),
+        ("89ABCDEF.TXT", Err(InvalidCacheName)),
+        ("CLOCK.BIN", Err(InvalidCacheName)),
+    ] {
+        assert_eq!(
+            CacheSlot::try_from(embedded_sdmmc::ShortFileName::create_from_str(name).unwrap()),
+            expected,
+            "{name}"
+        );
+    }
+}

@@ -321,21 +321,17 @@ where
             directory
                 .iterate_dir(|entry| {
                     if entry.attributes.is_directory()
-                        || entry.name.extension() != b"IMG"
-                        || entry.name.base_name().len() != 8
                         || entry.name.base_name() == &name.as_bytes()[..8]
                     {
                         return ControlFlow::Continue(());
                     }
-                    let Ok(base) = core::str::from_utf8(entry.name.base_name()) else {
+                    let Ok(slot) = CacheSlot::try_from(entry.name) else {
                         return ControlFlow::Continue(());
                     };
-                    let Ok(hash) = u32::from_str_radix(base, 16) else {
-                        return ControlFlow::Continue(());
-                    };
+                    let CacheSlot(hash) = slot;
                     total += u64::from(entry.size);
                     count += 1;
-                    if protected.contains(&CacheSlot(hash)) {
+                    if protected.contains(&slot) {
                         return ControlFlow::Continue(());
                     }
                     if first.is_none_or(|(old, _)| hash < old) {
@@ -416,48 +412,60 @@ where
     T: TimeSource,
 {
     pub fn drop_image_cache(&self) -> Result<usize, AppDataError<D::Error>> {
-        const BATCH: usize = 32;
-        let mut removed = 0usize;
-        loop {
-            let deleted = self.storage.with_app_directory(|app| {
-                let cache = match app.open_dir(CACHE_DIRECTORY) {
-                    Ok(cache) => cache,
-                    Err(Error::NotFound) => return Ok(0),
-                    Err(error) => return Err(error),
-                };
-                let mut names = [embedded_sdmmc::ShortFileName::this_dir(); BATCH];
-                let mut found = 0usize;
-                let scanned = cache.iterate_dir(|entry| {
-                    if !entry.attributes.is_directory()
-                        && entry.name.extension() == b"IMG"
-                        && found < BATCH
-                    {
-                        names[found] = entry.name;
-                        found += 1;
+        self.storage.with_app_directory(|app| {
+            let cache = match app.open_dir(CACHE_DIRECTORY) {
+                Ok(cache) => cache,
+                Err(Error::NotFound) => return Ok(0),
+                Err(error) => return Err(error),
+            };
+            let mut removed = 0;
+            loop {
+                let mut batch = CacheBatch::new();
+                cache.iterate_dir(|entry| {
+                    if entry.attributes.is_directory() || CacheSlot::try_from(entry.name).is_err() {
+                        return ControlFlow::Continue(());
                     }
-                    ControlFlow::Continue(())
-                });
-                let mut deleted = 0usize;
-                if scanned.is_ok() {
-                    for name in names.iter().take(found) {
-                        match cache.delete_entry_in_dir(*name) {
-                            Ok(()) => deleted += 1,
-                            Err(Error::NotFound) => {}
-                            Err(error) => {
-                                cache.close()?;
-                                return Err(error);
-                            }
-                        }
-                    }
+                    batch.push(entry.name)
+                })?;
+                if batch.names().is_empty() {
+                    cache.close()?;
+                    return Ok(removed);
                 }
-                cache.close()?;
-                scanned?;
-                Ok(deleted)
-            })?;
-            removed += deleted;
-            if deleted == 0 {
-                return Ok(removed);
+                for name in batch.names() {
+                    cache.delete_entry_in_dir(*name)?;
+                    removed += 1;
+                }
             }
+        })
+    }
+}
+
+struct CacheBatch {
+    names: [embedded_sdmmc::ShortFileName; Self::CAPACITY],
+    len: usize,
+}
+
+impl CacheBatch {
+    const CAPACITY: usize = 32;
+
+    fn new() -> Self {
+        Self {
+            names: [embedded_sdmmc::ShortFileName::this_dir(); Self::CAPACITY],
+            len: 0,
         }
+    }
+
+    fn push(&mut self, name: embedded_sdmmc::ShortFileName) -> ControlFlow<()> {
+        self.names[self.len] = name;
+        self.len += 1;
+        if self.len == Self::CAPACITY {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    }
+
+    fn names(&self) -> &[embedded_sdmmc::ShortFileName] {
+        &self.names[..self.len]
     }
 }

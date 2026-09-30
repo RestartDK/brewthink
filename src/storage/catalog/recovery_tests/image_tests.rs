@@ -182,56 +182,154 @@ fn cache_write_failures_cannot_publish_partial_pixels_or_replace_the_epub() {
     }
 }
 
-#[test]
-fn dropping_the_image_cache_removes_only_recognized_cache_files() {
-    let card = Card::formatted();
-    let store = card.store();
-    store.ensure_layout().unwrap();
-    let write = |name: &str| {
+struct CacheFixture {
+    card: Card,
+}
+
+impl CacheFixture {
+    const ENTRIES: usize = 33;
+    const PRESERVED: [&str; 4] = ["CLOCK.BIN", "NOTES.TXT", "README", "NOTES.IMG"];
+
+    fn new() -> Self {
+        let card = Card::formatted();
+        let store = card.store();
+        store.ensure_layout().unwrap();
         store
-            .app_data()
-            .storage
             .with_app_directory(|app| {
                 let cache = app.open_dir(CACHE_DIRECTORY)?;
-                let file = cache.open_file_in_dir(name, Mode::ReadWriteCreateOrTruncate)?;
-                file.write(&[0x5A; 24])?;
-                file.close()?;
+                for name in (0..Self::ENTRIES)
+                    .map(|slot| std::format!("{slot:08X}.IMG"))
+                    .chain(Self::PRESERVED.map(std::string::String::from))
+                {
+                    let file =
+                        cache.open_file_in_dir(name.as_str(), Mode::ReadWriteCreateOrTruncate)?;
+                    file.write(&[0x5A; 24])?;
+                    file.close()?;
+                }
                 cache.close()
             })
             .unwrap();
-    };
-    for name in ["AABBCCDD.IMG", "11223344.IMG", "99AABBCC.IMG"] {
-        write(name);
+        Self { card }
     }
-    for name in ["CLOCK.BIN", "NOTES.TXT", "README"] {
-        write(name);
-    }
-    assert_eq!(store.app_data().drop_image_cache(), Ok(3));
-    let remaining = store
-        .app_data()
-        .storage
-        .with_app_directory(|app| {
-            let cache = app.open_dir(CACHE_DIRECTORY)?;
-            let mut names = std::vec::Vec::new();
-            cache.iterate_dir(|entry| {
-                if !entry.attributes.is_directory() {
-                    names.push(entry.name.base_name().to_vec());
+
+    fn assert_cleared(&self) {
+        self.card
+            .store()
+            .with_app_directory(|app| {
+                let cache = app.open_dir(CACHE_DIRECTORY)?;
+                let mut names = Vec::new();
+                cache.iterate_dir(|entry| {
+                    if !entry.attributes.is_directory() {
+                        names.push(entry.name);
+                    }
+                    ControlFlow::Continue(())
+                })?;
+                assert_eq!(names.len(), Self::PRESERVED.len());
+                for name in Self::PRESERVED {
+                    assert!(
+                        names.contains(
+                            &embedded_sdmmc::ShortFileName::create_from_str(name).unwrap()
+                        )
+                    );
+                    let file = cache.open_file_in_dir(name, Mode::ReadOnly)?;
+                    let mut bytes = [0; 24];
+                    assert_eq!(file.read(&mut bytes)?, bytes.len());
+                    assert_eq!(bytes, [0x5A; 24]);
+                    file.close()?;
                 }
-                core::ops::ControlFlow::Continue(())
-            })?;
-            cache.close()?;
-            Ok(names)
-        })
-        .unwrap();
-    let mut sorted: std::vec::Vec<&[u8]> = remaining.iter().map(|name| name.as_slice()).collect();
-    sorted.sort();
+                for slot in 0..Self::ENTRIES {
+                    assert!(
+                        !names.contains(
+                            &embedded_sdmmc::ShortFileName::create_from_str(&std::format!(
+                                "{slot:08X}.IMG"
+                            ))
+                            .unwrap()
+                        )
+                    );
+                }
+                cache.close()
+            })
+            .unwrap();
+        assert_eq!(self.card.store().app_data().drop_image_cache(), Ok(0));
+    }
+}
+
+#[test]
+fn dropping_the_image_cache_removes_only_recognized_cache_files() {
+    let fixture = CacheFixture::new();
     assert_eq!(
-        sorted,
-        std::vec![
-            b"CLOCK".as_slice(),
-            b"NOTES".as_slice(),
-            b"README".as_slice(),
-        ]
+        fixture.card.store().app_data().drop_image_cache(),
+        Ok(CacheFixture::ENTRIES)
     );
-    assert_eq!(store.app_data().drop_image_cache(), Ok(0));
+    fixture.assert_cleared();
+}
+
+#[test]
+fn cache_drop_scan_failure_does_not_delete_an_incomplete_batch() {
+    let fixture = CacheFixture::new();
+    let baseline = fixture.card.0.borrow().bytes.clone();
+    fixture.card.fail_read_containing(b"00000010IMG");
+    assert_eq!(
+        fixture.card.store().app_data().drop_image_cache(),
+        Err(AppDataError::Filesystem(Error::DeviceError(Fault::Read)))
+    );
+    assert_eq!(fixture.card.0.borrow().bytes, baseline);
+    fixture.card.0.borrow_mut().fail_read = None;
+    assert_eq!(
+        fixture.card.store().app_data().drop_image_cache(),
+        Ok(CacheFixture::ENTRIES)
+    );
+    fixture.assert_cleared();
+}
+
+#[test]
+fn cache_drop_write_failures_are_repairable_at_every_write_boundary() {
+    let fixture = CacheFixture::new();
+    let baseline = fixture.card.0.borrow().bytes.clone();
+    fixture.card.0.borrow_mut().writes = 0;
+    assert_eq!(
+        fixture.card.store().app_data().drop_image_cache(),
+        Ok(CacheFixture::ENTRIES)
+    );
+    let writes = fixture.card.0.borrow().writes;
+    assert!(writes > CacheFixture::ENTRIES);
+    for limit in 0..writes {
+        let fixture = CacheFixture {
+            card: Card(Rc::new(RefCell::new(MemoryCard {
+                bytes: baseline.clone(),
+                fail_read: None,
+                fail_write_after: Some(limit),
+                writes: 0,
+            }))),
+        };
+        let store = fixture.card.store();
+        assert_eq!(
+            store.app_data().drop_image_cache(),
+            Err(AppDataError::Filesystem(Error::DeviceError(Fault::Write))),
+            "write {limit}"
+        );
+        fixture.card.0.borrow_mut().fail_write_after = None;
+        let remaining = store
+            .with_app_directory(|app| {
+                let cache = app.open_dir(CACHE_DIRECTORY)?;
+                let mut remaining = 0;
+                cache.iterate_dir(|entry| {
+                    if !entry.attributes.is_directory()
+                        && crate::image_cache::CacheSlot::try_from(entry.name).is_ok()
+                    {
+                        remaining += 1;
+                    }
+                    ControlFlow::Continue(())
+                })?;
+                cache.close()?;
+                Ok(remaining)
+            })
+            .unwrap();
+        assert_eq!(
+            store.app_data().drop_image_cache(),
+            Ok(remaining),
+            "write {limit}"
+        );
+        fixture.assert_cleared();
+    }
 }
