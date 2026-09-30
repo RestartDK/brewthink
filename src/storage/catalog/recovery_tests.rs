@@ -1,5 +1,6 @@
 extern crate std;
 
+mod bookmark_tests;
 mod chapter_tests;
 mod image_tests;
 

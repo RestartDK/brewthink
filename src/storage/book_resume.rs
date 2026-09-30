@@ -1,5 +1,6 @@
 use crate::app::{
-    AppPreferences, BookId, BookOrigin, FileId, HomeItem, ImageId, ResumePoint, SettingsItem,
+    AppPreferences, BookId, BookOrigin, FileId, HomeItem, ImageId, ReaderPreferences, ResumePoint,
+    SettingsItem,
 };
 
 use super::catalog::{BookFile, BookFileName, MAX_BOOK_NAME_BYTES};
@@ -33,6 +34,18 @@ impl From<&BookFile> for BookIdentity {
 }
 
 impl BookIdentity {
+    pub const fn new(name: BookFileName, size: u32) -> Self {
+        Self { name, size }
+    }
+
+    pub const fn file_name(self) -> BookFileName {
+        self.name
+    }
+
+    pub const fn size(self) -> u32 {
+        self.size
+    }
+
     pub fn resolve(self, books: &[Option<BookFile>]) -> Result<BookId, ResumeError> {
         let mut matched = None;
         for (index, file) in books.iter().enumerate() {
@@ -55,6 +68,51 @@ impl BookIdentity {
         let identity = Self::from(file);
         identity.resolve(books)?;
         Ok(identity)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BookProgress {
+    spine_index: usize,
+    page_index: usize,
+    page_count: usize,
+    preferences: ReaderPreferences,
+}
+
+impl BookProgress {
+    pub fn new(
+        spine_index: usize,
+        page_index: usize,
+        page_count: usize,
+        preferences: ReaderPreferences,
+    ) -> Option<Self> {
+        (page_count > 0
+            && page_index < page_count
+            && spine_index <= u32::MAX as usize
+            && page_index <= u32::MAX as usize
+            && page_count <= u32::MAX as usize)
+            .then_some(Self {
+                spine_index,
+                page_index,
+                page_count,
+                preferences,
+            })
+    }
+
+    pub const fn spine_index(self) -> usize {
+        self.spine_index
+    }
+
+    pub const fn page_index(self) -> usize {
+        self.page_index
+    }
+
+    pub const fn page_count(self) -> usize {
+        self.page_count
+    }
+
+    pub const fn preferences(self) -> ReaderPreferences {
+        self.preferences
     }
 }
 
