@@ -1321,6 +1321,12 @@ fn run_effect(
     loop {
         effect = match effect {
             AppEffect::None => return Ok(None),
+            AppEffect::LoadProgress { book, origin } => {
+                let stored = library
+                    .file(book)
+                    .and_then(|file| store.app_data().read_book_progress(&file).ok().flatten());
+                app.progress_loaded(book, origin, stored)
+            }
             AppEffect::LoadChapter {
                 book,
                 spine_index,
@@ -1455,6 +1461,7 @@ fn run_effect(
                     };
                     render_page(app, location, library, chapter, store, workspaces)?;
                     refresh(store, panel, workspaces.frame_codec.frame())?;
+                    persist_progress(app, library, store);
                     esp_println::println!(
                         "BREWCTL/1 LOG stage=render-reader state=done book={} spine={} page={}",
                         location.book().index(),
@@ -1492,8 +1499,30 @@ fn run_effect(
                         .map_err(|_| "reader application state rejected sleep frame")?
                 }
             },
-            AppEffect::EnterDeepSleep { resume } => return Ok(Some(resume)),
+            AppEffect::EnterDeepSleep { resume } => {
+                persist_progress(app, library, store);
+                return Ok(Some(resume));
+            }
         };
+    }
+}
+
+fn persist_progress(app: &App, library: &DeviceLibrary, store: &DeviceStore) {
+    let Some((book, progress)) = app.book_progress() else {
+        return;
+    };
+    let Some(file) = library.file(book) else {
+        return;
+    };
+    let data = store.app_data();
+    match data.read_book_progress(&file) {
+        Ok(Some(stored)) if stored == progress => return,
+        Ok(_) => {}
+        Err(error) => info!("progress read failed: {}", defmt::Debug2Format(&error)),
+    }
+    if let Err(error) = data.write_book_progress(&file, progress) {
+        info!("progress write failed: {}", defmt::Debug2Format(&error));
+        esp_println::println!("BREWCTL/1 ERROR command=progress reason=storage");
     }
 }
 

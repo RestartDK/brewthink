@@ -1,5 +1,6 @@
 use super::*;
-use crate::storage::book_resume::{BookIdentity, BookProgress};
+use crate::app::BookProgress;
+use crate::storage::book_resume::BookIdentity;
 
 const BOOKMARK_MAGIC: u32 = 0x4254_4231;
 const BOOKMARK_BYTES: usize = 4 + 4 + MAX_BOOK_NAME_BYTES + 6 * 4;

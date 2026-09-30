@@ -5,6 +5,8 @@ pub use book_position::BookPosition;
 #[cfg(test)]
 mod cover_tests;
 #[cfg(test)]
+mod progress_tests;
+#[cfg(test)]
 mod reader_drawer_tests;
 
 const BOOKS_PER_SHELF_PAGE: usize = 4;
@@ -997,6 +999,10 @@ pub enum AppEffect {
         spine_index: usize,
         target: PageTarget,
     },
+    LoadProgress {
+        book: BookId,
+        origin: BookOrigin,
+    },
     EnterDeepSleep {
         resume: ResumePoint,
     },
@@ -1021,12 +1027,48 @@ pub struct PendingChapter {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ReadingCheckpoint {
-    book: BookId,
+pub struct BookProgress {
     spine_index: usize,
     page_index: usize,
     page_count: usize,
     preferences: ReaderPreferences,
+}
+
+impl BookProgress {
+    pub fn new(
+        spine_index: usize,
+        page_index: usize,
+        page_count: usize,
+        preferences: ReaderPreferences,
+    ) -> Option<Self> {
+        (page_count > 0
+            && page_index < page_count
+            && spine_index <= u32::MAX as usize
+            && page_index <= u32::MAX as usize
+            && page_count <= u32::MAX as usize)
+            .then_some(Self {
+                spine_index,
+                page_index,
+                page_count,
+                preferences,
+            })
+    }
+
+    pub const fn spine_index(self) -> usize {
+        self.spine_index
+    }
+
+    pub const fn page_index(self) -> usize {
+        self.page_index
+    }
+
+    pub const fn page_count(self) -> usize {
+        self.page_count
+    }
+
+    pub const fn preferences(self) -> ReaderPreferences {
+        self.preferences
+    }
 }
 
 fn battery_refresh_needed(previous: BatteryStatus, current: BatteryStatus) -> bool {
@@ -1079,7 +1121,7 @@ pub struct App {
     image_count: usize,
     selected_sleep_image: Option<ImageId>,
     battery: BatteryDisplayState,
-    reading_checkpoint: Option<ReadingCheckpoint>,
+    reading_checkpoint: Option<(BookId, BookProgress)>,
 }
 
 impl App {
@@ -1196,13 +1238,15 @@ impl App {
             } => {
                 app.validate_book(book)?;
                 app.select_book(book);
-                app.reading_checkpoint = Some(ReadingCheckpoint {
+                app.reading_checkpoint = Some((
                     book,
-                    spine_index,
-                    page_index,
-                    page_count: page_index + 1,
-                    preferences: preferences.reader(),
-                });
+                    BookProgress {
+                        spine_index,
+                        page_index,
+                        page_count: page_index + 1,
+                        preferences: preferences.reader(),
+                    },
+                ));
                 app.request_chapter(book, spine_index, PageTarget::Index(page_index), origin)
             }
             ResumePoint::Image { image } => {
@@ -1464,13 +1508,15 @@ impl App {
             origin: pending.origin,
         };
         self.view = AppView::Reader(session);
-        self.reading_checkpoint = Some(ReadingCheckpoint {
-            book: location.book,
-            spine_index: location.spine_index,
-            page_index: location.page_index,
-            page_count: location.page_count,
-            preferences: self.preferences.reader(),
-        });
+        self.reading_checkpoint = Some((
+            location.book,
+            BookProgress {
+                spine_index: location.spine_index,
+                page_index: location.page_index,
+                page_count: location.page_count,
+                preferences: self.preferences.reader(),
+            },
+        ));
         Ok(AppEffect::Render)
     }
 
@@ -1559,29 +1605,69 @@ impl App {
         self.select_book(book);
         match self
             .reading_checkpoint
-            .filter(|checkpoint| checkpoint.book == book)
+            .filter(|(checkpoint_book, _)| *checkpoint_book == book)
         {
-            Some(checkpoint) if checkpoint.preferences == self.preferences.reader() => self
+            Some((_, progress)) if progress.preferences == self.preferences.reader() => self
                 .request_chapter(
                     book,
-                    checkpoint.spine_index,
-                    PageTarget::Index(checkpoint.page_index),
+                    progress.spine_index,
+                    PageTarget::Index(progress.page_index),
                     origin,
                 ),
-            Some(checkpoint) => self.request_chapter(
+            Some((_, progress)) => self.request_chapter(
                 book,
-                checkpoint.spine_index,
+                progress.spine_index,
                 PageTarget::Progress {
-                    page_index: checkpoint.page_index,
-                    page_count: checkpoint.page_count,
+                    page_index: progress.page_index,
+                    page_count: progress.page_count,
                 },
                 origin,
             ),
+            None => AppEffect::LoadProgress { book, origin },
+        }
+    }
+
+    pub fn progress_loaded(
+        &mut self,
+        book: BookId,
+        origin: BookOrigin,
+        progress: Option<BookProgress>,
+    ) -> AppEffect {
+        match progress {
+            Some(progress) => {
+                self.reading_checkpoint = Some((book, progress));
+                self.open_book(book, origin)
+            }
             None => {
+                self.select_book(book);
                 self.view = AppView::BookCover { book, origin };
                 AppEffect::Render
             }
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn input_without_stored_progress(&mut self, input: AppInput) -> AppEffect {
+        let effect = self.input(input);
+        match effect {
+            AppEffect::LoadProgress { book, origin } => self.progress_loaded(book, origin, None),
+            effect => effect,
+        }
+    }
+
+    pub fn book_progress(&self) -> Option<(BookId, BookProgress)> {
+        let location = match self.view {
+            AppView::Reader(session) => session.location,
+            AppView::ReaderDrawer(drawer) => drawer.session().location,
+            _ => return None,
+        };
+        let progress = BookProgress::new(
+            location.spine_index,
+            location.page_index,
+            location.page_count,
+            self.preferences.reader(),
+        )?;
+        Some((location.book, progress))
     }
 
     fn apply_reader_drawer(&mut self, drawer: ReaderDrawer) -> AppEffect {
@@ -1665,13 +1751,15 @@ impl App {
 
     fn set_reading_session(&mut self, location: ReadingLocation, origin: BookOrigin) -> AppEffect {
         self.view = AppView::Reader(ReadingSession { location, origin });
-        self.reading_checkpoint = Some(ReadingCheckpoint {
-            book: location.book,
-            spine_index: location.spine_index,
-            page_index: location.page_index,
-            page_count: location.page_count,
-            preferences: self.preferences.reader(),
-        });
+        self.reading_checkpoint = Some((
+            location.book,
+            BookProgress {
+                spine_index: location.spine_index,
+                page_index: location.page_index,
+                page_count: location.page_count,
+                preferences: self.preferences.reader(),
+            },
+        ));
         AppEffect::Render
     }
 
@@ -1808,7 +1896,10 @@ mod tests {
 
     fn open_first_book(app: &mut App, pages: usize) {
         open_books(app);
-        assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
+        assert_eq!(
+            app.input_without_stored_progress(AppInput::Confirm),
+            AppEffect::Render
+        );
         assert!(matches!(app.view(), AppView::BookCover { .. }));
         assert!(matches!(
             app.input(AppInput::Confirm),
@@ -1947,7 +2038,10 @@ mod tests {
         app.input(AppInput::Move(Direction::Down));
         app.input(AppInput::Confirm);
         app.input(AppInput::Move(Direction::Down));
-        assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
+        assert_eq!(
+            app.input_without_stored_progress(AppInput::Confirm),
+            AppEffect::Render
+        );
         assert!(matches!(
             app.input(AppInput::Confirm),
             AppEffect::LoadChapter { book, .. } if book.index() == 1
@@ -2151,7 +2245,7 @@ mod tests {
     fn rejected_chapter_metadata_preserves_the_loading_request() {
         let mut app = App::new(1);
         open_books(&mut app);
-        app.input(AppInput::Confirm);
+        app.input_without_stored_progress(AppInput::Confirm);
         app.input(AppInput::Confirm);
         let loading = app.view();
         assert!(matches!(loading, AppView::Loading(_)));
@@ -2189,7 +2283,7 @@ mod tests {
                 app.input(AppInput::Confirm);
                 let parent = app.view();
                 let resume = app.resume_point();
-                app.input(AppInput::Confirm);
+                app.input_without_stored_progress(AppInput::Confirm);
                 app.input(AppInput::Confirm);
                 assert!(matches!(app.view(), AppView::Loading(_)));
                 assert_eq!(app.resume_point(), resume);

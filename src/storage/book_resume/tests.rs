@@ -233,7 +233,10 @@ fn books_and_files_selections_use_book_identity_too() {
         )
         .unwrap();
         assert_eq!(effect, AppEffect::Render);
-        assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
+        assert_eq!(
+            app.input_without_stored_progress(AppInput::Confirm),
+            AppEffect::Render
+        );
         assert!(matches!(app.view(), AppView::BookCover { book, .. } if book == BookId::new(1)));
         assert_eq!(
             app.input(AppInput::Confirm),

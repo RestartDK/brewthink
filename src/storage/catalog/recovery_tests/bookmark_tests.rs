@@ -1,5 +1,6 @@
 use super::*;
-use crate::storage::book_resume::{BookIdentity, BookProgress};
+use crate::app::BookProgress;
+use crate::storage::book_resume::BookIdentity;
 
 fn book(name: &str, size: u32) -> BookFile {
     BookFile::new(BookFileName::try_from(name).unwrap(), size)

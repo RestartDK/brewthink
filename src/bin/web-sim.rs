@@ -1,7 +1,7 @@
 use brewthink::{
     app::{
-        App, AppEffect, AppInput, AppPreferences, AppView, Direction, FilesState, ImageId,
-        ReaderPreferences, ReadingLocation, ResumePoint, SettingsItem, SleepScreenSource,
+        App, AppEffect, AppInput, AppPreferences, AppView, BookProgress, Direction, FilesState,
+        ImageId, ReaderPreferences, ReadingLocation, ResumePoint, SettingsItem, SleepScreenSource,
     },
     cover::{SHELF_COVER_BYTES, downsample_cover, shelf_bitmap},
     files::{FileItem, FileKind},
@@ -138,6 +138,7 @@ impl RenderedFrame {
 pub struct WebLibrary {
     books: Vec<Book>,
     images: Vec<OwnedImage>,
+    progress: Vec<Option<BookProgress>>,
     app: App,
 }
 
@@ -159,7 +160,13 @@ impl WebLibrary {
             .map(ImageId::new);
         let mut app = App::with_catalog(books.len(), images.len(), selected_image, preferences);
         app.set_battery(BatteryStatus::from_percent(82, UsbState::Disconnected));
-        Ok(Self { books, images, app })
+        let progress = vec![None; books.len()];
+        Ok(Self {
+            books,
+            images,
+            progress,
+            app,
+        })
     }
 
     #[wasm_bindgen(js_name = fromEpub)]
@@ -185,7 +192,13 @@ impl WebLibrary {
             .map(ImageId::new);
         let mut app = App::with_catalog(books.len(), images.len(), selected_image, preferences);
         app.set_battery(BatteryStatus::from_percent(82, UsbState::Disconnected));
-        Ok(Self { books, images, app })
+        let progress = vec![None; books.len()];
+        Ok(Self {
+            books,
+            images,
+            progress,
+            app,
+        })
     }
 
     #[wasm_bindgen(getter)]
@@ -332,7 +345,17 @@ impl WebLibrary {
         let effect = self.app.input(input);
         let changed = effect != AppEffect::None;
         self.resolve_effect(effect);
+        self.remember_progress();
         changed
+    }
+
+    fn remember_progress(&mut self) {
+        let Some((book, progress)) = self.app.book_progress() else {
+            return;
+        };
+        if let Some(slot) = self.progress.get_mut(book.index()) {
+            *slot = Some(progress);
+        }
     }
 
     fn resolve_effect(&mut self, mut effect: AppEffect) -> bool {
@@ -360,6 +383,10 @@ impl WebLibrary {
                         Ok(next) => next,
                         Err(_) => return false,
                     }
+                }
+                AppEffect::LoadProgress { book, origin } => {
+                    let stored = self.progress.get(book.index()).copied().flatten();
+                    self.app.progress_loaded(book, origin, stored)
                 }
                 AppEffect::Render if matches!(self.app.view(), AppView::Sleeping { .. }) => {
                     match self.app.sleep_frame_ready() {
