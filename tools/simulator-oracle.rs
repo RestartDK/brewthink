@@ -62,15 +62,15 @@ struct Oracle<'publication, 'bytes> {
     titles: [FixedString<CHAPTER_TITLE_BYTES>; MAX_DEVICE_SPINE_ITEMS],
     cover: Option<Vec<u8>>,
     images: Images<'bytes>,
-    progress: Option<BookProgress>,
+    progress: [Option<BookProgress>; 4],
 }
 
 impl Oracle<'_, '_> {
     fn input(&mut self, app: &mut App, input: AppInput) -> Result<()> {
         let effect = app.input(input);
         self.settle(app, effect)?;
-        if let Some((_, progress)) = app.book_progress() {
-            self.progress = Some(progress);
+        if let Some((book, progress)) = app.book_progress() {
+            self.progress[book.index()] = Some(progress);
         }
         Ok(())
     }
@@ -90,7 +90,7 @@ impl Oracle<'_, '_> {
                         .map_err(|error| format!("{error:?}"))?
                 }
                 AppEffect::LoadProgress { book, origin } => {
-                    let stored = self.progress;
+                    let stored = self.progress[book.index()];
                     app.progress_loaded(book, origin, stored)
                 }
                 AppEffect::Render
@@ -109,7 +109,7 @@ impl Oracle<'_, '_> {
     }
 
     fn start(&mut self, preferences: ReaderPreferences) -> Result<App> {
-        self.progress = None;
+        self.progress = [None; 4];
         let mut app = App::with_catalog(
             4,
             4,
@@ -343,7 +343,7 @@ fn main() -> Result<()> {
         titles,
         cover,
         images,
-        progress: None,
+        progress: [None; 4],
     };
     match mode {
         OutputMode::DrawerTrace => return drawer_trace(&mut oracle, output),

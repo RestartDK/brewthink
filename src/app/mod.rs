@@ -709,6 +709,26 @@ pub enum PageTarget {
     },
 }
 
+impl PageTarget {
+    fn resolve(self, new_count: usize) -> usize {
+        match self {
+            Self::First => 0,
+            Self::Last => new_count - 1,
+            Self::Index(index) => index.min(new_count - 1),
+            Self::Progress {
+                page_index,
+                page_count: old_count,
+            } => {
+                if old_count <= 1 || new_count <= 1 {
+                    return 0;
+                }
+                ((page_index.min(old_count - 1) as u128 * (new_count - 1) as u128)
+                    / (old_count - 1) as u128) as usize
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReadingLocation {
     book: BookId,
@@ -1020,10 +1040,23 @@ pub enum AppStateError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PendingChapter {
+    source: ChapterLoadSource,
     book: BookId,
     spine_index: usize,
     target: PageTarget,
     origin: BookOrigin,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ChapterLoadSource {
+    Navigation,
+    Checkpoint,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReadingCheckpoint {
+    book: BookId,
+    progress: BookProgress,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1121,7 +1154,7 @@ pub struct App {
     image_count: usize,
     selected_sleep_image: Option<ImageId>,
     battery: BatteryDisplayState,
-    reading_checkpoint: Option<(BookId, BookProgress)>,
+    reading_checkpoint: Option<ReadingCheckpoint>,
 }
 
 impl App {
@@ -1238,16 +1271,22 @@ impl App {
             } => {
                 app.validate_book(book)?;
                 app.select_book(book);
-                app.reading_checkpoint = Some((
+                app.reading_checkpoint = Some(ReadingCheckpoint {
                     book,
-                    BookProgress {
+                    progress: BookProgress {
                         spine_index,
                         page_index,
                         page_count: page_index + 1,
                         preferences: preferences.reader(),
                     },
-                ));
-                app.request_chapter(book, spine_index, PageTarget::Index(page_index), origin)
+                });
+                app.request_chapter(
+                    book,
+                    spine_index,
+                    PageTarget::Index(page_index),
+                    origin,
+                    ChapterLoadSource::Checkpoint,
+                )
             }
             ResumePoint::Image { image } => {
                 app.validate_image(image)?;
@@ -1428,7 +1467,13 @@ impl App {
             (
                 AppView::BookCover { book, origin },
                 AppInput::Confirm | AppInput::Move(Direction::Right | Direction::Down),
-            ) => self.request_chapter(book, 0, PageTarget::First, origin),
+            ) => self.request_chapter(
+                book,
+                0,
+                PageTarget::First,
+                origin,
+                ChapterLoadSource::Navigation,
+            ),
             (
                 AppView::BookCover { origin, .. },
                 AppInput::Back | AppInput::Move(Direction::Left | Direction::Up),
@@ -1482,20 +1527,18 @@ impl App {
             return Err(AppStateError::UnexpectedChapter);
         };
         if spine_count == 0 || pending.spine_index >= spine_count {
+            if pending.source == ChapterLoadSource::Checkpoint {
+                return self.chapter_failed();
+            }
             return Err(AppStateError::SpineOutOfBounds);
         }
         if page_count == 0 {
+            if pending.source == ChapterLoadSource::Checkpoint {
+                return self.chapter_failed();
+            }
             return Err(AppStateError::EmptyChapter);
         }
-        let page_index = match pending.target {
-            PageTarget::First => 0,
-            PageTarget::Last => page_count - 1,
-            PageTarget::Index(index) => index.min(page_count - 1),
-            PageTarget::Progress {
-                page_index: previous_index,
-                page_count: previous_count,
-            } => remap_page(previous_index, previous_count, page_count),
-        };
+        let page_index = pending.target.resolve(page_count);
         let location = ReadingLocation {
             book: pending.book,
             spine_index: pending.spine_index,
@@ -1508,15 +1551,15 @@ impl App {
             origin: pending.origin,
         };
         self.view = AppView::Reader(session);
-        self.reading_checkpoint = Some((
-            location.book,
-            BookProgress {
+        self.reading_checkpoint = Some(ReadingCheckpoint {
+            book: location.book,
+            progress: BookProgress {
                 spine_index: location.spine_index,
                 page_index: location.page_index,
                 page_count: location.page_count,
                 preferences: self.preferences.reader(),
             },
-        ));
+        });
         Ok(AppEffect::Render)
     }
 
@@ -1524,9 +1567,18 @@ impl App {
         let AppView::Loading(pending) = self.view else {
             return Err(AppStateError::UnexpectedChapter);
         };
-        self.view = AppView::Error {
-            book: pending.book,
-            origin: pending.origin,
+        self.view = match pending.source {
+            ChapterLoadSource::Checkpoint => {
+                self.reading_checkpoint = None;
+                AppView::BookCover {
+                    book: pending.book,
+                    origin: pending.origin,
+                }
+            }
+            ChapterLoadSource::Navigation => AppView::Error {
+                book: pending.book,
+                origin: pending.origin,
+            },
         };
         Ok(AppEffect::Render)
     }
@@ -1575,7 +1627,13 @@ impl App {
                 spine_index,
                 page_index,
                 origin,
-            } => self.request_chapter(book, spine_index, PageTarget::Index(page_index), origin),
+            } => self.request_chapter(
+                book,
+                spine_index,
+                PageTarget::Index(page_index),
+                origin,
+                ChapterLoadSource::Checkpoint,
+            ),
             ResumePoint::Image { image } => {
                 self.view = AppView::Image(image);
                 AppEffect::Render
@@ -1605,16 +1663,20 @@ impl App {
         self.select_book(book);
         match self
             .reading_checkpoint
-            .filter(|(checkpoint_book, _)| *checkpoint_book == book)
+            .filter(|checkpoint| checkpoint.book == book)
         {
-            Some((_, progress)) if progress.preferences == self.preferences.reader() => self
-                .request_chapter(
+            Some(ReadingCheckpoint { progress, .. })
+                if progress.preferences == self.preferences.reader() =>
+            {
+                self.request_chapter(
                     book,
                     progress.spine_index,
                     PageTarget::Index(progress.page_index),
                     origin,
-                ),
-            Some((_, progress)) => self.request_chapter(
+                    ChapterLoadSource::Checkpoint,
+                )
+            }
+            Some(ReadingCheckpoint { progress, .. }) => self.request_chapter(
                 book,
                 progress.spine_index,
                 PageTarget::Progress {
@@ -1622,6 +1684,7 @@ impl App {
                     page_count: progress.page_count,
                 },
                 origin,
+                ChapterLoadSource::Checkpoint,
             ),
             None => AppEffect::LoadProgress { book, origin },
         }
@@ -1635,7 +1698,7 @@ impl App {
     ) -> AppEffect {
         match progress {
             Some(progress) => {
-                self.reading_checkpoint = Some((book, progress));
+                self.reading_checkpoint = Some(ReadingCheckpoint { book, progress });
                 self.open_book(book, origin)
             }
             None => {
@@ -1653,6 +1716,11 @@ impl App {
             AppEffect::LoadProgress { book, origin } => self.progress_loaded(book, origin, None),
             effect => effect,
         }
+    }
+
+    pub fn reading_checkpoint(&self) -> Option<(BookId, BookProgress)> {
+        self.reading_checkpoint
+            .map(|checkpoint| (checkpoint.book, checkpoint.progress))
     }
 
     pub fn book_progress(&self) -> Option<(BookId, BookProgress)> {
@@ -1680,13 +1748,20 @@ impl App {
                 drawer.chapter,
                 PageTarget::First,
                 drawer.session.origin,
+                ChapterLoadSource::Navigation,
             );
         }
         if drawer.selected == ReaderControl::Position
             && drawer.position != BookPosition::from_location(location)
         {
             let (spine_index, target) = drawer.position.target(location);
-            return self.request_chapter(location.book, spine_index, target, drawer.session.origin);
+            return self.request_chapter(
+                location.book,
+                spine_index,
+                target,
+                drawer.session.origin,
+                ChapterLoadSource::Navigation,
+            );
         }
         let page_index = location.page_index;
         if typography_changed {
@@ -1698,6 +1773,7 @@ impl App {
                     page_count: location.page_count,
                 },
                 drawer.session.origin,
+                ChapterLoadSource::Navigation,
             );
         }
         self.set_reading_session(
@@ -1723,6 +1799,7 @@ impl App {
                 location.spine_index + 1,
                 PageTarget::First,
                 session.origin,
+                ChapterLoadSource::Navigation,
             )
         } else {
             AppEffect::None
@@ -1743,6 +1820,7 @@ impl App {
                 location.spine_index - 1,
                 PageTarget::Last,
                 session.origin,
+                ChapterLoadSource::Navigation,
             )
         } else {
             AppEffect::None
@@ -1751,15 +1829,15 @@ impl App {
 
     fn set_reading_session(&mut self, location: ReadingLocation, origin: BookOrigin) -> AppEffect {
         self.view = AppView::Reader(ReadingSession { location, origin });
-        self.reading_checkpoint = Some((
-            location.book,
-            BookProgress {
+        self.reading_checkpoint = Some(ReadingCheckpoint {
+            book: location.book,
+            progress: BookProgress {
                 spine_index: location.spine_index,
                 page_index: location.page_index,
                 page_count: location.page_count,
                 preferences: self.preferences.reader(),
             },
-        ));
+        });
         AppEffect::Render
     }
 
@@ -1769,8 +1847,10 @@ impl App {
         spine_index: usize,
         target: PageTarget,
         origin: BookOrigin,
+        source: ChapterLoadSource,
     ) -> AppEffect {
         self.view = AppView::Loading(PendingChapter {
+            source,
             book,
             spine_index,
             target,
@@ -1868,13 +1948,6 @@ impl App {
             Err(AppStateError::ImageOutOfBounds)
         }
     }
-}
-
-fn remap_page(page_index: usize, old_count: usize, new_count: usize) -> usize {
-    if old_count <= 1 || new_count <= 1 {
-        return 0;
-    }
-    page_index.min(old_count - 1) * (new_count - 1) / (old_count - 1)
 }
 
 #[cfg(test)]
