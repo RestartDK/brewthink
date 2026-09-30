@@ -563,6 +563,8 @@ pub enum AppDataError<E: core::error::Error> {
     ChecksumMismatch,
     IncompleteWrite,
     TargetExists,
+    Bookmark(BookmarkDecodeError),
+    BookmarkSlotsExhausted,
     Image(crate::image_decoder::ImageDecodeError),
     Chapter(crate::bounded_layout::LayoutError),
 }
@@ -577,6 +579,8 @@ impl<E: core::error::Error> fmt::Display for AppDataError<E> {
             Self::InvalidMetadata => f.write_str("invalid application metadata"),
             Self::ChecksumMismatch => f.write_str("file checksum mismatch"),
             Self::IncompleteWrite => f.write_str("incomplete file write"),
+            Self::Bookmark(error) => write!(f, "{error}"),
+            Self::BookmarkSlotsExhausted => f.write_str("bookmark slots exhausted"),
             Self::TargetExists => f.write_str("a different target file already exists"),
             Self::Image(error) => write!(f, "image: {error:?}"),
             Self::Chapter(error) => write!(f, "chapter: {error}"),
@@ -589,12 +593,14 @@ impl<E: core::error::Error + 'static> core::error::Error for AppDataError<E> {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::Filesystem(error) => Some(error),
+            Self::Bookmark(error) => Some(error),
             Self::DirectoryMissing
             | Self::FileTooLarge
             | Self::InvalidMetadata
             | Self::ChecksumMismatch
             | Self::IncompleteWrite
             | Self::TargetExists
+            | Self::BookmarkSlotsExhausted
             | Self::Image(_)
             | Self::Chapter(_) => None,
         }
@@ -1371,6 +1377,8 @@ impl fmt::Write for ShortName {
 
 #[cfg(feature = "device-reader")]
 mod bookmarks;
+#[cfg(feature = "device-reader")]
+pub use bookmarks::BookmarkDecodeError;
 #[cfg(feature = "device-reader")]
 mod chapters;
 #[cfg(feature = "device-reader")]
