@@ -408,3 +408,56 @@ where
         Ok(image)
     }
 }
+
+impl<D, T, const DIRS: usize, const FILES: usize, const VOLUMES: usize>
+    AppDataStore<'_, D, T, DIRS, FILES, VOLUMES>
+where
+    D: BlockDevice,
+    T: TimeSource,
+{
+    pub fn drop_image_cache(&self) -> Result<usize, AppDataError<D::Error>> {
+        const BATCH: usize = 32;
+        let mut removed = 0usize;
+        loop {
+            let deleted = self.storage.with_app_directory(|app| {
+                let cache = match app.open_dir(CACHE_DIRECTORY) {
+                    Ok(cache) => cache,
+                    Err(Error::NotFound) => return Ok(0),
+                    Err(error) => return Err(error),
+                };
+                let mut names = [embedded_sdmmc::ShortFileName::this_dir(); BATCH];
+                let mut found = 0usize;
+                let scanned = cache.iterate_dir(|entry| {
+                    if !entry.attributes.is_directory()
+                        && entry.name.extension() == b"IMG"
+                        && found < BATCH
+                    {
+                        names[found] = entry.name;
+                        found += 1;
+                    }
+                    ControlFlow::Continue(())
+                });
+                let mut deleted = 0usize;
+                if scanned.is_ok() {
+                    for name in names.iter().take(found) {
+                        match cache.delete_entry_in_dir(*name) {
+                            Ok(()) => deleted += 1,
+                            Err(Error::NotFound) => {}
+                            Err(error) => {
+                                cache.close()?;
+                                return Err(error);
+                            }
+                        }
+                    }
+                }
+                cache.close()?;
+                scanned?;
+                Ok(deleted)
+            })?;
+            removed += deleted;
+            if deleted == 0 {
+                return Ok(removed);
+            }
+        }
+    }
+}

@@ -931,6 +931,20 @@ impl<'a> UsbControlRuntime<'a> {
                     write_control_screen(frame);
                     esp_println::println!("BREWCTL/1 DONE command=screen status=ok");
                 }
+                Ok(ControlCommand::DropImageCache) => match store.app_data().drop_image_cache() {
+                    Ok(removed) => {
+                        esp_println::println!("BREWCTL/1 DROPPED images={removed}");
+                        esp_println::println!("BREWCTL/1 DONE command=drop-image-cache status=ok");
+                    }
+                    Err(_) => {
+                        esp_println::println!(
+                            "BREWCTL/1 ERROR command=drop-image-cache reason=storage"
+                        );
+                        esp_println::println!(
+                            "BREWCTL/1 DONE command=drop-image-cache status=error"
+                        );
+                    }
+                },
                 Ok(ControlCommand::Verify(request)) => {
                     match store.app_data().verify_upload(request, self.upload_buffer) {
                         Ok(()) => {
