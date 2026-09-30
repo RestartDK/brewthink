@@ -34,7 +34,17 @@ the change. Text turns after the quick clean stayed differential, so the
 monochrome baseline is valid. Text → image grayscale rendering measured
 1,761 ms in both builds.
 
-These are protocol timings with CLI overhead, not video. Only the physical
-panel can show ghosting or contrast, so optical acceptance stays with the
-user. A quick clean is still a visible panel flash. Sleep, wake, battery and
-long-idle behavior were not re-measured after this change.
+These are protocol timings with CLI overhead, not video. A quick clean is
+still a visible panel flash. Sleep, wake, battery and long-idle behavior were
+not re-measured after this change.
+
+## Panel verdict
+
+On 2026-09-30 the reader was driven to Coffee chapter 19 and cycled between a
+page with an illustration and the text page beside it three times, ending on
+the text page. The reader's verdict was the faint case: an afterimage where the
+picture had been that is not legible and clears within a page turn or two.
+
+That keeps the quick clean. Making the afterimage stronger or longer-lived
+would justify a full clean on the turn that leaves an image page, which costs
+4,170 ms instead of 2,088 ms on exactly those turns.
