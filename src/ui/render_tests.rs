@@ -267,7 +267,10 @@ fn populated_shelves_match_snapshots() {
 fn reader_drawer_matches_snapshot() {
     let mut app = App::new(1);
     assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
-    assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
+    assert_eq!(
+        app.input_without_stored_progress(AppInput::Confirm),
+        AppEffect::Render
+    );
     assert!(matches!(
         app.input(AppInput::Confirm),
         AppEffect::LoadChapter { .. }

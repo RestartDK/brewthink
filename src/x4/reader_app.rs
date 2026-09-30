@@ -25,8 +25,9 @@ use self::retained_resume::RtcResume;
 
 use crate::{
     app::{
-        App, AppEffect, AppInput, AppPreferences, AppView, BookId, Direction, HomeItem, ImageId,
-        ReadingLocation, ResumePoint, SettingsItem, SleepScreenMode, SleepScreenSource,
+        App, AppEffect, AppInput, AppPreferences, AppView, BookId, BookProgress, Direction,
+        HomeItem, ImageId, ReadingLocation, ResumePoint, SettingsItem, SleepScreenMode,
+        SleepScreenSource,
     },
     bounded_layout::{BoundedPage, MAX_PAGE_LINES},
     bounded_xml::FixedString,
@@ -1321,6 +1322,16 @@ fn run_effect(
     loop {
         effect = match effect {
             AppEffect::None => return Ok(None),
+            AppEffect::LoadProgress { book, origin } => {
+                let stored = match (DeviceProgress { library, store }).load(book) {
+                    Ok(stored) => stored,
+                    Err(error) => {
+                        error.report("read");
+                        None
+                    }
+                };
+                app.progress_loaded(book, origin, stored)
+            }
             AppEffect::LoadChapter {
                 book,
                 spine_index,
@@ -1455,6 +1466,11 @@ fn run_effect(
                     };
                     render_page(app, location, library, chapter, store, workspaces)?;
                     refresh(store, panel, workspaces.frame_codec.frame())?;
+                    if let Err(error) =
+                        (DeviceProgress { library, store }).save(app.reading_checkpoint())
+                    {
+                        error.report("write");
+                    }
                     esp_println::println!(
                         "BREWCTL/1 LOG stage=render-reader state=done book={} spine={} page={}",
                         location.book().index(),
@@ -1492,8 +1508,76 @@ fn run_effect(
                         .map_err(|_| "reader application state rejected sleep frame")?
                 }
             },
-            AppEffect::EnterDeepSleep { resume } => return Ok(Some(resume)),
+            AppEffect::EnterDeepSleep { resume } => {
+                if let Err(error) =
+                    (DeviceProgress { library, store }).save(app.reading_checkpoint())
+                {
+                    error.report("write");
+                }
+                return Ok(Some(resume));
+            }
         };
+    }
+}
+
+struct DeviceProgress<'a> {
+    library: &'a DeviceLibrary,
+    store: &'a DeviceStore,
+}
+
+#[derive(Debug)]
+enum DeviceProgressError {
+    MissingBook,
+    Storage(
+        crate::storage::AppDataError<
+            <X4FatBlockDevice<'static> as embedded_sdmmc::BlockDevice>::Error,
+        >,
+    ),
+}
+
+impl DeviceProgressError {
+    fn report(&self, operation: &str) {
+        match self {
+            Self::MissingBook => info!("progress book is missing"),
+            Self::Storage(error) => {
+                info!("progress storage failed: {}", defmt::Debug2Format(error))
+            }
+        }
+        esp_println::println!(
+            "BREWCTL/1 ERROR command=progress reason=storage operation={operation}"
+        );
+    }
+}
+
+impl DeviceProgress<'_> {
+    fn load(&self, book: BookId) -> Result<Option<BookProgress>, DeviceProgressError> {
+        let file = self
+            .library
+            .file(book)
+            .ok_or(DeviceProgressError::MissingBook)?;
+        self.store
+            .app_data()
+            .read_book_progress(&file)
+            .map_err(DeviceProgressError::Storage)
+    }
+
+    fn save(&self, checkpoint: Option<(BookId, BookProgress)>) -> Result<(), DeviceProgressError> {
+        let Some((book, progress)) = checkpoint else {
+            return Ok(());
+        };
+        match self.load(book) {
+            Ok(Some(stored)) if stored == progress => return Ok(()),
+            Ok(Some(_) | None) => {}
+            Err(error) => error.report("read"),
+        }
+        let file = self
+            .library
+            .file(book)
+            .ok_or(DeviceProgressError::MissingBook)?;
+        self.store
+            .app_data()
+            .write_book_progress(&file, progress)
+            .map_err(DeviceProgressError::Storage)
     }
 }
 

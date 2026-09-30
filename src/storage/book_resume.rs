@@ -33,6 +33,18 @@ impl From<&BookFile> for BookIdentity {
 }
 
 impl BookIdentity {
+    pub const fn new(name: BookFileName, size: u32) -> Self {
+        Self { name, size }
+    }
+
+    pub const fn file_name(self) -> BookFileName {
+        self.name
+    }
+
+    pub const fn size(self) -> u32 {
+        self.size
+    }
+
     pub fn resolve(self, books: &[Option<BookFile>]) -> Result<BookId, ResumeError> {
         let mut matched = None;
         for (index, file) in books.iter().enumerate() {

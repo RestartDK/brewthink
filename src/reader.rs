@@ -479,7 +479,7 @@ mod tests {
     fn renders_a_reader_page_into_the_exact_x4_frame() {
         let mut app = App::new(1);
         app.input(AppInput::Confirm);
-        app.input(AppInput::Confirm);
+        app.input_without_stored_progress(AppInput::Confirm);
         app.input(AppInput::Confirm);
         assert_eq!(app.chapter_loaded(1, 2).unwrap(), AppEffect::Render);
         let lines = [
@@ -530,7 +530,7 @@ mod tests {
     fn rejects_lines_that_exceed_the_bounded_body_region() {
         let mut app = App::new(1);
         app.input(AppInput::Confirm);
-        app.input(AppInput::Confirm);
+        app.input_without_stored_progress(AppInput::Confirm);
         app.input(AppInput::Confirm);
         assert_eq!(app.chapter_loaded(1, 1).unwrap(), AppEffect::Render);
         let line = ReaderLine::new("line", ReaderStyle::Body);

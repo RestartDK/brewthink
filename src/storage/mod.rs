@@ -15,8 +15,8 @@ pub use catalog::{
 };
 #[cfg(feature = "device-reader")]
 pub use catalog::{
-    AppDataError, AppDataStore, FatFileReader, ImageCatalog, ImageFile, MAX_DEVICE_IMAGE_BYTES,
-    StoredImage,
+    AppDataError, AppDataStore, BookmarkDecodeError, FatFileReader, ImageCatalog, ImageFile,
+    MAX_DEVICE_IMAGE_BYTES, StoredImage,
 };
 pub use layout::{
     DiskLayout, Filesystem, Partition, inspect_filesystem, inspect_sector_zero, sector_fingerprint,

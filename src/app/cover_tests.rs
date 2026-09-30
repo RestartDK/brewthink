@@ -9,7 +9,10 @@ fn cover_can_be_dismissed_to_each_book_origin_before_loading_text() {
         }
         app.input(AppInput::Confirm);
         let parent = app.view();
-        assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
+        assert_eq!(
+            app.input_without_stored_progress(AppInput::Confirm),
+            AppEffect::Render
+        );
         assert_eq!(
             app.view(),
             AppView::BookCover {
@@ -19,7 +22,10 @@ fn cover_can_be_dismissed_to_each_book_origin_before_loading_text() {
         );
         assert_eq!(app.input(AppInput::Back), AppEffect::Render);
         assert_eq!(app.view(), parent);
-        app.input(AppInput::Confirm);
+        assert_eq!(
+            app.input_without_stored_progress(AppInput::Confirm),
+            AppEffect::Render
+        );
         assert_eq!(
             app.input(AppInput::Confirm),
             AppEffect::LoadChapter {
@@ -48,7 +54,7 @@ fn cover_can_be_dismissed_to_each_book_origin_before_loading_text() {
 fn sleeping_on_the_cover_resumes_the_start_of_the_book() {
     let mut app = App::new(1);
     app.input(AppInput::Confirm);
-    app.input(AppInput::Confirm);
+    app.input_without_stored_progress(AppInput::Confirm);
     app.input(AppInput::Power);
     assert!(matches!(
         app.resume_point(),

@@ -6,8 +6,8 @@ use images::Images;
 
 use brewthink::{
     app::{
-        App, AppEffect, AppInput, AppPreferences, AppView, Direction, ReaderFont, ReaderFontSize,
-        ReaderPreferences, ReaderSpacing, ResumePoint, SleepScreenMode,
+        App, AppEffect, AppInput, AppPreferences, AppView, BookProgress, Direction, ReaderFont,
+        ReaderFontSize, ReaderPreferences, ReaderSpacing, ResumePoint, SleepScreenMode,
     },
     bounded_xml::FixedString,
     device_epub::{
@@ -62,12 +62,17 @@ struct Oracle<'publication, 'bytes> {
     titles: [FixedString<CHAPTER_TITLE_BYTES>; MAX_DEVICE_SPINE_ITEMS],
     cover: Option<Vec<u8>>,
     images: Images<'bytes>,
+    progress: [Option<BookProgress>; 4],
 }
 
 impl Oracle<'_, '_> {
     fn input(&mut self, app: &mut App, input: AppInput) -> Result<()> {
         let effect = app.input(input);
-        self.settle(app, effect)
+        self.settle(app, effect)?;
+        if let Some((book, progress)) = app.book_progress() {
+            self.progress[book.index()] = Some(progress);
+        }
+        Ok(())
     }
 
     fn settle(&mut self, app: &mut App, mut effect: AppEffect) -> Result<()> {
@@ -83,6 +88,10 @@ impl Oracle<'_, '_> {
                     let first = self.images.layout(path, 0, app.reader_preferences())?;
                     app.chapter_loaded(self.book.publication().spine_len(), first.page_count())
                         .map_err(|error| format!("{error:?}"))?
+                }
+                AppEffect::LoadProgress { book, origin } => {
+                    let stored = self.progress[book.index()];
+                    app.progress_loaded(book, origin, stored)
                 }
                 AppEffect::Render
                     if matches!(app.view(), AppView::BookCover { .. }) && self.cover.is_none() =>
@@ -100,6 +109,7 @@ impl Oracle<'_, '_> {
     }
 
     fn start(&mut self, preferences: ReaderPreferences) -> Result<App> {
+        self.progress = [None; 4];
         let mut app = App::with_catalog(
             4,
             4,
@@ -333,6 +343,7 @@ fn main() -> Result<()> {
         titles,
         cover,
         images,
+        progress: [None; 4],
     };
     match mode {
         OutputMode::DrawerTrace => return drawer_trace(&mut oracle, output),

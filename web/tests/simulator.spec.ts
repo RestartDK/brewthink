@@ -80,6 +80,36 @@ test("runs the complete library, reader, sleep, wake, and resume loop", async ({
   expect(consoleErrors).toEqual([]);
 });
 
+test("keeps a separate reading position for each book", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("#display-placeholder")).toBeHidden();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#preview-heading")).toHaveText("Library shelf · 480 × 800");
+  await page.keyboard.press("Enter");
+  await continueFromCover(page);
+  await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
+  await expect(page.locator("#view-position")).toHaveText("1 / 8");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator("#view-position")).toHaveText("2 / 8");
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#preview-heading")).toHaveText("Library shelf · 480 × 800");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator("#selected-title")).toHaveText("Pride and Prejudice");
+  await page.keyboard.press("Enter");
+  await continueFromCover(page);
+  await expect(page.locator("#view-position")).toHaveText("1 / 8");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator("#view-position")).toHaveText("2 / 8");
+
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("ArrowLeft");
+  await expect(page.locator("#selected-title")).toHaveText("A Study in Scarlet");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
+  await expect(page.locator("#view-position")).toHaveText("2 / 8");
+});
+
 test("parses an EPUB, renders its cover, and opens its spine text", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
