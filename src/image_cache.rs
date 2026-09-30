@@ -201,6 +201,25 @@ impl ImageSpec {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CacheSlot(pub(crate) u32);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InvalidCacheName;
+
+impl TryFrom<embedded_sdmmc::ShortFileName> for CacheSlot {
+    type Error = InvalidCacheName;
+
+    fn try_from(name: embedded_sdmmc::ShortFileName) -> Result<Self, Self::Error> {
+        let base = name.base_name();
+        if name.extension() != b"IMG" || base.len() != 8 || !base.iter().all(u8::is_ascii_hexdigit)
+        {
+            return Err(InvalidCacheName);
+        }
+        let base = core::str::from_utf8(base).map_err(|_| InvalidCacheName)?;
+        u32::from_str_radix(base, 16)
+            .map(Self)
+            .map_err(|_| InvalidCacheName)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImageKey {
     bytes: [u8; KEY_BYTES],

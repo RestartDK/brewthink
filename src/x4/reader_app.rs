@@ -936,9 +936,9 @@ impl<'a> UsbControlRuntime<'a> {
                         esp_println::println!("BREWCTL/1 DROPPED images={removed}");
                         esp_println::println!("BREWCTL/1 DONE command=drop-image-cache status=ok");
                     }
-                    Err(_) => {
+                    Err(error) => {
                         esp_println::println!(
-                            "BREWCTL/1 ERROR command=drop-image-cache reason=storage"
+                            "BREWCTL/1 ERROR command=drop-image-cache reason={error}"
                         );
                         esp_println::println!(
                             "BREWCTL/1 DONE command=drop-image-cache status=error"
