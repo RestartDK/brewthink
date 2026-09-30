@@ -1371,6 +1371,7 @@ impl fmt::Write for ShortName {
 
 #[cfg(feature = "device-reader")]
 mod bookmarks;
+#[cfg(feature = "device-reader")]
 mod chapters;
 #[cfg(feature = "device-reader")]
 mod images;
