@@ -40,6 +40,12 @@ scripts/device-control.sh tap back
 
 Valid button names are `back`, `confirm`, `left`, `right`, `up`, `down`, and `power`.
 
+Drop the prepared image cache to force a cold decode:
+
+```bash
+scripts/device-control.sh drop-image-cache
+```
+
 Capture the framebuffer:
 
 ```bash

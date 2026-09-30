@@ -252,22 +252,64 @@ impl embedded_io::Read for SliceReader<'_> {
 
 #[derive(Clone, Copy)]
 struct Transform {
-    source: Size,
-    target: Size,
-    scaled: Size,
-    left: i128,
-    top: i128,
+    x: AxisTransform,
+    y: AxisTransform,
+}
+
+#[derive(Clone, Copy)]
+enum AxisOffset {
+    Inset(usize),
+    Crop(usize),
+}
+
+#[derive(Clone, Copy)]
+struct AxisTransform {
+    source: usize,
+    target: usize,
+    quotient: usize,
+    remainder: usize,
+    offset: AxisOffset,
+}
+
+impl AxisTransform {
+    fn new(source: usize, scaled: usize, target: usize) -> Self {
+        debug_assert!((1..=MAX_IMAGE_DIMENSION).contains(&source));
+        Self {
+            source,
+            target,
+            quotient: scaled / source,
+            remainder: scaled % source,
+            offset: if scaled <= target {
+                AxisOffset::Inset((target - scaled) / 2)
+            } else {
+                AxisOffset::Crop((scaled - target) / 2)
+            },
+        }
+    }
+
+    fn edge(self, position: usize) -> usize {
+        let scaled = position * self.quotient + position * self.remainder / self.source;
+        match self.offset {
+            AxisOffset::Inset(offset) => scaled + offset,
+            AxisOffset::Crop(offset) => scaled.saturating_sub(offset),
+        }
+        .min(self.target)
+    }
+
+    fn range(self, position: usize) -> core::ops::Range<usize> {
+        if position >= self.source {
+            return 0..0;
+        }
+        self.edge(position)..self.edge(position + 1)
+    }
 }
 
 impl Transform {
     fn new(source: Size, target: Size, mode: ScaleMode) -> Self {
         let scaled = scaled_size(source, target, mode);
         Self {
-            source,
-            target,
-            scaled,
-            left: (target.width() as i128 - scaled.width() as i128) / 2,
-            top: (target.height() as i128 - scaled.height() as i128) / 2,
+            x: AxisTransform::new(source.width(), scaled.width(), target.width()),
+            y: AxisTransform::new(source.height(), scaled.height(), target.height()),
         }
     }
 
@@ -279,24 +321,13 @@ impl Transform {
         luma: u8,
         dither: Dither,
     ) {
-        if source_x >= self.source.width() || source_y >= self.source.height() {
+        let rows = self.y.range(source_y);
+        if rows.is_empty() {
             return;
         }
-        let x0 = self.left
-            + (source_x as i128 * self.scaled.width() as i128) / self.source.width() as i128;
-        let x1 = self.left
-            + ((source_x + 1) as i128 * self.scaled.width() as i128) / self.source.width() as i128;
-        let y0 = self.top
-            + (source_y as i128 * self.scaled.height() as i128) / self.source.height() as i128;
-        let y1 = self.top
-            + ((source_y + 1) as i128 * self.scaled.height() as i128)
-                / self.source.height() as i128;
-        let left = x0.max(0).min(self.target.width() as i128) as usize;
-        let right = x1.max(0).min(self.target.width() as i128) as usize;
-        let top = y0.max(0).min(self.target.height() as i128) as usize;
-        let bottom = y1.max(0).min(self.target.height() as i128) as usize;
-        for y in top..bottom {
-            for x in left..right {
+        let columns = self.x.range(source_x);
+        for y in rows {
+            for x in columns.clone() {
                 target.set_luma_dithered(x, y, luma, dither);
             }
         }
@@ -378,6 +409,8 @@ fn rounded_ratio(value: usize, numerator: usize, denominator: usize) -> usize {
 
 #[cfg(test)]
 mod cover_tests;
+#[cfg(test)]
+mod scaling_tests;
 #[cfg(test)]
 mod tests {
     extern crate std;

@@ -9,6 +9,7 @@ pub enum ControlCommand {
     Tap(Button),
     Status,
     Screen,
+    DropImageCache,
     Upload(UploadRequest),
     Verify(UploadRequest),
     AbortUpload,
@@ -100,6 +101,7 @@ pub fn parse_control_command(line: &[u8]) -> Result<ControlCommand, ControlParse
     match command {
         "status" => Ok(ControlCommand::Status),
         "screen" => Ok(ControlCommand::Screen),
+        "drop-image-cache" => Ok(ControlCommand::DropImageCache),
         "upload-abort" => Ok(ControlCommand::AbortUpload),
         _ => {
             if let Some(arguments) = command.strip_prefix("upload ") {
@@ -184,6 +186,10 @@ mod tests {
         assert_eq!(
             parse_control_command(b"BREWCTL/1 screen"),
             Ok(ControlCommand::Screen)
+        );
+        assert_eq!(
+            parse_control_command(b"BREWCTL/1 drop-image-cache"),
+            Ok(ControlCommand::DropImageCache)
         );
         assert_eq!(
             parse_control_command(b"BREWCTL/1 upload image NICE.PNG 123 89abcdef"),

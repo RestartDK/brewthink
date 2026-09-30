@@ -37,6 +37,7 @@ enum Command {
     Tap(Button),
     Status,
     Screen(PathBuf),
+    DropImageCache,
     PutImage(PathBuf),
     PutBook(PathBuf),
     PutBooks(PathBuf),
@@ -295,6 +296,9 @@ fn run() -> io::Result<()> {
             arguments.timeout,
         ),
         Command::Status => run_text_command(&mut connection, "status", arguments.timeout),
+        Command::DropImageCache => {
+            run_text_command(&mut connection, "drop-image-cache", arguments.timeout)
+        }
         Command::SdInfo => sd_export::info(&mut connection, arguments.timeout).map(|_| ()),
         Command::SdRead {
             start,
@@ -380,6 +384,7 @@ fn parse_arguments(
         Some("screen") => {
             Command::Screen(PathBuf::from(required_argument(&mut arguments, "screen")?))
         }
+        Some("drop-image-cache") => Command::DropImageCache,
         Some("put-image") => Command::PutImage(PathBuf::from(required_argument(
             &mut arguments,
             "put-image",
@@ -449,7 +454,7 @@ fn required_argument(
 fn print_usage() {
     println!(
         "Usage: device-control [--port PATH] [--timeout SECONDS] <COMMAND>\n\n\
-         Commands:\n  tap <back|confirm|left|right|up|down|power>\n  status\n  screen <OUTPUT.png>\n  put-image <INPUT.jpg|INPUT.png>\n  put-book <INPUT.epub>\n  put-books <DIRECTORY>\n  check-books <DIRECTORY>\n  verify-book <INPUT.epub>\n  sd-info\n  sd-read <START_SECTOR> <SECTOR_COUNT> <OUTPUT.bin>\n  monitor"
+         Commands:\n  tap <back|confirm|left|right|up|down|power>\n  status\n  screen <OUTPUT.png>\n  drop-image-cache\n  put-image <INPUT.jpg|INPUT.png>\n  put-book <INPUT.epub>\n  put-books <DIRECTORY>\n  check-books <DIRECTORY>\n  verify-book <INPUT.epub>\n  sd-info\n  sd-read <START_SECTOR> <SECTOR_COUNT> <OUTPUT.bin>\n  monitor"
     );
 }
 

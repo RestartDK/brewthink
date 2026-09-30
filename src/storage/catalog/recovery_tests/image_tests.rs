@@ -181,3 +181,57 @@ fn cache_write_failures_cannot_publish_partial_pixels_or_replace_the_epub() {
         assert_eq!(readback, original, "write {limit}");
     }
 }
+
+#[test]
+fn dropping_the_image_cache_removes_only_recognized_cache_files() {
+    let card = Card::formatted();
+    let store = card.store();
+    store.ensure_layout().unwrap();
+    let write = |name: &str| {
+        store
+            .app_data()
+            .storage
+            .with_app_directory(|app| {
+                let cache = app.open_dir(CACHE_DIRECTORY)?;
+                let file = cache.open_file_in_dir(name, Mode::ReadWriteCreateOrTruncate)?;
+                file.write(&[0x5A; 24])?;
+                file.close()?;
+                cache.close()
+            })
+            .unwrap();
+    };
+    for name in ["AABBCCDD.IMG", "11223344.IMG", "99AABBCC.IMG"] {
+        write(name);
+    }
+    for name in ["CLOCK.BIN", "NOTES.TXT", "README"] {
+        write(name);
+    }
+    assert_eq!(store.app_data().drop_image_cache(), Ok(3));
+    let remaining = store
+        .app_data()
+        .storage
+        .with_app_directory(|app| {
+            let cache = app.open_dir(CACHE_DIRECTORY)?;
+            let mut names = std::vec::Vec::new();
+            cache.iterate_dir(|entry| {
+                if !entry.attributes.is_directory() {
+                    names.push(entry.name.base_name().to_vec());
+                }
+                core::ops::ControlFlow::Continue(())
+            })?;
+            cache.close()?;
+            Ok(names)
+        })
+        .unwrap();
+    let mut sorted: std::vec::Vec<&[u8]> = remaining.iter().map(|name| name.as_slice()).collect();
+    sorted.sort();
+    assert_eq!(
+        sorted,
+        std::vec![
+            b"CLOCK".as_slice(),
+            b"NOTES".as_slice(),
+            b"README".as_slice(),
+        ]
+    );
+    assert_eq!(store.app_data().drop_image_cache(), Ok(0));
+}
