@@ -11,7 +11,7 @@ A reader uses Brewthink one-handed on a slow 480 × 800 e-paper display. Full-sc
 - Application chrome uses generated Noto Sans: 24 px semibold headings, 22 px control labels, 18 px body text, and 14 px metadata and hints. Measurement and rendering use the same glyph tables.
 - Application labels use sentence case. Book titles and filenames retain their source casing. Clipped labels end with an ellipsis at a glyph boundary.
 - The application bar has no wordmark or enclosing rule.
-- Footer controls sit in rounded outline buttons; the button row starts at y = 730.
+- Footer controls sit in rounded outline buttons that run off the bottom edge of the frame; the button row starts at y = 730.
 
 ## Application bar
 
@@ -29,7 +29,7 @@ Full-screen covers, image-viewer content and sleep images retain genuine four-sh
 
 `Icon` in `src/ui/icons.rs` owns the 24 × 24 icon grid and two-pixel strokes. Icons inherit the row foreground color. Books, folders, images, typography, sleep, chapters, and navigation share this set. The smaller battery glyph keeps its bounded capacity and USB-power treatment.
 
-`CommandBar` places hints at x = 100, 192, 300, and 392 in the user-confirmed physical order: Left, Right, Back, Confirm. Navigation occupies the left rocker; Cancel/Go and other Back/Confirm actions occupy the right. Callers still supply actions in semantic Back, Confirm, Left, Right order; `CommandBar` pairs each action with its icon before positioning them. The centers remain approximate, not measurements of this physical unit. The simulator imports the same centers from WASM and has two right-edge buttons instead of a D-pad. Each position shows the hardware glyph and the current action in a rounded outline box. An empty label means no action and draws no box. The two side buttons select rows. Front Left and Right move through Home and Files, page the Books list, or change setting values.
+`CommandBar` places hints at x = 100, 192, 300, and 392 in the user-confirmed physical order: Left, Right, Back, Confirm. Navigation occupies the left rocker; Cancel/Go and other Back/Confirm actions occupy the right. Callers still supply actions in semantic Back, Confirm, Left, Right order; `CommandBar` pairs each action with its icon before positioning them. The centers remain approximate, not measurements of this physical unit. The simulator imports the same centers from WASM and has two right-edge buttons instead of a D-pad. Each position shows the hardware glyph and the current action in a rounded outline box that opens at the bottom edge. An empty label means no action and draws no box. The two side buttons select rows. Front Left and Right move through Home and Files, page the Books list, or change setting values.
 
 ## Reader typography
 

@@ -54,7 +54,7 @@ mod tests {
 
     #[test]
     fn command_bar_places_navigation_left_and_actions_right() {
-        use super::{CommandBar, FOOTER_BUTTON_HEIGHT, FOOTER_BUTTON_WIDTH, FRONT_BUTTON_CENTERS};
+        use super::{CommandBar, FOOTER_BUTTON_WIDTH, FRONT_BUTTON_CENTERS};
 
         let size = Size::new(480, 800).unwrap();
         let mut bytes = vec![0xff; READER_DEPTH.byte_len(size).unwrap()];
@@ -70,10 +70,14 @@ mod tests {
                 "button {center} lost its box top"
             );
             assert!(
-                (730..=730 + FOOTER_BUTTON_HEIGHT as i32)
-                    .any(|y| black(center - half, y) && black(center + half - 1, y)),
+                (730..=799).any(|y| black(center - half, y) && black(center + half - 1, y)),
                 "button {center} lost its box sides"
             );
+            assert!(
+                black(center - half, 799) && black(center + half - 1, 799),
+                "button {center} side stops before the frame edge"
+            );
+            assert!(!black(center, 799), "button {center} has a bottom edge");
             assert!(
                 (738..762).any(|y| (center - 12..center + 12).any(|x| black(x, y))),
                 "button {center} lost its glyph"

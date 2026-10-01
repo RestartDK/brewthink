@@ -18,9 +18,9 @@ use crate::{
 
 use super::{
     APP_BAR_RULE_Y, CHROME_INK, CONTENT_LEFT, CONTENT_WIDTH, FOOTER_BUTTON_HEIGHT,
-    FOOTER_BUTTON_WIDTH, FOOTER_TEXT_Y, FOOTER_TOP_Y, FRAME_WIDTH, FRONT_BUTTON_CENTERS, FixedText,
-    Icon, SELECTION_BACKGROUND, SELECTION_FOREGROUND, SELECTION_OUTLINE, TextRole, text_font,
-    text_width,
+    FOOTER_BUTTON_WIDTH, FOOTER_TEXT_Y, FOOTER_TOP_Y, FRAME_HEIGHT, FRAME_WIDTH,
+    FRONT_BUTTON_CENTERS, FixedText, Icon, SELECTION_BACKGROUND, SELECTION_FOREGROUND,
+    SELECTION_OUTLINE, TextRole, text_font, text_width,
 };
 
 const POWER_SYMBOL_X: i32 = 386;
@@ -224,7 +224,7 @@ impl View for CommandBar<'_> {
     fn bounds(&self) -> Rectangle {
         Rectangle::new(
             Point::new(self.left, self.top),
-            Size::new(self.width, FOOTER_BUTTON_HEIGHT),
+            Size::new(self.width, (FRAME_HEIGHT as i32 - self.top).max(0) as u32),
         )
     }
 }
