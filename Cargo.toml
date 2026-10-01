@@ -43,6 +43,11 @@ path              = "./src/bin/inspect-device-epub.rs"
 required-features = ["device-reader"]
 
 [[bin]]
+name              = "prepare-book"
+path              = "./tools/prepare-book.rs"
+required-features = ["epub", "host-image-tools"]
+
+[[bin]]
 name              = "simulator-oracle"
 path              = "./tools/simulator-oracle.rs"
 required-features = ["device-reader"]

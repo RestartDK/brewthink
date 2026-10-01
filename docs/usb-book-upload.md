@@ -46,6 +46,18 @@ Each book is limited to 32 MiB. The device receives acknowledged 4 KiB chunks an
 
 Book uploads require Home. The reader supports at most sixteen catalog entries, sixty-four reading-order entries per book, and 140 KiB per chapter resource. Uploading a book does not remove these limits. The host timeout applies to each transfer exchange and the final commit, not the whole batch. During an upload, firmware polls USB every 250 microseconds instead of the normal 20 milliseconds. The device aborts after 30 seconds without transfer activity.
 
+## Converting unsupported images
+
+Progressive JPEGs and interlaced PNGs lay out with alt placeholders. `prepare-book` writes a copy of an EPUB with every progressive JPEG re-encoded as baseline JPEG and every interlaced PNG as a non-interlaced PNG:
+
+```bash
+HOST="$(rustc -vV | awk '/^host:/ {print $2}')"
+cargo build --release --bin prepare-book --features epub,host-image-tools --target "$HOST"
+"target/$HOST/release/prepare-book" INPUT.epub OUTPUT.epub
+```
+
+The tool keeps the mimetype entry first and uncompressed, keeps every archive entry, and leaves images the reader already supports byte-for-byte. Upload the prepared copy, then delete the original name.
+
 ## Verification and interrupted transfers
 
 The transfer checks the declared length, ZIP signature, and stream CRC32. The device stages bytes in `/brew/UPLOAD.TMP`, checks the SD readback, journals the new target in `/brew/UPLOAD.TXN`, and copies it to `/books`. It verifies the final target before acknowledging success. Publication parsing happens during the catalog refresh, separately from file-transfer verification.
