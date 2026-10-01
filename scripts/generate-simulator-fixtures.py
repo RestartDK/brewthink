@@ -41,7 +41,7 @@ def archive_bytes(entries, bloated_cover=False):
     return result
 
 
-def epub(chapter, *, spine_count=2, cover=None, navigation="nav", bloated_cover=False):
+def epub(chapter, *, spine_count=2, cover=None, navigation="nav", bloated_cover=False, series=None):
     entries = {
         "mimetype": b"application/epub+zip",
         "META-INF/container.xml": b'<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="OPS/book.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
@@ -65,7 +65,11 @@ def epub(chapter, *, spine_count=2, cover=None, navigation="nav", bloated_cover=
         media_type = "image/jpeg" if cover.startswith(b'\xff\xd8') else "image/png"
         manifest += f'<item id="cover" href="cover" properties="cover-image" media-type="{media_type}"/>'
         entries["OPS/cover"] = cover
-    entries["OPS/book.opf"] = f'<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book-id">urn:brewthink:parity</dc:identifier><dc:title>Parity &amp;amp; literal</dc:title><dc:creator>Fixture Author</dc:creator><dc:language>en</dc:language></metadata><manifest>{manifest}</manifest><spine{spine_attributes}>{spine}</spine></package>'.encode()
+    series_metadata = ""
+    if series is not None:
+        name, position = series
+        series_metadata = f'<meta name="calibre:series" content="{name}"/><meta name="calibre:series_index" content="{position}"/>'
+    entries["OPS/book.opf"] = f'<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book-id">urn:brewthink:parity</dc:identifier><dc:title>Parity &amp;amp; literal</dc:title><dc:creator>Fixture Author</dc:creator><dc:language>en</dc:language>{series_metadata}</metadata><manifest>{manifest}</manifest><spine{spine_attributes}>{spine}</spine></package>'.encode()
     for index in range(spine_count):
         entries[f"OPS/s{index}.xhtml"] = chapter if index == 0 else b'<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Second chapter</h1><p>End of book.</p></body></html>'
     return archive_bytes(entries, bloated_cover)
@@ -103,6 +107,7 @@ def fixtures():
         "malformed-nav": epub(text, navigation="malformed"),
         "no-nav": epub(text, navigation=None),
         "ncx": epub(text, navigation="ncx"),
+        "series": epub(text, series=("Sherlock Holmes", 2)),
         "malformed": epub(b'<html><body><p>wrong</other></body></html>'),
         "oversized-chapter": epub(b'<body>' + b'x' * (140 * 1024) + b'</body>'),
         "too-many-chapters": epub(b'<body>text</body>', spine_count=129),

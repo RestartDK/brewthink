@@ -12,7 +12,9 @@ mod render_tests;
 mod theme;
 
 pub use app::{AppFrame, AppRenderError, render_app};
-pub use components::{AppBar, CommandBar, FileRow, Label, MenuRow, Selection, SettingsRow};
+pub use components::{
+    AppBar, BookListRow, CommandBar, FileRow, Label, MenuRow, Selection, SettingsRow,
+};
 pub use drawer::DrawerSurface;
 pub use frame::{FixedText, FrameTarget};
 pub use icons::Icon;
@@ -21,9 +23,9 @@ pub use reader_drawer::draw_reader_drawer;
 pub(crate) use theme::text_font;
 pub use theme::{
     APP_BAR_RULE_Y, CHROME_INK, CHROME_PAPER, CONTENT_LEFT, CONTENT_TOP, CONTENT_WIDTH,
-    FOOTER_RULE_Y, FOOTER_TEXT_Y, FRAME_HEIGHT, FRAME_WIDTH, FRONT_BUTTON_CENTERS, PANEL_CORNERS,
-    ROW_CORNERS, SELECTION_BACKGROUND, SELECTION_FOREGROUND, SELECTION_OUTLINE, TextRole,
-    text_width,
+    FOOTER_BUTTON_HEIGHT, FOOTER_BUTTON_WIDTH, FOOTER_TEXT_Y, FOOTER_TOP_Y, FRAME_HEIGHT,
+    FRAME_WIDTH, FRONT_BUTTON_CENTERS, PANEL_CORNERS, ROW_CORNERS, SELECTION_BACKGROUND,
+    SELECTION_FOREGROUND, SELECTION_OUTLINE, TextRole, text_width,
 };
 
 #[cfg(test)]
@@ -52,43 +54,41 @@ mod tests {
 
     #[test]
     fn command_bar_places_navigation_left_and_actions_right() {
-        use super::{CHROME_INK, CommandBar, Icon, Label, TextRole, text_width};
-        use embedded_graphics::geometry::{Point, Size as GraphicsSize};
+        use super::{CommandBar, FOOTER_BUTTON_WIDTH, FRONT_BUTTON_CENTERS};
 
         let size = Size::new(480, 800).unwrap();
-        let mut actual = vec![0xff; READER_DEPTH.byte_len(size).unwrap()];
-        let mut expected = actual.clone();
-        let mut image = PackedImage::new(size, READER_DEPTH, &mut actual).unwrap();
+        let mut bytes = vec![0xff; READER_DEPTH.byte_len(size).unwrap()];
+        let mut image = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
         CommandBar::new(["Cancel", "Go to", "Decrease", "Increase"])
             .draw(&mut FrameTarget::new(&mut image))
             .unwrap();
-        let mut reference = PackedImage::new(size, READER_DEPTH, &mut expected).unwrap();
-        let mut target = FrameTarget::new(&mut reference);
-        for (icon, label, center) in [
-            (Icon::Left, "Decrease", 100),
-            (Icon::Right, "Increase", 192),
-            (Icon::Back, "Cancel", 300),
-            (Icon::Confirm, "Go to", 392),
-        ] {
-            icon.draw(&mut target, Point::new(center - 12, 738), CHROME_INK)
-                .unwrap();
-            Label::new(label, TextRole::CommandHint)
-                .at(Point::new(
-                    center - text_width(TextRole::CommandHint, label) as i32 / 2,
-                    770,
-                ))
-                .clipped_to(GraphicsSize::new(92, 22))
-                .draw(&mut target)
-                .unwrap();
+        let black = |x: i32, y: i32| image.luma(x as usize, y as usize) == 0;
+        let half = FOOTER_BUTTON_WIDTH as i32 / 2;
+        for center in FRONT_BUTTON_CENTERS {
+            assert!(
+                (730..=731).any(|y| (center - half..=center + half).any(|x| black(x, y))),
+                "button {center} lost its box top"
+            );
+            assert!(
+                (730..=799).any(|y| black(center - half, y) && black(center + half - 1, y)),
+                "button {center} lost its box sides"
+            );
+            assert!(
+                black(center - half, 799) && black(center + half - 1, 799),
+                "button {center} side stops before the frame edge"
+            );
+            assert!(!black(center, 799), "button {center} has a bottom edge");
+            assert!(
+                (738..762).any(|y| (center - 12..center + 12).any(|x| black(x, y))),
+                "button {center} lost its glyph"
+            );
+            assert!(
+                (770..792).any(|y| (center - half..center + half).any(|x| black(x, y))),
+                "button {center} lost its label"
+            );
         }
-        for y in 731..800 {
-            for x in 0..480 {
-                assert_eq!(
-                    image.luma(x, y),
-                    reference.luma(x, y),
-                    "footer pixel {x},{y}"
-                );
-            }
+        for x in [18, 246, 462] {
+            assert!(!black(x, 730), "footer rule returned at {x}");
         }
     }
 

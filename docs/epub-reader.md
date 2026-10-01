@@ -4,7 +4,7 @@ Brewthink is an EPUB-first reader. The target is content-complete, readable refl
 
 ## Product contract
 
-Brewthink opens on Home with Books, Files, and Settings. Books contains the 2 × 2 cover shelf. Four covers occupy most of the 480 × 800 frame. The selected book has a stronger border, and its title and creator appear in the footer. Files shows source EPUBs from `/books` plus named JPEG and PNG images from `/files`. Settings changes reader font, text size, line spacing, and sleep-screen mode without changing the Brewthink wordmark or application chrome.
+Brewthink opens on Home with Books, Files, and Settings. Books contains a paged text list. Each row shows a book title and author; books that declare a series collapse into a folder row that opens the series' volumes in position order. Left and Right page the list. Files shows source EPUBs from `/books` plus named JPEG and PNG images from `/files`. Settings changes reader font, text size, line spacing, and sleep-screen mode without changing the Brewthink wordmark or application chrome.
 
 A complete reader must preserve:
 
@@ -30,7 +30,7 @@ EPUB package
 Publication
   metadata · resources · spine · navigation · cover
         │ resource lookup by typed manifest identity
-        ├──────────────► cover decoder ─► shelf image region
+        ├──────────────► cover decoder ─► opening and sleep frames
         └──────────────► XHTML/CSS parser ─► semantic book flow
                                               │
                                               ▼
@@ -53,12 +53,12 @@ The current host, WASM, and X4 paths provide:
 - Entity-aware XML metadata parsing.
 - Cover extraction with CRC verification supplied by the ZIP decoder.
 - Bounded PNG/JPEG cover decoding, alpha compositing onto white, center cropping, grayscale conversion, and ordered dithering.
-- Immediate conversion of decoded covers into 5,808-byte, 176 × 264 packed shelf bitmaps; no full-color frame is retained.
+- Full-resolution cover decoding for the opening cover and book-cover sleep frames, contained in one reusable 480 × 800 frame; the Books list decodes no covers.
 - Shared Home, Books, Files, Settings, Reader, Error, and Sleep navigation and framebuffer rendering in ordinary Rust tests, WASM, and X4 firmware.
 - A shared battery indicator backed by a smoothed voltage estimate on X4 and a fake battery state in WASM.
 - Bounded reader typography choices whose resolved metrics drive both pagination and rendering. Noto Serif 14 pt is the default.
 - Read-only FAT `/books` discovery, a seekable file adapter, bounded streaming ZIP/DEFLATE, fixed-memory XML, and page-at-a-time XHTML layout on the X4.
-- A normal X4 application loop connecting all seven controls, shelf, chapter/page navigation, SSD1677 refresh, retained sleep frame, GPIO3 deep sleep/wake, and checksummed book/chapter/page resume.
+- A normal X4 application loop connecting all seven controls, book list, chapter/page navigation, SSD1677 refresh, retained sleep frame, GPIO3 deep sleep/wake, and checksummed book/chapter/page resume.
 - Synthetic EPUB, PNG-alpha, and JPEG fixtures plus private acceptance against every spine item and the cover in the Hamming EPUB.
 
 The simulator's imported books use the same bounded ZIP/XML/layout and PNG/JPEG APIs as the device, with host-owned chapter sources and decoded cover buffers. The X4 implementation uses read-at FAT access, fixed-capacity publication state, incremental DEFLATE, no-heap PNG/JPEG decoding, and statically allocated phase-overlaid workspaces. Checksummed RTC-fast-memory state retains the active screen and reader preferences across deep sleep. The browser checks all chapters at import rather than reading them on demand; see [simulator parity and limits](simulator-parity.md).
@@ -150,8 +150,8 @@ The private Hamming EPUB is an acceptance target, not a repository fixture.
 | --- | --- | --- |
 | EPUB 3 package | All 340 resources and 42 spine items parsed through the fixed-memory reader | Parse the same file through physical FAT |
 | Metadata | Bounded XML extraction and physical SD catalog/EPUB metadata validation pass | Verify the catalog after reader wake |
-| Cover | `OEBPS/Images/Cover.png`, 143,179 bytes, decoded to packed fingerprint `b8bce90b` | Refresh the physical shelf region |
-| 2 × 2 shelf | Shared Rust framebuffer/navigation tests and ten passing Playwright tests, including the full walkthrough | Navigate with physical buttons |
+| Cover | `OEBPS/Images/Cover.png`, 143,179 bytes, decoded to packed fingerprint `b8bce90b` | Render the opening cover and book-cover sleep frame on the panel |
+| Books list | Shared Rust framebuffer tests for list pages, series folders, volume order, and selection; simulator walkthrough coverage | Navigate the list and open a series volume with physical buttons |
 | Chapter text | Every spine document read and first/last page-count consistency checked | Read and turn physical pages |
 | 286 PNG images | All fit the current extracted-resource bound | Add inline figures and image viewer |
 | Tables and footnotes | Text and alternatives survive fallback layout | Add semantic overlays and dedicated viewers |

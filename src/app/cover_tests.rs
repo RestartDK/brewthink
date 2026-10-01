@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn cover_can_be_dismissed_to_each_book_origin_before_loading_text() {
     for origin in [BookOrigin::Books, BookOrigin::Files] {
-        let mut app = App::new(1);
+        let mut app = App::new(crate::app::test_index(1));
         if origin == BookOrigin::Files {
             app.input(AppInput::Move(Direction::Down));
         }
@@ -52,7 +52,7 @@ fn cover_can_be_dismissed_to_each_book_origin_before_loading_text() {
 
 #[test]
 fn sleeping_on_the_cover_resumes_the_start_of_the_book() {
-    let mut app = App::new(1);
+    let mut app = App::new(crate::app::test_index(1));
     app.input(AppInput::Confirm);
     app.input_without_stored_progress(AppInput::Confirm);
     app.input(AppInput::Power);

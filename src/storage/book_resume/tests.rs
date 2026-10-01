@@ -50,9 +50,13 @@ fn saved(resume: ResumePoint, books: &[Option<BookFile>]) -> SavedResume {
 
 fn load_effect(saved: &SavedResume, books: &[Option<BookFile>]) -> Result<AppEffect, ResumeError> {
     let resume = saved.resolve(books)?;
-    Ok(App::from_resume(books.len(), saved.preferences(), resume)
-        .unwrap()
-        .1)
+    Ok(App::from_resume(
+        crate::app::test_index(books.len()),
+        saved.preferences(),
+        resume,
+    )
+    .unwrap()
+    .1)
 }
 
 #[test]
@@ -227,7 +231,7 @@ fn books_and_files_selections_use_book_identity_too() {
         assert_eq!(retained.resolve(&reordered), Ok(after));
         assert_eq!(retained.resolve(&[original[1]]), Err(ResumeError::Missing));
         let (mut app, effect) = App::from_resume(
-            reordered.len(),
+            crate::app::test_index(reordered.len()),
             retained.preferences(),
             retained.resolve(&reordered).unwrap(),
         )
@@ -267,9 +271,14 @@ fn files_image_selection_cannot_become_a_book_when_books_are_inserted() {
                 selected: Some(FileId::new(books.len()))
             }
         );
-        let (mut app, _) =
-            App::from_resume_with_catalog(books.len(), 1, None, retained.preferences(), resume)
-                .unwrap();
+        let (mut app, _) = App::from_resume_with_catalog(
+            crate::app::test_index(books.len()),
+            1,
+            None,
+            retained.preferences(),
+            resume,
+        )
+        .unwrap();
         assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
         assert_eq!(app.view(), AppView::Image(ImageId::new(0)));
     }
@@ -283,7 +292,7 @@ fn matched_reader_preserves_preferences_progress_origin_and_navigation() {
     let retained = SavedResume::decode(&retained.encode()).unwrap();
     assert_eq!(retained.preferences(), preferences);
     let (mut app, effect) = App::from_resume(
-        1,
+        crate::app::test_index(1),
         retained.preferences(),
         retained.resolve(&original).unwrap(),
     )

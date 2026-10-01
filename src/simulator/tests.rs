@@ -1,5 +1,5 @@
 use super::*;
-use crate::cover::CoverDecodeWorkspace;
+use crate::image_decoder::PngDecodeWorkspace;
 use crate::image_decoder::{ImageFormat, JpegDecodeWorkspace, decode_jpeg, decode_png};
 use crate::{
     app::{ReaderFont, ReaderFontSize, ReaderSpacing},
@@ -52,19 +52,6 @@ fn zip_entry(epub: &[u8], path: &str) -> ZipEntryBytes {
     }
 }
 
-fn native_shelf(encoded: &[u8]) -> Result<Box<[u8; COVER_BYTES]>, ImageDecodeError> {
-    let mut output = Box::new([0xff; COVER_BYTES]);
-    match ImageFormat::detect(encoded).unwrap() {
-        ImageFormat::Png => {
-            cover::decode_png_cover(encoded, &mut output, &mut CoverDecodeWorkspace::new())?
-        }
-        ImageFormat::Jpeg => {
-            cover::decode_jpeg_cover(encoded, &mut output, &mut JpegDecodeWorkspace::new())?
-        }
-    }
-    Ok(output)
-}
-
 fn native_frame(encoded: &[u8]) -> Result<Box<[u8; FRAME_BYTES]>, ImageDecodeError> {
     let mut output = Box::new([0xff; FRAME_BYTES]);
     let mut target = PackedImage::new(frame_size(), READER_DEPTH, &mut output[..]).unwrap();
@@ -77,7 +64,7 @@ fn native_frame(encoded: &[u8]) -> Result<Box<[u8; FRAME_BYTES]>, ImageDecodeErr
             encoded,
             &mut target,
             options,
-            &mut CoverDecodeWorkspace::new(),
+            &mut PngDecodeWorkspace::new(),
         )?,
         ImageFormat::Jpeg => decode_jpeg(
             encoded,
@@ -93,11 +80,11 @@ fn chapter_titles(book: &Book) -> Vec<&str> {
     book.chapters.iter().map(Chapter::title).collect()
 }
 
-fn decoded_parts(cover: &Cover) -> (&[u8; COVER_BYTES], &OriginalFrame) {
-    let Cover::Decoded { shelf, original } = cover else {
+fn decoded_frame(cover: &Cover) -> &[u8; FRAME_BYTES] {
+    let Cover::Decoded(frame) = cover else {
         panic!("decoded cover expected");
     };
-    (shelf, original)
+    frame
 }
 
 #[test]
@@ -300,13 +287,8 @@ fn malformed_navigation_clears_partial_titles_and_keeps_the_cause() {
 fn png_cover_bytes_match_the_device_decoder() {
     let book = Book::from_epub(EPUB, "minimal.epub").unwrap();
     let encoded = zip_entry(EPUB, "EPUB/cover.png").bytes;
-    let (shelf, original) = decoded_parts(&book.cover);
-    assert_eq!(shelf, &*native_shelf(&encoded).unwrap());
-    assert!(shelf.iter().any(|byte| *byte != 0xff));
-    let OriginalFrame::Decoded(frame) = original else {
-        panic!("decoded original frame expected");
-    };
-    assert_eq!(frame, &native_frame(&encoded).unwrap());
+    let frame = decoded_frame(&book.cover);
+    assert_eq!(frame, &*native_frame(&encoded).unwrap());
     assert!(frame.iter().any(|byte| *byte != 0xff));
 }
 
@@ -315,67 +297,37 @@ fn png_and_jpeg_frames_match_the_native_contain_decode() {
     for (name, epub) in [("text.epub", TEXT), ("jpeg.epub", JPEG)] {
         let book = Book::from_epub(epub, name).unwrap();
         let encoded = zip_entry(epub, PARITY_COVER_PATH).bytes;
-        let (shelf, original) = decoded_parts(&book.cover);
-        assert_eq!(shelf, &*native_shelf(&encoded).unwrap(), "{name}");
-        let OriginalFrame::Decoded(frame) = original else {
-            panic!("{name}: decoded original frame expected");
-        };
-        assert_eq!(frame, &native_frame(&encoded).unwrap(), "{name}");
+        let frame = decoded_frame(&book.cover);
+        assert_eq!(frame, &*native_frame(&encoded).unwrap(), "{name}");
         assert_eq!(frame.len(), 96_000);
         let bitmap = book.cover.frame_bitmap().unwrap();
         assert_eq!(bitmap.size(), Size::new(480, 800).unwrap());
         assert_eq!(bitmap.depth(), READER_DEPTH);
-        assert_eq!(
-            book.cover.bitmap().unwrap().size(),
-            Size::new(176, 264).unwrap()
-        );
     }
 }
 
 #[test]
-fn streamed_covers_cross_the_former_frame_and_shelf_input_limits() {
+fn streamed_covers_cross_the_former_cover_input_limits() {
     let cases = [
-        ("frame-limit.epub", FRAME_LIMIT, 98_304, true, true),
-        (
-            "shelf-only-cover.epub",
-            SHELF_ONLY_COVER,
-            98_305,
-            true,
-            true,
-        ),
-        ("shelf-limit.epub", SHELF_LIMIT, 131_072, true, true),
-        ("oversized-cover.epub", OVERSIZED_COVER, 131_073, true, true),
+        ("frame-limit.epub", FRAME_LIMIT, 98_304),
+        ("shelf-only-cover.epub", SHELF_ONLY_COVER, 98_305),
+        ("shelf-limit.epub", SHELF_LIMIT, 131_072),
+        ("oversized-cover.epub", OVERSIZED_COVER, 131_073),
     ];
-    for (name, epub, size, shelf_expected, frame_expected) in cases {
+    for (name, epub, size) in cases {
         let entry = zip_entry(epub, PARITY_COVER_PATH);
         assert_eq!(entry.uncompressed, size, "{name}");
         assert_eq!(entry.compressed, size, "{name}");
         let book = Book::from_epub(epub, name).unwrap();
-        assert_eq!(book.cover.bitmap().is_some(), shelf_expected, "{name}");
-        assert_eq!(
+        assert!(
             book.cover.frame_bitmap().is_some(),
-            frame_expected,
+            "{name}: the frame decoder rejected a streamable cover"
+        );
+        assert_eq!(
+            decoded_frame(&book.cover),
+            &*native_frame(&entry.bytes).unwrap(),
             "{name}"
         );
-        match (&book.cover, shelf_expected, frame_expected) {
-            (Cover::Decoded { shelf, original }, true, true) => {
-                assert_eq!(shelf, &native_shelf(&entry.bytes).unwrap(), "{name}");
-                let OriginalFrame::Decoded(frame) = original else {
-                    panic!("{name}: decoded original frame expected");
-                };
-                assert_eq!(frame, &native_frame(&entry.bytes).unwrap(), "{name}");
-            }
-            (Cover::Decoded { shelf, original }, true, false) => {
-                assert_eq!(shelf, &native_shelf(&entry.bytes).unwrap(), "{name}");
-                assert!(matches!(original, OriginalFrame::TooLarge), "{name}");
-                assert!(
-                    native_frame(&entry.bytes).is_ok(),
-                    "{name}: only the gate rejects it"
-                );
-            }
-            (Cover::TooLarge, false, false) => {}
-            _ => panic!("{name}: unexpected cover outcome"),
-        }
     }
 }
 
@@ -390,10 +342,6 @@ fn a_large_compressed_entry_with_tiny_output_streams_without_the_old_gate() {
         "compressed-oversized-cover.epub",
     )
     .unwrap();
-    assert_eq!(
-        book.cover.bitmap().unwrap().as_bytes(),
-        &native_shelf(&entry.bytes).unwrap()[..]
-    );
     assert_eq!(
         book.cover.frame_bitmap().unwrap().as_bytes(),
         &native_frame(&entry.bytes).unwrap()[..]
@@ -421,23 +369,17 @@ fn absent_unsupported_and_broken_covers_stay_distinct() {
         assert_eq!(chapter_titles(&book), ["Opening", "Closing"], "{name}");
     }
     for book in [&missing, &unsupported] {
-        assert!(book.cover.bitmap().is_none());
         assert!(book.cover.frame_bitmap().is_none());
     }
 }
 
 #[test]
-fn truncated_sources_fail_the_shelf_and_frame_decoders_alike() {
+fn truncated_sources_fail_the_frame_decoder() {
     for (name, epub) in [
         ("broken-cover.epub", BROKEN_COVER),
         ("broken-jpeg.epub", BROKEN_JPEG),
     ] {
         let encoded = zip_entry(epub, PARITY_COVER_PATH).bytes;
-        assert_eq!(
-            native_shelf(&encoded).unwrap_err(),
-            ImageDecodeError::InvalidImage,
-            "{name}"
-        );
         assert_eq!(
             native_frame(&encoded).unwrap_err(),
             ImageDecodeError::InvalidImage,
@@ -464,17 +406,12 @@ fn sample_chapters_use_the_bounded_pipeline_after_reflow() {
 }
 
 #[test]
-fn sample_covers_render_the_shelf_and_the_original_frame() {
-    for book in sample_books().unwrap() {
-        let shelf = book.cover.bitmap().unwrap();
+fn sample_covers_render_the_original_frame() {
+    let books = sample_books().unwrap();
+    for book in books {
         let frame = book.cover.frame_bitmap().unwrap();
-        assert_eq!(shelf.size(), Size::new(176, 264).unwrap());
         assert_eq!(frame.size(), Size::new(480, 800).unwrap());
-        let (shelf_bytes, original) = decoded_parts(&book.cover);
-        let OriginalFrame::Decoded(frame_bytes) = original else {
-            panic!("sample frame expected");
-        };
-        assert!(shelf_bytes.iter().any(|byte| *byte != 0xff));
+        let frame_bytes = decoded_frame(&book.cover);
         assert!(frame_bytes.iter().any(|byte| *byte != 0xff));
         assert_eq!(frame.luma(0, 0), 255, "contain leaves the frame edge white");
     }

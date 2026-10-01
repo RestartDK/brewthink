@@ -12,7 +12,7 @@ fn book_progress(spine_index: usize, page_index: usize, page_count: usize) -> Bo
 
 #[test]
 fn opening_a_book_reads_stored_progress_before_showing_the_cover() {
-    let mut app = App::new(2);
+    let mut app = App::new(crate::app::test_index(2));
     app.input(AppInput::Confirm);
     assert_eq!(app.view(), AppView::Library);
     assert_eq!(
@@ -31,7 +31,7 @@ fn opening_a_book_reads_stored_progress_before_showing_the_cover() {
 
 #[test]
 fn stored_progress_reopens_the_page_and_reflows_when_typography_changed() {
-    let mut app = App::new(1);
+    let mut app = App::new(crate::app::test_index(1));
     app.input(AppInput::Confirm);
     assert_eq!(
         app.progress_loaded(
@@ -47,7 +47,7 @@ fn stored_progress_reopens_the_page_and_reflows_when_typography_changed() {
     );
 
     let mut other = App::with_preferences(
-        1,
+        crate::app::test_index(1),
         AppPreferences::new(
             ReaderPreferences::new(
                 ReaderFont::Compact,
@@ -77,7 +77,7 @@ fn stored_progress_reopens_the_page_and_reflows_when_typography_changed() {
 
 #[test]
 fn book_progress_tracks_the_open_page_only_while_reading() {
-    let mut app = App::new(1);
+    let mut app = App::new(crate::app::test_index(1));
     assert_eq!(app.book_progress(), None);
     app.input(AppInput::Confirm);
     app.input_without_stored_progress(AppInput::Confirm);
@@ -108,7 +108,7 @@ fn progress_bounds_reject_values_that_cannot_be_stored() {
 
 #[test]
 fn sleeping_and_library_views_retain_the_checkpoint_for_persistence() {
-    let mut app = App::new(1);
+    let mut app = App::new(crate::app::test_index(1));
     app.progress_loaded(
         BookId::new(0),
         BookOrigin::Books,
@@ -130,7 +130,7 @@ fn sleeping_and_library_views_retain_the_checkpoint_for_persistence() {
 
 #[test]
 fn failed_restored_chapter_discards_checkpoint_and_opens_cover() {
-    let mut app = App::new(1);
+    let mut app = App::new(crate::app::test_index(1));
     app.progress_loaded(
         BookId::new(0),
         BookOrigin::Books,
@@ -190,7 +190,7 @@ fn typography_remap_handles_maximum_counts_without_overflow() {
 
 #[test]
 fn restored_spine_outside_loaded_book_falls_back_to_cover() {
-    let mut app = App::new(1);
+    let mut app = App::new(crate::app::test_index(1));
     app.progress_loaded(
         BookId::new(0),
         BookOrigin::Books,

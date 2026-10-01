@@ -6,7 +6,6 @@ use brewthink::{
     chapter_cache::{
         CHAPTER_HEADER_BYTES, MAX_CHAPTER_BYTES, MAX_CHAPTER_CACHE_BYTES, MAX_CHAPTER_PAGES,
     },
-    cover::{COVER_HEIGHT, COVER_WIDTH},
     device_epub::resolve_resource_path,
     image::{PackedBitmap, PackedImage, READER_DEPTH, ScaleMode},
     image_cache::{ImageBytes, ImageSpec, ImageWorkspace},
@@ -159,30 +158,19 @@ impl<'a> Images<'a> {
     pub fn covers(&mut self, path: Option<&str>, output: &Path) -> Result<Option<Vec<u8>>> {
         let mut statuses = String::new();
         let mut full_frame = None;
-        for (name, spec) in [
-            (
-                "shelf",
-                ImageSpec::new(COVER_WIDTH, COVER_HEIGHT, ScaleMode::Cover).unwrap(),
-            ),
-            (
-                "cover",
-                ImageSpec::new(480, 800, ScaleMode::Contain).unwrap(),
-            ),
-        ] {
-            let Some(path) = path else {
-                statuses.push_str(&format!("{name}: missing\n"));
-                continue;
-            };
-            match self.decode(path, spec) {
-                Ok(bytes) => {
-                    statuses.push_str(&format!("{name}: decoded {} bytes\n", bytes.len()));
-                    fs::write(output.join(format!("{name}.bin")), &bytes)?;
-                    if name == "cover" {
-                        full_frame = Some(bytes);
-                    }
-                }
-                Err(error) => statuses.push_str(&format!("{name}: {error}\n")),
+        let Some(path) = path else {
+            statuses.push_str("cover: missing\n");
+            fs::write(output.join("covers.txt"), statuses)?;
+            return Ok(None);
+        };
+        let spec = ImageSpec::new(480, 800, ScaleMode::Contain).unwrap();
+        match self.decode(path, spec) {
+            Ok(bytes) => {
+                statuses.push_str(&format!("cover: decoded {} bytes\n", bytes.len()));
+                fs::write(output.join("cover.bin"), &bytes)?;
+                full_frame = Some(bytes);
             }
+            Err(error) => statuses.push_str(&format!("cover: {error}\n")),
         }
         fs::write(output.join("covers.txt"), statuses)?;
         Ok(full_frame)

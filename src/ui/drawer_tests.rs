@@ -9,7 +9,7 @@ use crate::{
 };
 
 fn reader_with_open_drawer() -> App {
-    let mut app = App::new(1);
+    let mut app = App::new(crate::app::test_index(1));
     assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
     assert_eq!(
         app.input_without_stored_progress(AppInput::Confirm),

@@ -11,7 +11,7 @@ A reader uses Brewthink one-handed on a slow 480 × 800 e-paper display. Full-sc
 - Application chrome uses generated Noto Sans: 24 px semibold headings, 22 px control labels, 18 px body text, and 14 px metadata and hints. Measurement and rendering use the same glyph tables.
 - Application labels use sentence case. Book titles and filenames retain their source casing. Clipped labels end with an ellipsis at a glyph boundary.
 - The application bar has no wordmark or enclosing rule.
-- Footer controls sit below a one-pixel rule at y = 730.
+- Footer controls sit in rounded outline buttons that run off the bottom edge of the frame; the button row starts at y = 730.
 
 ## Application bar
 
@@ -21,15 +21,15 @@ Reading pages, opening covers, and book-cover sleep frames have no application b
 
 ## Selection
 
-Home, Files, Settings, and the reader drawer use borderless idle rows. A selected row uses the shared `SELECTION_BACKGROUND` token at `Gray8(170)`, black text and icons, a two-pixel black outline, and the shared 12-pixel `ROW_CORNERS` size. The fill and outline make selection visible without relying on tone alone. The cover shelf retains outlines around the selected book.
+Home, Books, Files, Settings, and the reader drawer use borderless idle rows. A selected row uses the shared `SELECTION_BACKGROUND` token at `Gray8(170)`, black text and icons, a two-pixel black outline, and the shared 12-pixel `ROW_CORNERS` size. The fill and outline make selection visible without relying on tone alone.
 
-`FrameTarget` converts UI gray to an ordered 2 × 2 black-and-white pattern at absolute screen coordinates. The light-gray selection has one black pixel per four pixels. Text, icons and outlines stay black. Shelf covers and settings thumbnails are dithered too, keeping interactive menus eligible for binary differential refresh. The existing policy performs a quick clean after fifteen differential updates.
+`FrameTarget` converts UI gray to an ordered 2 × 2 black-and-white pattern at absolute screen coordinates. The light-gray selection has one black pixel per four pixels. Text, icons and outlines stay black. Settings thumbnails are dithered too, keeping interactive menus eligible for binary differential refresh. The existing policy performs a quick clean after fifteen differential updates.
 
 Full-screen covers, image-viewer content and sleep images retain genuine four-shade pixels through `PackedImage`. Returning from grayscale content resets and cleans the controller once before differential updates resume. EPUB body illustrations currently render as text placeholders; inline image layout is not implemented. See [device measurements and limits](docs/dithered-ui.md).
 
 `Icon` in `src/ui/icons.rs` owns the 24 × 24 icon grid and two-pixel strokes. Icons inherit the row foreground color. Books, folders, images, typography, sleep, chapters, and navigation share this set. The smaller battery glyph keeps its bounded capacity and USB-power treatment.
 
-`CommandBar` places hints at x = 100, 192, 300, and 392 in the user-confirmed physical order: Left, Right, Back, Confirm. Navigation occupies the left rocker; Cancel/Go and other Back/Confirm actions occupy the right. Callers still supply actions in semantic Back, Confirm, Left, Right order; `CommandBar` pairs each action with its icon before positioning them. The centers remain approximate, not measurements of this physical unit. The simulator imports the same centers from WASM and has two right-edge buttons instead of a D-pad. Each position shows the hardware glyph and the current action. An empty label means no action. The two side buttons select rows. Front Left and Right move through Home and Files, select shelf columns, or change setting values.
+`CommandBar` places hints at x = 100, 192, 300, and 392 in the user-confirmed physical order: Left, Right, Back, Confirm. Navigation occupies the left rocker; Cancel/Go and other Back/Confirm actions occupy the right. Callers still supply actions in semantic Back, Confirm, Left, Right order; `CommandBar` pairs each action with its icon before positioning them. The centers remain approximate, not measurements of this physical unit. The simulator imports the same centers from WASM and has two right-edge buttons instead of a D-pad. Each position shows the hardware glyph and the current action in a rounded outline box that opens at the bottom edge. An empty label means no action and draws no box. The two side buttons select rows. Front Left and Right move through Home and Files, page the Books list, or change setting values.
 
 ## Reader typography
 
@@ -64,7 +64,7 @@ A newly opened book enters `AppView::BookCover`. Only the image is visible. Conf
 
 Automatic uses the current book cover only when sleep begins in Reader and uses the selected custom image elsewhere. Custom Image always prefers the selected image. Book Cover uses the associated reader or selected-book cover. Files combines EPUBs from `/books` with images from `/files`; opening an image shows a full-screen preview and Confirm selects it for sleep. Every missing or invalid asset falls back to the built-in sleep screen. Settings shows the selected mode, image name, status, and a bounded preview.
 
-Opening and sleep covers contain only the image, aspect-fitted to the 480 × 800 frame with white margins as needed. No title, author, status bar, or hints overlay it. Full-screen covers are decoded from the original PNG/JPEG, not enlarged from the 176 × 264 shelf cache. The X4 reuses the image decoder's bounded encoded-data buffer and full framebuffer; unsupported dimensions or sizes follow the optional-asset fallback.
+Opening and sleep covers contain only the image, aspect-fitted to the 480 × 800 frame with white margins as needed. No title, author, status bar, or hints overlay it. Full-screen covers are decoded from the original PNG/JPEG, never enlarged from a smaller preview. The X4 reuses the image decoder's bounded encoded-data buffer and full framebuffer; unsupported dimensions or sizes follow the optional-asset fallback.
 
 The current writable FAT layout uses the 8.3-compatible `/brew`, `/brew/cache`, `/brew/bookmark`, and `/files` paths. Firmware creates missing directories. Application records and transfer state stay under `/brew`; user images stay under `/files`. The filesystem layer will migrate `/brew` to `/.brew` when it can create VFAT long names.
 
@@ -72,7 +72,7 @@ The current writable FAT layout uses the 8.3-compatible `/brew`, `/brew/cache`, 
 
 `App` owns behavior and emits effects. `AppEffect::Render` tells the platform to render the current `AppView`; it does not duplicate the selected screen or reading location. Loading carries its `PendingChapter` inside `AppView::Loading`. Leaving that state discards the request.
 
-`AppFrame` is a borrowed snapshot containing the state and data needed for a shared screen render. Both runtimes pass snapshots to `render_app`. The X4 shelf supplies decoded covers through `ShelfBook` before rendering. The selected cover uses full resolution and other visible covers borrow half-resolution buffers.
+`AppFrame` is a borrowed snapshot containing the state and data needed for a shared screen render. Both runtimes pass snapshots to `render_app`. The Books view is an `AppFrame::Library` carrying a `LibraryView` bound to the live `LibraryState` and its borrowed `BookMeta` descriptors. The device stages the descriptors and renders title and author rows without cover I/O.
 
 Full-screen image decoding remains in-place. The X4 decodes directly into its reusable framebuffer, and `render_image_viewer` overlays shared controls. This avoids retaining another full-size image buffer.
 
@@ -82,7 +82,7 @@ Shared components own recurring visual rules: `AppBar`, `CommandBar`, `DrawerSur
 
 Semantic `TextRole` values resolve application typography centrally. Reader typography continues to resolve through `ReaderTheme` and never changes application chrome.
 
-Home, Books, Files, Settings, Reader, all five drawer selections, Image, Error, and Sleep render through the 96,000-byte four-shade frame. Native grayscale PNG snapshots pin representative screen compositions after that real render. Focused Rust tests cover every selection row's dither pattern, black foreground and outline without a separate snapshot per row. Coverage includes empty catalogs, populated shelf pages, filename clipping, and sleep-image previews. A component or layout change must preserve those contracts unless the visual change is deliberate and the fixtures are reviewed.
+Home, Books, Files, Settings, Reader, all five drawer selections, Image, Error, and Sleep render through the 96,000-byte four-shade frame. Native grayscale PNG snapshots pin representative screen compositions after that real render. Focused Rust tests cover every selection row's dither pattern, black foreground and outline without a separate snapshot per row. Coverage includes empty catalogs, populated list pages, series folders, title clipping, and sleep-image previews. A component or layout change must preserve those contracts unless the visual change is deliberate and the fixtures are reviewed.
 
 ## Simulator
 
@@ -95,7 +95,7 @@ The canvas backing bitmap and CSS dimensions are both 480 × 800. Narrow viewpor
 The [dithered selection comparison](docs/images/dithered-ui/selection-before-after.png) contains unscaled native crops. The older device captures below predate dithering and show the former solid-gray selection. They use native 480 × 800 pixels:
 
 - [Home](docs/images/reader-ui/home.png)
-- [Cover shelf](docs/images/reader-ui/shelf.png)
+- [Historical cover shelf](docs/images/reader-ui/shelf.png), replaced by the Books list
 - [Files](docs/images/reader-ui/files.png)
 - [Settings](docs/images/reader-ui/settings.png)
 - [Opening cover](docs/images/reader-ui/cover.png)

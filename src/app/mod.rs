@@ -1,6 +1,12 @@
 use crate::power::{BatteryLevel, BatteryStatus};
 mod book_position;
+mod library;
 pub use book_position::BookPosition;
+pub use library::{
+    BookMeta, CatalogMismatch, CatalogTooLarge, LIBRARY_ROWS_PER_PAGE, LibraryActivation,
+    LibraryBack, LibraryEntry, LibraryIndex, LibraryRow, LibraryState, LibraryView,
+    MAX_LIBRARY_BOOKS, SeriesMeta, SeriesPosition,
+};
 
 #[cfg(test)]
 mod cover_tests;
@@ -9,9 +15,12 @@ mod progress_tests;
 #[cfg(test)]
 mod reader_drawer_tests;
 
-const BOOKS_PER_SHELF_PAGE: usize = 4;
-const SHELF_COLUMNS: usize = 2;
 const BATTERY_REFRESH_PERCENT_DELTA: u8 = 5;
+
+#[cfg(test)]
+pub(crate) fn test_index(book_count: usize) -> LibraryIndex {
+    LibraryIndex::flat(book_count).unwrap()
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BookId(usize);
@@ -62,85 +71,6 @@ pub enum Direction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SelectionOutOfBounds;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct LibraryState {
-    book_count: usize,
-    selected: Option<BookId>,
-}
-
-impl LibraryState {
-    pub const fn new(book_count: usize) -> Self {
-        Self {
-            book_count,
-            selected: if book_count == 0 {
-                None
-            } else {
-                Some(BookId(0))
-            },
-        }
-    }
-
-    pub const fn with_selected(
-        book_count: usize,
-        selected: usize,
-    ) -> Result<Self, SelectionOutOfBounds> {
-        if selected >= book_count {
-            return Err(SelectionOutOfBounds);
-        }
-        Ok(Self {
-            book_count,
-            selected: Some(BookId(selected)),
-        })
-    }
-
-    pub const fn book_count(self) -> usize {
-        self.book_count
-    }
-
-    pub const fn selected(self) -> Option<BookId> {
-        self.selected
-    }
-
-    pub const fn page(self) -> usize {
-        match self.selected {
-            Some(selected) => selected.0 / BOOKS_PER_SHELF_PAGE,
-            None => 0,
-        }
-    }
-
-    pub const fn page_count(self) -> usize {
-        self.book_count.div_ceil(BOOKS_PER_SHELF_PAGE)
-    }
-
-    pub fn visible_range(self) -> core::ops::Range<usize> {
-        let start = self.page() * BOOKS_PER_SHELF_PAGE;
-        let end = (start + BOOKS_PER_SHELF_PAGE).min(self.book_count);
-        start..end
-    }
-
-    pub fn move_selection(&mut self, direction: Direction) -> bool {
-        let Some(selected) = self.selected else {
-            return false;
-        };
-        let next = match direction {
-            Direction::Left if selected.0 % SHELF_COLUMNS == 1 => selected.0 - 1,
-            Direction::Right
-                if selected.0 % SHELF_COLUMNS == 0 && selected.0 + 1 < self.book_count =>
-            {
-                selected.0 + 1
-            }
-            Direction::Up => selected.0.saturating_sub(SHELF_COLUMNS),
-            Direction::Down => (selected.0 + SHELF_COLUMNS).min(self.book_count - 1),
-            Direction::Left | Direction::Right => selected.0,
-        };
-        if next == selected.0 {
-            return false;
-        }
-        self.selected = Some(BookId(next));
-        true
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -1158,9 +1088,9 @@ pub struct App {
 }
 
 impl App {
-    pub const fn new(book_count: usize) -> Self {
+    pub const fn new(index: LibraryIndex) -> Self {
         Self::with_preferences(
-            book_count,
+            index,
             AppPreferences::new(
                 ReaderPreferences::new(
                     ReaderFont::NotoSerif,
@@ -1172,12 +1102,12 @@ impl App {
         )
     }
 
-    pub const fn with_preferences(book_count: usize, preferences: AppPreferences) -> Self {
-        Self::with_catalog(book_count, 0, None, preferences)
+    pub const fn with_preferences(index: LibraryIndex, preferences: AppPreferences) -> Self {
+        Self::with_catalog(index, 0, None, preferences)
     }
 
     pub const fn with_catalog(
-        book_count: usize,
+        index: LibraryIndex,
         image_count: usize,
         selected_sleep_image: Option<ImageId>,
         preferences: AppPreferences,
@@ -1189,8 +1119,8 @@ impl App {
             _ => None,
         };
         Self {
-            library: LibraryState::new(book_count),
-            files: FilesState::new(book_count + image_count),
+            library: LibraryState::new(index),
+            files: FilesState::new(index.book_count() + image_count),
             home,
             view: AppView::Home(home),
             preferences,
@@ -1202,22 +1132,22 @@ impl App {
     }
 
     pub fn from_resume(
-        book_count: usize,
+        index: LibraryIndex,
         preferences: AppPreferences,
         resume: ResumePoint,
     ) -> Result<(Self, AppEffect), AppStateError> {
-        Self::from_resume_with_catalog(book_count, 0, None, preferences, resume)
+        Self::from_resume_with_catalog(index, 0, None, preferences, resume)
     }
 
     pub fn from_resume_with_catalog(
-        book_count: usize,
+        index: LibraryIndex,
         image_count: usize,
         selected_sleep_image: Option<ImageId>,
         preferences: AppPreferences,
         resume: ResumePoint,
     ) -> Result<(Self, AppEffect), AppStateError> {
-        let mut app =
-            Self::with_catalog(book_count, image_count, selected_sleep_image, preferences);
+        let book_count = index.book_count();
+        let mut app = Self::with_catalog(index, image_count, selected_sleep_image, preferences);
         let file_count = book_count + image_count;
         let effect = match resume {
             ResumePoint::Home { selected } => {
@@ -1225,19 +1155,10 @@ impl App {
                 app.view = AppView::Home(app.home);
                 AppEffect::Render
             }
-            ResumePoint::Books { selected: None } if book_count == 0 => {
-                app.view = AppView::Library;
-                AppEffect::Render
-            }
-            ResumePoint::Books {
-                selected: Some(selected),
-            } => {
-                app.library = LibraryState::with_selected(book_count, selected.index())
+            ResumePoint::Books { selected } => {
+                app.library
+                    .restore_root(selected)
                     .map_err(|_| AppStateError::BookOutOfBounds)?;
-                app.view = AppView::Library;
-                AppEffect::Render
-            }
-            ResumePoint::Books { selected: None } => {
                 app.view = AppView::Library;
                 AppEffect::Render
             }
@@ -1298,8 +1219,8 @@ impl App {
         Ok((app, effect))
     }
 
-    pub const fn library(self) -> LibraryState {
-        self.library
+    pub const fn library(&self) -> &LibraryState {
+        &self.library
     }
 
     pub const fn files(self) -> FilesState {
@@ -1366,7 +1287,7 @@ impl App {
                 selected: home.selected,
             },
             AppView::Library => ResumePoint::Books {
-                selected: self.library.selected,
+                selected: self.library.selected_book(),
             },
             AppView::Files(files) => ResumePoint::Files {
                 selected: files.selected,
@@ -1434,7 +1355,10 @@ impl App {
                 }
             }
             (AppView::Library, AppInput::Confirm) => self.open_selected(BookOrigin::Books),
-            (AppView::Library, AppInput::Back) => self.return_home(HomeItem::Books),
+            (AppView::Library, AppInput::Back) => match self.library.back() {
+                LibraryBack::Root => AppEffect::Render,
+                LibraryBack::Home => self.return_home(HomeItem::Books),
+            },
             (AppView::Files(mut files), AppInput::Move(direction)) => {
                 if !files.move_selection(direction) {
                     return AppEffect::None;
@@ -1600,10 +1524,7 @@ impl App {
                 self.view = AppView::Home(self.home);
                 AppEffect::Render
             }
-            ResumePoint::Books { selected } => {
-                if let Some(selected) = selected {
-                    self.select_book(selected);
-                }
+            ResumePoint::Books { .. } => {
                 self.view = AppView::Library;
                 AppEffect::Render
             }
@@ -1642,19 +1563,21 @@ impl App {
     }
 
     fn open_selected(&mut self, origin: BookOrigin) -> AppEffect {
-        self.library
-            .selected
-            .map_or(AppEffect::None, |book| self.open_book(book, origin))
+        match self.library.activate() {
+            LibraryActivation::Open(book) => self.open_book(book, origin),
+            LibraryActivation::EnteredSeries => AppEffect::Render,
+            LibraryActivation::None => AppEffect::None,
+        }
     }
 
     fn open_file(&mut self) -> AppEffect {
         let Some(file) = self.files.selected else {
             return AppEffect::None;
         };
-        if file.index() < self.library.book_count {
+        if file.index() < self.library.book_count() {
             return self.open_book(BookId::new(file.index()), BookOrigin::Files);
         }
-        let image = ImageId::new(file.index() - self.library.book_count);
+        let image = ImageId::new(file.index() - self.library.book_count());
         self.view = AppView::Image(image);
         AppEffect::Render
     }
@@ -1885,7 +1808,7 @@ impl App {
     fn origin_resume(self, origin: BookOrigin) -> ResumePoint {
         match origin {
             BookOrigin::Books => ResumePoint::Books {
-                selected: self.library.selected,
+                selected: self.library.selected_book(),
             },
             BookOrigin::Files => ResumePoint::Files {
                 selected: self.files.selected,
@@ -1894,21 +1817,17 @@ impl App {
     }
 
     fn select_book(&mut self, book: BookId) {
-        if let Ok(library) = LibraryState::with_selected(self.library.book_count, book.index()) {
-            self.library = library;
-        }
+        let _ = self.library.select_book(book);
         if let Ok(files) = FilesState::with_selected(self.files.file_count, book.index()) {
             self.files = files;
         }
     }
 
-    pub fn replace_book_catalog(&mut self, book_count: usize) -> AppEffect {
-        self.library = match self.library.selected {
-            Some(selected) => LibraryState::with_selected(book_count, selected.index())
-                .unwrap_or_else(|_| LibraryState::new(book_count)),
-            None => LibraryState::new(book_count),
-        };
-        self.files.replace_count(book_count + self.image_count);
+    pub fn replace_book_catalog(&mut self, index: LibraryIndex) -> AppEffect {
+        let anchor = self.library.selected_book();
+        self.library.replace(index, anchor);
+        self.files
+            .replace_count(index.book_count() + self.image_count);
         self.current_render_effect()
     }
 
@@ -1924,7 +1843,7 @@ impl App {
             _ => None,
         };
         self.files
-            .replace_count(self.library.book_count + self.image_count);
+            .replace_count(self.library.book_count() + self.image_count);
         if let AppView::Image(image) = self.view
             && image.index() >= image_count
         {
@@ -1934,7 +1853,7 @@ impl App {
     }
 
     fn validate_book(&self, book: BookId) -> Result<(), AppStateError> {
-        if book.index() < self.library.book_count {
+        if book.index() < self.library.book_count() {
             Ok(())
         } else {
             Err(AppStateError::BookOutOfBounds)
@@ -1955,12 +1874,33 @@ mod tests {
     extern crate std;
 
     use super::{
-        App, AppEffect, AppInput, AppPreferences, AppView, BookOrigin, Direction, FilesState,
-        HomeItem, ImageId, LibraryState, PageTarget, ReaderFont, ReaderFontSize, ReaderPreferences,
-        ReaderSpacing, ResumePoint, SettingsItem, SleepScreenMode, SleepScreenPlan,
-        SleepScreenSource,
+        App, AppEffect, AppInput, AppPreferences, AppView, BookId, BookMeta, BookOrigin, Direction,
+        FilesState, HomeItem, ImageId, LibraryIndex, PageTarget, ReaderFont, ReaderFontSize,
+        ReaderPreferences, ReaderSpacing, ResumePoint, SeriesMeta, SeriesPosition, SettingsItem,
+        SleepScreenMode, SleepScreenPlan, SleepScreenSource, test_index,
     };
     use crate::{input::UsbState, power::BatteryStatus};
+
+    fn app(book_count: usize) -> App {
+        App::new(test_index(book_count))
+    }
+
+    fn series_index() -> LibraryIndex {
+        let books = [
+            BookMeta::new(
+                "A",
+                "X",
+                Some(SeriesMeta::new("S", Some(SeriesPosition::new(1)))),
+            ),
+            BookMeta::new(
+                "B",
+                "X",
+                Some(SeriesMeta::new("S", Some(SeriesPosition::new(2)))),
+            ),
+            BookMeta::new("C", "X", None),
+        ];
+        LibraryIndex::try_from(&books[..]).unwrap()
+    }
 
     fn open_books(app: &mut App) {
         assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
@@ -2004,32 +1944,71 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_library_has_no_selection_or_pages() {
-        let state = LibraryState::new(0);
-        assert_eq!(state.selected(), None);
-        assert_eq!(state.visible_range(), 0..0);
-        assert_eq!(state.page_count(), 0);
+    fn books_routing_enters_and_leaves_series_folders() {
+        let mut app = App::new(series_index());
+        open_books(&mut app);
+        assert!(!app.library().in_series());
+        assert_eq!(app.library().row_count(), 2);
+
+        assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
+        assert!(app.library().in_series());
+        assert_eq!(app.library().row_count(), 2);
+
+        assert_eq!(app.input(AppInput::Back), AppEffect::Render);
+        assert!(!app.library().in_series());
+        assert_eq!(app.library().row_count(), 2);
+
+        assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
+        assert_eq!(
+            app.input_without_stored_progress(AppInput::Confirm),
+            AppEffect::Render
+        );
+        assert!(matches!(
+            app.view(),
+            AppView::BookCover {
+                book,
+                origin: BookOrigin::Books
+            } if book == BookId::new(0)
+        ));
+        assert_eq!(app.input(AppInput::Back), AppEffect::Render);
+        assert_eq!(app.view(), AppView::Library);
+        assert!(app.library().in_series());
+        assert_eq!(app.library().selected_book(), Some(BookId::new(0)));
     }
 
     #[test]
-    fn directional_navigation_stays_within_the_catalog() {
-        let mut state = LibraryState::new(3);
-        assert!(!state.move_selection(Direction::Left));
-        assert!(state.move_selection(Direction::Right));
-        assert_eq!(state.selected().unwrap().index(), 1);
-        assert!(state.move_selection(Direction::Down));
-        assert_eq!(state.selected().unwrap().index(), 2);
-        assert!(!state.move_selection(Direction::Down));
+    fn opening_from_files_selects_the_volume_inside_its_folder() {
+        let mut app = App::new(series_index());
+        app.input(AppInput::Move(Direction::Down));
+        app.input(AppInput::Confirm);
+        app.input(AppInput::Move(Direction::Down));
+        assert_eq!(
+            app.input_without_stored_progress(AppInput::Confirm),
+            AppEffect::Render
+        );
+        assert!(matches!(
+            app.view(),
+            AppView::BookCover {
+                book,
+                origin: BookOrigin::Files
+            } if book == BookId::new(1)
+        ));
+        assert!(app.library().in_series());
+        assert_eq!(app.library().selected_book(), Some(BookId::new(1)));
+        assert_eq!(app.input(AppInput::Back), AppEffect::Render);
+        assert!(
+            matches!(app.view(), AppView::Files(files) if files.selected().unwrap().index() == 1)
+        );
     }
 
     #[test]
     fn uploaded_books_refresh_the_home_catalog_without_changing_preferences() {
         let preferences = AppPreferences::default();
         let image = ImageId::new(1);
-        let mut app = App::with_catalog(0, 2, Some(image), preferences);
-        assert_eq!(app.replace_book_catalog(2), AppEffect::Render);
+        let mut app = App::with_catalog(test_index(0), 2, Some(image), preferences);
+        assert_eq!(app.replace_book_catalog(test_index(2)), AppEffect::Render);
         assert_eq!(app.library().book_count(), 2);
-        assert_eq!(app.library().selected(), Some(super::BookId::new(0)));
+        assert_eq!(app.library().selected_book(), Some(super::BookId::new(0)));
         assert_eq!(app.files.file_count(), 4);
         assert_eq!(app.preferences(), preferences);
         assert_eq!(app.selected_sleep_image(), Some(image));
@@ -2037,17 +2016,8 @@ mod tests {
     }
 
     #[test]
-    fn moving_beyond_four_books_advances_the_visible_page() {
-        let mut state = LibraryState::new(7);
-        state.move_selection(Direction::Down);
-        state.move_selection(Direction::Down);
-        assert_eq!(state.page(), 1);
-        assert_eq!(state.visible_range(), 4..7);
-    }
-
-    #[test]
     fn starts_at_home_and_opens_each_primary_section() {
-        let mut app = App::new(4);
+        let mut app = app(4);
         assert_eq!(app.view(), AppView::Home(app.home()));
         assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
         assert_eq!(app.view(), AppView::Library);
@@ -2069,7 +2039,7 @@ mod tests {
 
     #[test]
     fn settings_use_a_draft_and_only_apply_from_the_apply_row() {
-        let mut app = App::new(1);
+        let mut app = app(1);
         app.input(AppInput::Move(Direction::Down));
         app.input(AppInput::Move(Direction::Down));
         app.input(AppInput::Confirm);
@@ -2107,7 +2077,7 @@ mod tests {
 
     #[test]
     fn files_open_the_same_reader_and_back_returns_to_files() {
-        let mut app = App::new(2);
+        let mut app = app(2);
         app.input(AppInput::Move(Direction::Down));
         app.input(AppInput::Confirm);
         app.input(AppInput::Move(Direction::Down));
@@ -2128,7 +2098,12 @@ mod tests {
 
     #[test]
     fn files_open_images_and_confirm_selects_the_sleep_image() {
-        let mut app = App::with_catalog(1, 2, Some(ImageId::new(1)), AppPreferences::default());
+        let mut app = App::with_catalog(
+            test_index(1),
+            2,
+            Some(ImageId::new(1)),
+            AppPreferences::default(),
+        );
         app.input(AppInput::Move(Direction::Down));
         app.input(AppInput::Confirm);
         app.input(AppInput::Move(Direction::Down));
@@ -2143,7 +2118,7 @@ mod tests {
 
     #[test]
     fn reader_turns_pages_and_crosses_chapter_boundaries() {
-        let mut app = App::new(1);
+        let mut app = app(1);
         open_first_book(&mut app, 2);
         assert_eq!(
             app.input(AppInput::Move(Direction::Right)),
@@ -2171,7 +2146,7 @@ mod tests {
 
     #[test]
     fn changed_typography_maps_the_old_progress_into_the_new_page_count() {
-        let mut app = App::new(1);
+        let mut app = app(1);
         open_first_book(&mut app, 5);
         app.input(AppInput::Move(Direction::Right));
         app.input(AppInput::Move(Direction::Right));
@@ -2225,7 +2200,7 @@ mod tests {
             page_index: 3,
             origin: BookOrigin::Files,
         };
-        let (mut app, effect) = App::from_resume(2, preferences, resume).unwrap();
+        let (mut app, effect) = App::from_resume(test_index(2), preferences, resume).unwrap();
         assert!(matches!(effect, AppEffect::LoadChapter { .. }));
         app.chapter_loaded(4, 7).unwrap();
         assert_eq!(app.input(AppInput::Power), AppEffect::Render);
@@ -2316,7 +2291,7 @@ mod tests {
 
     #[test]
     fn rejected_chapter_metadata_preserves_the_loading_request() {
-        let mut app = App::new(1);
+        let mut app = app(1);
         open_books(&mut app);
         app.input_without_stored_progress(AppInput::Confirm);
         app.input(AppInput::Confirm);
@@ -2349,7 +2324,7 @@ mod tests {
     fn cancelling_or_sleeping_drops_the_loading_request_and_keeps_the_origin() {
         for origin in [BookOrigin::Books, BookOrigin::Files] {
             for interrupt in [AppInput::Back, AppInput::Power] {
-                let mut app = App::new(1);
+                let mut app = app(1);
                 if origin == BookOrigin::Files {
                     app.input(AppInput::Move(Direction::Down));
                 }
@@ -2395,7 +2370,7 @@ mod tests {
 
     #[test]
     fn battery_updates_refresh_meaningful_changes() {
-        let mut app = App::new(0);
+        let mut app = app(0);
         let initial = BatteryStatus::from_percent(42, UsbState::Disconnected);
         assert_eq!(app.set_battery(initial), AppEffect::Render);
         assert_eq!(app.set_battery(initial), AppEffect::None);

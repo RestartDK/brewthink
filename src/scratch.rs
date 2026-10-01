@@ -81,6 +81,8 @@ mod tests {
             assert_eq!(publication.spine_len(), 0);
             assert_eq!(publication.cover_path(), None);
             assert_eq!(publication.title(), "");
+            assert_eq!(publication.series(), "");
+            assert_eq!(publication.series_position(), None);
             let catalog = scratch.initialize(BookCatalog::<16>::initialize_in_place);
             assert!(catalog.is_empty());
             assert!(!catalog.is_truncated());

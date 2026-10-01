@@ -1,5 +1,6 @@
 use crate::{
-    bounded_xml::{FixedString, XmlError, XmlEvent, XmlReader},
+    app::{SeriesMeta, SeriesPosition},
+    bounded_xml::{FixedString, XmlError, XmlEvent, XmlReader, XmlText},
     zip_stream::{InflateWorkspace, ReadAt, StreamingZip, ZipError, ZipValidationScratch},
 };
 
@@ -24,10 +25,14 @@ impl DeviceSpineItem {
     }
 }
 
+pub const MAX_SERIES_NAME_BYTES: usize = 128;
+
 #[derive(Debug, Eq, PartialEq)]
 pub struct DevicePublication {
     title: FixedString<192>,
     creator: FixedString<128>,
+    series: FixedString<MAX_SERIES_NAME_BYTES>,
+    series_position: Option<SeriesPosition>,
     spine: [Option<DeviceSpineItem>; MAX_DEVICE_SPINE_ITEMS],
     spine_length: u8,
     cover: Option<FixedString<MAX_DEVICE_PATH_BYTES>>,
@@ -39,6 +44,8 @@ impl DevicePublication {
         Self {
             title: FixedString::new(),
             creator: FixedString::new(),
+            series: FixedString::new(),
+            series_position: None,
             spine: [None; MAX_DEVICE_SPINE_ITEMS],
             spine_length: 0,
             cover: None,
@@ -52,6 +59,8 @@ impl DevicePublication {
         unsafe {
             core::ptr::addr_of_mut!((*publication).title).write(FixedString::new());
             core::ptr::addr_of_mut!((*publication).creator).write(FixedString::new());
+            core::ptr::addr_of_mut!((*publication).series).write(FixedString::new());
+            core::ptr::addr_of_mut!((*publication).series_position).write(None);
             let spine =
                 core::ptr::addr_of_mut!((*publication).spine).cast::<Option<DeviceSpineItem>>();
             for index in 0..MAX_DEVICE_SPINE_ITEMS {
@@ -66,6 +75,8 @@ impl DevicePublication {
     fn reset(&mut self) {
         self.title.clear();
         self.creator.clear();
+        self.series.clear();
+        self.series_position = None;
         self.spine.fill(None);
         self.spine_length = 0;
         self.cover = None;
@@ -78,6 +89,14 @@ impl DevicePublication {
 
     pub fn creator(&self) -> &str {
         self.creator.as_str()
+    }
+
+    pub fn series(&self) -> &str {
+        self.series.as_str()
+    }
+
+    pub const fn series_position(&self) -> Option<SeriesPosition> {
+        self.series_position
     }
 
     pub const fn spine_len(&self) -> usize {
@@ -96,6 +115,38 @@ impl DevicePublication {
 impl Default for DevicePublication {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesMetadata {
+    name: FixedString<MAX_SERIES_NAME_BYTES>,
+    position: Option<SeriesPosition>,
+}
+
+impl SeriesMetadata {
+    pub fn new(name: &str, position: Option<SeriesPosition>) -> Option<Self> {
+        let name = FixedString::try_from_str(name).ok()?;
+        (!name.is_empty()).then_some(Self { name, position })
+    }
+
+    pub fn from_publication(publication: &DevicePublication) -> Option<Self> {
+        (!publication.series.is_empty()).then_some(Self {
+            name: publication.series,
+            position: publication.series_position,
+        })
+    }
+
+    pub fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    pub const fn position(&self) -> Option<SeriesPosition> {
+        self.position
+    }
+
+    pub fn as_meta(&self) -> SeriesMeta<'_> {
+        SeriesMeta::new(self.name(), self.position)
     }
 }
 
@@ -130,11 +181,21 @@ impl<E> From<XmlError> for DeviceEpubError<E> {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SeriesScheme {
+    Calibre { position_seen: bool },
+    Collection { position_seen: bool },
+}
+
 pub struct DevicePackageScratch {
     spine_ids: [Option<FixedString<48>>; MAX_DEVICE_SPINE_ITEMS],
     manifest_hashes: [u32; MAX_DEVICE_MANIFEST_ITEMS],
     manifest_length: usize,
     legacy_cover_id: Option<FixedString<48>>,
+    series_id: Option<FixedString<48>>,
+    pending_refines_id: Option<FixedString<48>>,
+    pending_position: Option<SeriesPosition>,
+    series_scheme: Option<SeriesScheme>,
 }
 
 impl DevicePackageScratch {
@@ -144,6 +205,10 @@ impl DevicePackageScratch {
             manifest_hashes: [0; MAX_DEVICE_MANIFEST_ITEMS],
             manifest_length: 0,
             legacy_cover_id: None,
+            series_id: None,
+            pending_refines_id: None,
+            pending_position: None,
+            series_scheme: None,
         }
     }
 
@@ -159,6 +224,10 @@ impl DevicePackageScratch {
             core::ptr::addr_of_mut!((*storage).manifest_hashes).write_bytes(0, 1);
             core::ptr::addr_of_mut!((*storage).manifest_length).write(0);
             core::ptr::addr_of_mut!((*storage).legacy_cover_id).write(None);
+            core::ptr::addr_of_mut!((*storage).series_id).write(None);
+            core::ptr::addr_of_mut!((*storage).pending_refines_id).write(None);
+            core::ptr::addr_of_mut!((*storage).pending_position).write(None);
+            core::ptr::addr_of_mut!((*storage).series_scheme).write(None);
         }
     }
 
@@ -166,6 +235,10 @@ impl DevicePackageScratch {
         self.spine_ids.fill(None);
         self.manifest_length = 0;
         self.legacy_cover_id = None;
+        self.series_id = None;
+        self.pending_refines_id = None;
+        self.pending_position = None;
+        self.series_scheme = None;
     }
 
     fn insert_manifest_id(
@@ -429,11 +502,19 @@ fn parse_package_structure<E>(
     enum MetadataField {
         Title,
         Creator,
+        SeriesName,
+        GroupPosition,
+        CollectionType,
     }
 
     let mut reader = XmlReader::new(encoded)?;
     let mut in_metadata = false;
     let mut text_field = None;
+    let mut series_name = SeriesNameBuffer::new();
+    let mut meta_value = FixedString::<32>::new();
+    let mut meta_invalid = false;
+    let mut meta_declared_id: Option<FixedString<48>> = None;
+    let mut meta_refines_id: Option<FixedString<48>> = None;
     while let Some(event) = reader.next_event()? {
         match event {
             XmlEvent::Start(tag) => match tag.local_name() {
@@ -445,10 +526,40 @@ fn parse_package_structure<E>(
                     text_field = Some(MetadataField::Creator)
                 }
                 "meta" if in_metadata => {
-                    if tag.attribute("name")? == Some("cover")
-                        && let Some(id) = tag.attribute("content")?
+                    series_name.clear();
+                    meta_value.clear();
+                    meta_invalid = false;
+                    meta_declared_id = None;
+                    meta_refines_id = None;
+                    let name = tag.attribute("name")?;
+                    let content = tag.attribute("content")?;
+                    if name == Some("cover")
+                        && let Some(id) = content
                     {
                         scratch.legacy_cover_id = Some(FixedString::from_decoded(id)?);
+                    }
+                    if name == Some("calibre:series") {
+                        adopt_calibre_name(publication, scratch, content.unwrap_or(""));
+                    }
+                    if name == Some("calibre:series_index") {
+                        adopt_calibre_position(publication, scratch, content.unwrap_or(""));
+                    }
+                    match tag.attribute("property")? {
+                        Some("belongs-to-collection") => {
+                            meta_declared_id = tag
+                                .attribute("id")?
+                                .and_then(|id| FixedString::from_decoded(id).ok());
+                            text_field = Some(MetadataField::SeriesName);
+                        }
+                        Some("group-position") => {
+                            meta_refines_id = refined_id(tag.attribute("refines")?);
+                            text_field = Some(MetadataField::GroupPosition);
+                        }
+                        Some("collection-type") => {
+                            meta_refines_id = refined_id(tag.attribute("refines")?);
+                            text_field = Some(MetadataField::CollectionType);
+                        }
+                        _ => {}
                     }
                 }
                 "itemref" => {
@@ -478,6 +589,26 @@ fn parse_package_structure<E>(
                         publication.creator.push(character?)?;
                     }
                 }
+                Some(MetadataField::SeriesName) => {
+                    for character in text {
+                        match character {
+                            Ok(character) => series_name.push(character),
+                            Err(_) => series_name.invalidate(),
+                        }
+                    }
+                }
+                Some(MetadataField::GroupPosition | MetadataField::CollectionType) => {
+                    for character in text {
+                        match character {
+                            Ok(character) => {
+                                if meta_value.push(character).is_err() {
+                                    meta_invalid = true;
+                                }
+                            }
+                            Err(_) => meta_invalid = true,
+                        }
+                    }
+                }
                 None => {}
             },
             XmlEvent::End(name) => match name {
@@ -486,11 +617,216 @@ fn parse_package_structure<E>(
                     text_field = None;
                 }
                 "title" | "creator" => text_field = None,
+                "meta" => {
+                    match text_field.take() {
+                        Some(MetadataField::SeriesName) => adopt_collection_name(
+                            publication,
+                            scratch,
+                            &series_name,
+                            meta_declared_id,
+                        ),
+                        Some(MetadataField::GroupPosition) => adopt_group_position(
+                            publication,
+                            scratch,
+                            meta_refines_id,
+                            meta_value.as_str(),
+                            meta_invalid,
+                        ),
+                        Some(MetadataField::CollectionType) => retract_collection(
+                            publication,
+                            scratch,
+                            meta_refines_id,
+                            meta_value.as_str(),
+                            meta_invalid,
+                        ),
+                        _ => {}
+                    }
+                    text_field = None;
+                }
                 _ => {}
             },
         }
     }
     Ok(())
+}
+
+struct SeriesNameBuffer {
+    text: FixedString<MAX_SERIES_NAME_BYTES>,
+    pending_space: bool,
+    invalid: bool,
+    full: bool,
+}
+
+impl SeriesNameBuffer {
+    const fn new() -> Self {
+        Self {
+            text: FixedString::new(),
+            pending_space: false,
+            invalid: false,
+            full: false,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.text.clear();
+        self.pending_space = false;
+        self.invalid = false;
+        self.full = false;
+    }
+
+    fn invalidate(&mut self) {
+        self.text.clear();
+        self.pending_space = false;
+        self.invalid = true;
+    }
+
+    fn push(&mut self, character: char) {
+        if self.invalid || self.full {
+            return;
+        }
+        if character.is_whitespace() {
+            self.pending_space = !self.text.is_empty();
+            return;
+        }
+        let needed = character.len_utf8() + usize::from(self.pending_space);
+        if self.text.as_str().len() + needed > MAX_SERIES_NAME_BYTES {
+            self.full = true;
+            return;
+        }
+        if self.pending_space {
+            self.pending_space = false;
+            let _ = self.text.push(' ');
+        }
+        let _ = self.text.push(character);
+    }
+
+    fn fixed(&self) -> FixedString<MAX_SERIES_NAME_BYTES> {
+        if self.invalid {
+            FixedString::new()
+        } else {
+            self.text
+        }
+    }
+}
+
+fn refined_id(value: Option<&str>) -> Option<FixedString<48>> {
+    FixedString::from_decoded(value?.strip_prefix('#')?).ok()
+}
+
+fn adopt_calibre_name(
+    publication: &mut DevicePublication,
+    scratch: &mut DevicePackageScratch,
+    content: &str,
+) {
+    if scratch.series_scheme.is_some() {
+        return;
+    }
+    let mut name = SeriesNameBuffer::new();
+    for character in XmlText::Encoded(content) {
+        match character {
+            Ok(character) => name.push(character),
+            Err(_) => name.invalidate(),
+        }
+    }
+    publication.series = name.fixed();
+    publication.series_position = None;
+    scratch.series_id = None;
+    scratch.series_scheme = Some(SeriesScheme::Calibre {
+        position_seen: false,
+    });
+}
+
+fn adopt_calibre_position(
+    publication: &mut DevicePublication,
+    scratch: &mut DevicePackageScratch,
+    content: &str,
+) {
+    let Some(SeriesScheme::Calibre { position_seen }) = scratch.series_scheme else {
+        return;
+    };
+    if position_seen {
+        return;
+    }
+    scratch.series_scheme = Some(SeriesScheme::Calibre {
+        position_seen: true,
+    });
+    publication.series_position = SeriesPosition::parse(content);
+}
+
+fn adopt_collection_name(
+    publication: &mut DevicePublication,
+    scratch: &mut DevicePackageScratch,
+    name: &SeriesNameBuffer,
+    declared_id: Option<FixedString<48>>,
+) {
+    if scratch.series_scheme.is_some() {
+        return;
+    }
+    publication.series = name.fixed();
+    publication.series_position = None;
+    scratch.series_id = declared_id;
+    let pending = declared_id.is_some() && scratch.pending_refines_id == declared_id;
+    if pending {
+        publication.series_position = scratch.pending_position;
+        scratch.pending_refines_id = None;
+        scratch.pending_position = None;
+    }
+    scratch.series_scheme = Some(SeriesScheme::Collection {
+        position_seen: pending,
+    });
+}
+
+fn adopt_group_position(
+    publication: &mut DevicePublication,
+    scratch: &mut DevicePackageScratch,
+    refines: Option<FixedString<48>>,
+    text: &str,
+    invalid: bool,
+) {
+    let Some(refines) = refines else {
+        return;
+    };
+    let position = if invalid {
+        None
+    } else {
+        SeriesPosition::parse(text)
+    };
+    match scratch.series_scheme {
+        Some(SeriesScheme::Collection { position_seen }) => {
+            if !position_seen && scratch.series_id == Some(refines) {
+                publication.series_position = position;
+                scratch.series_scheme = Some(SeriesScheme::Collection {
+                    position_seen: true,
+                });
+            }
+        }
+        Some(SeriesScheme::Calibre { .. }) => {}
+        None => {
+            scratch.pending_refines_id = Some(refines);
+            scratch.pending_position = position;
+        }
+    }
+}
+
+fn retract_collection(
+    publication: &mut DevicePublication,
+    scratch: &mut DevicePackageScratch,
+    refines: Option<FixedString<48>>,
+    value: &str,
+    invalid: bool,
+) {
+    let Some(refines) = refines else {
+        return;
+    };
+    if invalid || value.trim() == "series" || scratch.series_scheme.is_none() {
+        return;
+    }
+    if scratch.series_id == Some(refines) {
+        publication.series.clear();
+        publication.series_position = None;
+        scratch.series_id = None;
+        scratch.series_scheme = None;
+    }
 }
 
 fn resolve_manifest<E>(
@@ -664,10 +1000,11 @@ fn path_hash(path: &[u8]) -> u32 {
 mod tests {
     extern crate std;
 
-    use std::{boxed::Box, convert::Infallible};
+    use std::{boxed::Box, convert::Infallible, format, string::String};
 
     use super::{DeviceEpub, DevicePackageScratch, DevicePublication, resolve_resource_path};
     use crate::{
+        app::SeriesPosition,
         bounded_xml::FixedString,
         zip_stream::{InflateWorkspace, ReadAt, ZipValidationScratch},
     };
@@ -797,5 +1134,192 @@ mod tests {
         )
         .unwrap();
         assert_eq!(path.as_str(), "OPS/Images/cover.png");
+    }
+
+    const SPINE: &str = r#"<manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="chapter"/></spine>"#;
+
+    fn package(metadata: &str) -> String {
+        format!("<package><metadata><title>Book</title>{metadata}</metadata>{SPINE}</package>")
+    }
+
+    fn parse(metadata: &str) -> DevicePublication {
+        let mut scratch = DevicePackageScratch::new();
+        let mut publication = DevicePublication::new();
+        super::parse_package::<Infallible>(
+            "OPS/book.opf",
+            package(metadata).as_bytes(),
+            &mut scratch,
+            &mut publication,
+        )
+        .unwrap();
+        publication
+    }
+
+    #[test]
+    fn calibre_series_reads_its_name_and_decimal_index() {
+        let publication = parse(
+            r#"<meta name="calibre:series" content="Foundation"/><meta name="calibre:series_index" content="1.00"/>"#,
+        );
+        assert_eq!(publication.series(), "Foundation");
+        assert_eq!(publication.series_position(), Some(SeriesPosition::new(1)));
+    }
+
+    #[test]
+    fn the_first_calibre_declaration_wins_even_when_invalid() {
+        let publication = parse(
+            r#"<meta name="calibre:series" content="First"/><meta name="calibre:series" content="Second"/><meta name="calibre:series_index" content="1.5"/><meta name="calibre:series_index" content="2"/>"#,
+        );
+        assert_eq!(publication.series(), "First");
+        assert_eq!(publication.series_position(), None);
+    }
+
+    #[test]
+    fn epub3_collections_accept_refinements_in_either_order() {
+        let declaration_first = parse(
+            r##"<meta property="belongs-to-collection" id="col">Series X</meta><meta refines="#col" property="collection-type">series</meta><meta refines="#col" property="group-position"> 2 </meta>"##,
+        );
+        assert_eq!(declaration_first.series(), "Series X");
+        assert_eq!(
+            declaration_first.series_position(),
+            Some(SeriesPosition::new(2))
+        );
+
+        let refinement_first = parse(
+            r##"<meta refines="#series" property="group-position">3</meta><meta property="belongs-to-collection" id="series">Trilogy</meta>"##,
+        );
+        assert_eq!(refinement_first.series(), "Trilogy");
+        assert_eq!(
+            refinement_first.series_position(),
+            Some(SeriesPosition::new(3))
+        );
+    }
+
+    #[test]
+    fn collection_type_retraction_lets_a_later_declaration_win() {
+        let publication = parse(
+            r##"<meta property="belongs-to-collection" id="a">Anthology</meta><meta refines="#a" property="collection-type">anthology</meta><meta name="calibre:series" content="Real Series"/><meta name="calibre:series_index" content="4"/>"##,
+        );
+        assert_eq!(publication.series(), "Real Series");
+        assert_eq!(publication.series_position(), Some(SeriesPosition::new(4)));
+    }
+
+    #[test]
+    fn refinements_for_another_collection_never_attach() {
+        let publication = parse(
+            r##"<meta refines="#a" property="group-position">5</meta><meta property="belongs-to-collection" id="b">Other</meta>"##,
+        );
+        assert_eq!(publication.series(), "Other");
+        assert_eq!(publication.series_position(), None);
+    }
+
+    #[test]
+    fn collection_names_normalize_whitespace_before_storage() {
+        let publication = parse(
+            "<meta property=\"belongs-to-collection\" id=\"c\">  The   Long\n  Series </meta><meta refines=\"#c\" property=\"group-position\"> 2 </meta>",
+        );
+        assert_eq!(publication.series(), "The Long Series");
+        assert_eq!(publication.series_position(), Some(SeriesPosition::new(2)));
+    }
+
+    #[test]
+    fn oversized_series_names_truncate_instead_of_dropping_the_book() {
+        let name = "Å".repeat(200);
+        let publication = parse(&format!(
+            "<meta name=\"calibre:series\" content=\"{name}\"/>"
+        ));
+        assert_eq!(publication.series(), "Å".repeat(64));
+        assert_eq!(publication.title(), "Book");
+
+        let mixed = parse(&format!(
+            "<meta name=\"calibre:series\" content=\"{}ÅZ\"/>",
+            "A".repeat(127)
+        ));
+        assert_eq!(mixed.series(), "A".repeat(127));
+    }
+
+    #[test]
+    fn undecodable_series_text_yields_no_series_or_position() {
+        let name = parse("<meta property=\"belongs-to-collection\" id=\"c\">Bad&bogus;Name</meta>");
+        assert_eq!(name.series(), "");
+        assert_eq!(name.series_position(), None);
+
+        let position = parse(
+            "<meta property=\"belongs-to-collection\" id=\"c\">Series</meta><meta refines=\"#c\" property=\"group-position\">1&bogus;2</meta>",
+        );
+        assert_eq!(position.series(), "Series");
+        assert_eq!(position.series_position(), None);
+    }
+
+    #[test]
+    fn oversized_and_undecodable_ids_only_skip_correlation() {
+        let id = "i".repeat(120);
+        let oversized = parse(&format!(
+            "<meta property=\"belongs-to-collection\" id=\"{id}\">Series</meta><meta refines=\"#{id}\" property=\"group-position\">7</meta>"
+        ));
+        assert_eq!(oversized.series(), "Series");
+        assert_eq!(oversized.series_position(), None);
+
+        let undecodable = parse(
+            r##"<meta property="belongs-to-collection" id="&bogus;">Named</meta><meta refines="#&bogus;" property="group-position">5</meta>"##,
+        );
+        assert_eq!(undecodable.series(), "Named");
+        assert_eq!(undecodable.series_position(), None);
+    }
+
+    #[test]
+    fn oversized_group_position_text_degrades_to_no_position() {
+        let text = format!("2{}3", " ".repeat(64));
+        let publication = parse(&format!(
+            "<meta property=\"belongs-to-collection\" id=\"c\">Series</meta><meta refines=\"#c\" property=\"group-position\">{text}</meta>"
+        ));
+        assert_eq!(publication.series(), "Series");
+        assert_eq!(publication.series_position(), None);
+    }
+
+    #[test]
+    fn series_state_resets_between_books_in_the_same_scratch() {
+        let mut scratch = DevicePackageScratch::new();
+        let mut publication = DevicePublication::new();
+        let with_series = package(
+            r#"<meta name="calibre:series" content="First Series"/><meta name="calibre:series_index" content="2"/>"#,
+        );
+        let without_series = package("");
+
+        super::parse_package::<Infallible>(
+            "OPS/book.opf",
+            with_series.as_bytes(),
+            &mut scratch,
+            &mut publication,
+        )
+        .unwrap();
+        assert_eq!(publication.series(), "First Series");
+        assert_eq!(publication.series_position(), Some(SeriesPosition::new(2)));
+
+        super::parse_package::<Infallible>(
+            "OPS/book.opf",
+            without_series.as_bytes(),
+            &mut scratch,
+            &mut publication,
+        )
+        .unwrap();
+        assert_eq!(publication.series(), "");
+        assert_eq!(publication.series_position(), None);
+    }
+
+    #[test]
+    fn series_metadata_outside_the_metadata_block_is_ignored() {
+        let xml = format!(
+            "<package><metadata><title>Book</title></metadata><meta name=\"calibre:series\" content=\"Outside\"/>{SPINE}</package>"
+        );
+        let mut scratch = DevicePackageScratch::new();
+        let mut publication = DevicePublication::new();
+        super::parse_package::<Infallible>(
+            "OPS/book.opf",
+            xml.as_bytes(),
+            &mut scratch,
+            &mut publication,
+        )
+        .unwrap();
+        assert_eq!(publication.series(), "");
     }
 }

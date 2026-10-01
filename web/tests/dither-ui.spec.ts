@@ -25,8 +25,9 @@ test("interactive menus use monochrome pixels, including image previews", async 
   await expect(page.getByText("Rust/WASM 0.1.0")).toBeVisible();
   await capture("dither-home");
   await page.keyboard.press("Enter");
-  await expect(page.locator("#preview-heading")).toHaveText("Library shelf · 480 × 800");
-  await capture("dither-shelf");
+  await expect(page.locator("#preview-heading")).toHaveText("Books list · 480 × 800");
+  await capture("dither-books");
+  await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
   await expect(page.locator("#preview-heading")).toHaveText("Book cover · 480 × 800");
   await page.keyboard.press("Enter");

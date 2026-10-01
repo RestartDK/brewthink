@@ -1,98 +1,51 @@
 use core::fmt::Write;
 
-use embedded_graphics::{
-    Drawable, Pixel,
-    geometry::{Point, Size as GraphicsSize},
-    pixelcolor::Gray8,
-    prelude::{DrawTarget, Primitive},
-    primitives::{PrimitiveStyle, Rectangle},
+use embedded_graphics::{Drawable, geometry::Point};
+use embedded_layout::{
+    View,
+    layout::linear::{FixedMargin, LinearLayout},
+    view_group::Views,
 };
-use embedded_layout::View;
 
 use crate::{
-    app::LibraryState,
-    image::{PackedBitmap, PackedImage, Size},
+    app::{LIBRARY_ROWS_PER_PAGE, LibraryRow, LibraryView},
+    image::{PackedImage, Size},
     power::BatteryStatus,
-    ui::{AppBar, CommandBar, FixedText, FrameTarget, Label, Selection, TextRole, ui},
+    ui::{
+        AppBar, BookListRow, CONTENT_LEFT, CommandBar, FixedText, FrameTarget, Icon, Label,
+        Selection, TextRole, ui,
+    },
 };
 
 const FRAME_WIDTH: usize = 480;
 const FRAME_HEIGHT: usize = 800;
-const COVER_WIDTH: usize = 176;
-const COVER_HEIGHT: usize = 264;
-const COVER_LEFT: [usize; 2] = [32, 272];
-const COVER_TOP: [usize; 2] = [75, 362];
+const ROW_SPACING: i32 = 14;
+const ROWS_TOP: i32 = 86;
+const COUNTER_TOP: i32 = 714;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ShelfBook<'a> {
-    title: &'a str,
-    creator: &'a str,
-    cover: Option<PackedBitmap<'a>>,
-}
-
-impl<'a> ShelfBook<'a> {
-    pub const fn new(title: &'a str, creator: &'a str, cover: Option<PackedBitmap<'a>>) -> Self {
-        Self {
-            title,
-            creator,
-            cover,
-        }
-    }
-
-    pub const fn title(self) -> &'a str {
-        self.title
-    }
-
-    pub const fn creator(self) -> &'a str {
-        self.creator
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ShelfRenderError {
+pub enum LibraryRenderError {
     WrongFrameSize { actual: Size },
-    CatalogLengthMismatch { state: usize, books: usize },
-    CoverSizeMismatch { actual: Size },
 }
 
-pub fn render_shelf(
-    state: LibraryState,
-    books: &[ShelfBook<'_>],
+pub fn render_library(
+    view: LibraryView<'_>,
     battery: BatteryStatus,
     target: &mut PackedImage<'_>,
-) -> Result<(), ShelfRenderError> {
+) -> Result<(), LibraryRenderError> {
     let expected =
         Size::new(FRAME_WIDTH, FRAME_HEIGHT).expect("the X4 frame has non-zero dimensions");
     if target.size() != expected {
-        return Err(ShelfRenderError::WrongFrameSize {
+        return Err(LibraryRenderError::WrongFrameSize {
             actual: target.size(),
         });
     }
-    if state.book_count() != books.len() {
-        return Err(ShelfRenderError::CatalogLengthMismatch {
-            state: state.book_count(),
-            books: books.len(),
-        });
-    }
-    for index in state.visible_range() {
-        if let Some(cover) = books[index].cover {
-            cover_scale(cover)?;
-        }
-    }
-
     target.clear_white();
-    let mut section = FixedText::<48>::new();
-    write!(
-        section,
-        "Books  {} item{}",
-        state.book_count(),
-        if state.book_count() == 1 { "" } else { "s" }
-    )
-    .ok();
     let mut display = FrameTarget::new(target);
-    if books.is_empty() {
+    let heading = view.scope_name().unwrap_or("Books");
+    if view.row_count() == 0 {
         ui!(
-            AppBar::new(section.as_str(), battery),
+            AppBar::new(heading, battery),
             Label::new("No books yet", TextRole::Heading).at(Point::new(120, 342)),
             Label::new("Add DRM-free EPUB files to /books", TextRole::Body)
                 .at(Point::new(120, 382)),
@@ -103,386 +56,177 @@ pub fn render_shelf(
         return Ok(());
     }
 
-    let page_start = state.visible_range().start;
-    let selected = state
-        .selected()
-        .expect("a non-empty library always has a selected book");
+    let mut counters: [FixedText<24>; LIBRARY_ROWS_PER_PAGE] =
+        core::array::from_fn(|_| FixedText::new());
+    for (slot, visible) in view.visible_rows().enumerate() {
+        if let LibraryRow::Series { volumes, .. } = visible.row {
+            write!(counters[slot], "{volumes} books").ok();
+        }
+    }
+    let mut row_views =
+        [BookListRow::new(Icon::Book, "", "", Selection::Idle); LIBRARY_ROWS_PER_PAGE];
+    let mut row_count = 0;
+    for (slot, visible) in view.visible_rows().enumerate() {
+        let (icon, primary, secondary) = match visible.row {
+            LibraryRow::Book { title, creator, .. } => (Icon::Book, title, creator),
+            LibraryRow::Series { name, .. } => (Icon::Folder, name, counters[slot].as_str()),
+        };
+        row_views[slot] = BookListRow::new(
+            icon,
+            primary,
+            secondary,
+            Selection::from_selected(visible.selected),
+        );
+        row_count += 1;
+    }
+    let rows = LinearLayout::vertical(Views::new(&mut row_views[..row_count]))
+        .with_spacing(FixedMargin(ROW_SPACING))
+        .arrange()
+        .translate(Point::new(CONTENT_LEFT, ROWS_TOP));
+
+    let start = view.page() * LIBRARY_ROWS_PER_PAGE;
+    let end = (start + LIBRARY_ROWS_PER_PAGE).min(view.row_count());
+    let mut footer = FixedText::<64>::new();
+    write!(footer, "{}-{} / {}", start + 1, end, view.row_count()).ok();
+    let commands = if view.scope_name().is_some() {
+        ["Back", "Open", "Previous", "Next"]
+    } else {
+        ["Home", "Open", "Previous", "Next"]
+    };
     ui!(
-        AppBar::new(section.as_str(), battery),
-        ShelfGrid::new(state, books),
-        ShelfFooter::new(books[selected.index()], state, page_start),
+        AppBar::new(heading, battery),
+        rows,
+        Label::new(footer.as_str(), TextRole::Metadata).at(Point::new(CONTENT_LEFT, COUNTER_TOP)),
+        CommandBar::new(commands),
     )
     .draw(&mut display)
     .ok();
     Ok(())
 }
 
-#[derive(Clone, Copy)]
-struct ShelfGrid<'a> {
-    state: LibraryState,
-    books: &'a [ShelfBook<'a>],
-    origin: Point,
-}
-
-impl<'a> ShelfGrid<'a> {
-    const fn new(state: LibraryState, books: &'a [ShelfBook<'a>]) -> Self {
-        Self {
-            state,
-            books,
-            origin: Point::zero(),
-        }
-    }
-}
-
-impl View for ShelfGrid<'_> {
-    fn translate_impl(&mut self, by: Point) {
-        self.origin += by;
-    }
-
-    fn bounds(&self) -> Rectangle {
-        Rectangle::new(
-            self.origin + Point::new(25, 68),
-            GraphicsSize::new(438, 565),
-        )
-    }
-}
-
-impl Drawable for ShelfGrid<'_> {
-    type Color = Gray8;
-    type Output = ();
-
-    fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
-    where
-        D: DrawTarget<Color = Self::Color>,
-    {
-        for (visible_index, book_index) in self.state.visible_range().enumerate() {
-            let tile = CoverTile::new(
-                self.origin
-                    + Point::new(
-                        COVER_LEFT[visible_index % 2] as i32,
-                        COVER_TOP[visible_index / 2] as i32,
-                    ),
-                self.books[book_index].cover,
-                Selection::from_selected(
-                    self.state
-                        .selected()
-                        .is_some_and(|selected| selected.index() == book_index),
-                ),
-            );
-            tile.draw(target)?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Copy)]
-struct CoverTile<'a> {
-    top_left: Point,
-    cover: Option<PackedBitmap<'a>>,
-    selection: Selection,
-}
-
-impl<'a> CoverTile<'a> {
-    const fn new(top_left: Point, cover: Option<PackedBitmap<'a>>, selection: Selection) -> Self {
-        Self {
-            top_left,
-            cover,
-            selection,
-        }
-    }
-}
-
-impl View for CoverTile<'_> {
-    fn translate_impl(&mut self, by: Point) {
-        self.top_left += by;
-    }
-
-    fn bounds(&self) -> Rectangle {
-        Rectangle::new(
-            self.top_left - Point::new(7, 7),
-            GraphicsSize::new((COVER_WIDTH + 14) as u32, (COVER_HEIGHT + 14) as u32),
-        )
-    }
-}
-
-impl Drawable for CoverTile<'_> {
-    type Color = Gray8;
-    type Output = ();
-
-    fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
-    where
-        D: DrawTarget<Color = Self::Color>,
-    {
-        match self.cover {
-            Some(cover) => {
-                let scale = if cover.size().width() == COVER_WIDTH {
-                    1
-                } else {
-                    2
-                };
-                target.draw_iter((0..COVER_HEIGHT).flat_map(|y| {
-                    (0..COVER_WIDTH).map(move |x| {
-                        Pixel(
-                            self.top_left + Point::new(x as i32, y as i32),
-                            Gray8::new(cover.luma(x / scale, y / scale)),
-                        )
-                    })
-                }))?;
-            }
-            None => {
-                Rectangle::new(
-                    self.top_left,
-                    GraphicsSize::new(COVER_WIDTH as u32, COVER_HEIGHT as u32),
-                )
-                .into_styled(PrimitiveStyle::with_stroke(Gray8::new(0), 1))
-                .draw(target)?;
-                Label::new("No cover", TextRole::Metadata)
-                    .at(self.top_left + Point::new(62, 127))
-                    .draw(target)?;
-            }
-        }
-        self.bounds()
-            .into_styled(PrimitiveStyle::with_stroke(
-                Gray8::new(0),
-                self.selection.stroke(1, 4),
-            ))
-            .draw(target)
-            .map(|_| ())
-    }
-}
-
-#[derive(Clone, Copy)]
-struct ShelfFooter<'a> {
-    book: ShelfBook<'a>,
-    state: LibraryState,
-    page_start: usize,
-    top_left: Point,
-}
-
-impl<'a> ShelfFooter<'a> {
-    const fn new(book: ShelfBook<'a>, state: LibraryState, page_start: usize) -> Self {
-        Self {
-            book,
-            state,
-            page_start,
-            top_left: Point::new(18, 650),
-        }
-    }
-}
-
-impl View for ShelfFooter<'_> {
-    fn translate_impl(&mut self, by: Point) {
-        self.top_left += by;
-    }
-
-    fn bounds(&self) -> Rectangle {
-        Rectangle::new(self.top_left, GraphicsSize::new(444, 128))
-    }
-}
-
-impl Drawable for ShelfFooter<'_> {
-    type Color = Gray8;
-    type Output = ();
-
-    fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
-    where
-        D: DrawTarget<Color = Self::Color>,
-    {
-        Rectangle::new(self.top_left, GraphicsSize::new(444, 2))
-            .into_styled(PrimitiveStyle::with_fill(Gray8::new(0)))
-            .draw(target)?;
-        let (first_line, second_line) = split_title(self.book.title, 444);
-        Label::new(first_line, TextRole::Heading)
-            .at(self.top_left + Point::new(0, 4))
-            .clipped_to(GraphicsSize::new(444, 42))
-            .draw(target)?;
-        if let Some(second_line) = second_line {
-            Label::new(second_line, TextRole::Heading)
-                .at(self.top_left + Point::new(0, 30))
-                .clipped_to(GraphicsSize::new(444, 34))
-                .draw(target)?;
-        }
-        Label::new(self.book.creator, TextRole::Metadata)
-            .at(self.top_left + Point::new(0, 59))
-            .clipped_to(GraphicsSize::new(340, 22))
-            .draw(target)?;
-
-        let mut page = FixedText::<48>::new();
-        let page_end = (self.page_start + 4).min(self.state.book_count());
-        write!(
-            page,
-            "{}-{} / {}",
-            self.page_start + 1,
-            page_end,
-            self.state.book_count()
-        )
-        .ok();
-        Label::new(page.as_str(), TextRole::Metadata)
-            .at(self.top_left
-                + Point::new(
-                    444 - crate::ui::text_width(TextRole::Metadata, page.as_str()) as i32,
-                    59,
-                ))
-            .draw(target)?;
-        CommandBar::new(["Home", "Read", "Left", "Right"]).draw(target)
-    }
-}
-
-fn cover_scale(cover: PackedBitmap<'_>) -> Result<usize, ShelfRenderError> {
-    let source = cover.size();
-    let full = Size::new(COVER_WIDTH, COVER_HEIGHT).unwrap();
-    if source == full {
-        return Ok(1);
-    }
-    if source.width().checked_mul(2) == Some(COVER_WIDTH)
-        && source.height().checked_mul(2) == Some(COVER_HEIGHT)
-    {
-        return Ok(2);
-    }
-    Err(ShelfRenderError::CoverSizeMismatch { actual: source })
-}
-
-fn split_title(title: &str, line_length: usize) -> (&str, Option<&str>) {
-    let mut width = 0;
-    let Some((cutoff, _)) = title.char_indices().find(|(_, character)| {
-        width += crate::ui::text_font(TextRole::Heading).character_width(*character);
-        width > line_length
-    }) else {
-        return (title, None);
-    };
-    let first = &title[..cutoff];
-    let split = first.rfind(char::is_whitespace).unwrap_or(cutoff);
-    let remainder = title[split..].trim_start();
-    (
-        &title[..split],
-        (!remainder.is_empty()).then_some(remainder),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     extern crate std;
 
-    use std::vec;
+    use std::{vec, vec::Vec};
 
     use crate::{
-        app::{Direction, LibraryState},
-        image::{PackedBitmap, PackedImage, Size},
+        app::{BookMeta, LibraryIndex, LibraryState, SeriesMeta, SeriesPosition},
+        image::{PackedImage, READER_DEPTH, Size},
+        input::UsbState,
+        power::BatteryStatus,
     };
 
-    use super::{ShelfBook, ShelfRenderError, render_shelf, split_title};
+    use super::{LIBRARY_ROWS_PER_PAGE, LibraryRenderError, render_library};
 
-    const FRAME_SIZE: usize = 480 * 800 / 8;
-    const COVER_SIZE: usize = 176 * 264 / 8;
+    const WIDTH: usize = 480;
+    const HEIGHT: usize = 800;
+
+    fn index(books: &[BookMeta<'_>]) -> LibraryIndex {
+        LibraryIndex::try_from(books).unwrap()
+    }
+
+    fn render(state: LibraryState, books: &[BookMeta<'_>]) -> Vec<u8> {
+        let size = Size::new(WIDTH, HEIGHT).unwrap();
+        let mut bytes = vec![0xFF; READER_DEPTH.byte_len(size).unwrap()];
+        let view = state.view(books).unwrap();
+        let mut image = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
+        render_library(
+            view,
+            BatteryStatus::from_percent(82, UsbState::Disconnected),
+            &mut image,
+        )
+        .unwrap();
+        bytes
+    }
 
     #[test]
-    fn shelf_renders_four_covers_and_selected_metadata() {
-        let black = vec![0; COVER_SIZE];
-        let white = vec![0xFF; COVER_SIZE];
-        let cover_size = Size::new(176, 264).unwrap();
-        let black_cover = PackedBitmap::monochrome(cover_size, &black).unwrap();
-        let white_cover = PackedBitmap::monochrome(cover_size, &white).unwrap();
+    fn folder_and_book_rows_render_their_icons_and_selection() {
         let books = [
-            ShelfBook::new("Selected title", "First author", Some(black_cover)),
-            ShelfBook::new("Second", "Second author", Some(white_cover)),
-            ShelfBook::new("Third", "Third author", None),
-            ShelfBook::new("Fourth", "Fourth author", Some(black_cover)),
+            BookMeta::new(
+                "Volume Two",
+                "An Author",
+                Some(SeriesMeta::new(
+                    "Collected Works",
+                    Some(SeriesPosition::new(2)),
+                )),
+            ),
+            BookMeta::new("Standalone", "Another Author", None),
+            BookMeta::new(
+                "Volume One",
+                "An Author",
+                Some(SeriesMeta::new(
+                    "Collected Works",
+                    Some(SeriesPosition::new(1)),
+                )),
+            ),
         ];
-        let mut bytes = vec![0; FRAME_SIZE];
-        let mut frame = PackedImage::monochrome(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+        let mut root = render(LibraryState::new(index(&books)), &books);
+        {
+            let image =
+                PackedImage::new(Size::new(WIDTH, HEIGHT).unwrap(), READER_DEPTH, &mut root)
+                    .unwrap();
+            assert!(image.bitmap().is_monochrome());
+            assert!(image.pixel_is_black(40, 109), "folder tab is missing");
+            assert!(image.pixel_is_black(240, 86), "folder row lost its outline");
+            for y in 86 + 31..86 + 33 {
+                for x in 450..452 {
+                    assert_eq!(
+                        image.luma(x, y),
+                        if x % 2 == 0 && y % 2 == 0 { 0 } else { 255 }
+                    );
+                }
+            }
+        }
 
-        render_shelf(
-            LibraryState::new(books.len()),
-            &books,
-            crate::power::BatteryStatus::default(),
-            &mut frame,
-        )
-        .unwrap();
+        let mut state = LibraryState::new(index(&books));
+        assert!(state.move_selection(crate::app::Direction::Down));
+        let book = render(state, &books);
+        assert_ne!(root, book);
+    }
 
-        assert!(frame.pixel_is_black(32, 75));
-        assert!(!frame.pixel_is_black(272, 75));
-        assert!(frame.pixel_is_black(25, 68));
-        assert!(frame.pixel_is_black(18, 650));
+    #[test]
+    fn the_second_page_renders_only_the_remaining_rows() {
+        let titles: [BookMeta; 9] = [
+            BookMeta::new("Book 1", "Author", None),
+            BookMeta::new("Book 2", "Author", None),
+            BookMeta::new("Book 3", "Author", None),
+            BookMeta::new("Book 4", "Author", None),
+            BookMeta::new("Book 5", "Author", None),
+            BookMeta::new("Book 6", "Author", None),
+            BookMeta::new("Book 7", "Author", None),
+            BookMeta::new("Book 8", "Author", None),
+            BookMeta::new("Book 9", "Author", None),
+        ];
+        assert_eq!(LIBRARY_ROWS_PER_PAGE, 8);
+        let mut state = LibraryState::new(index(&titles));
+        for _ in 0..8 {
+            state.move_selection(crate::app::Direction::Down);
+        }
+        assert_eq!(state.page(), 1);
+        let mut bytes = render(state, &titles);
+        let image =
+            PackedImage::new(Size::new(WIDTH, HEIGHT).unwrap(), READER_DEPTH, &mut bytes).unwrap();
+
+        assert!(image.pixel_is_black(36, 115), "first row icon is missing");
         assert!(
-            (670..712)
-                .flat_map(|y| (18..250).map(move |x| (x, y)))
-                .any(|(x, y)| frame.pixel_is_black(x, y))
+            !image.pixel_is_black(34, 181),
+            "an empty second row slot was drawn"
         );
     }
 
     #[test]
-    fn shelf_upscales_half_size_device_covers() {
-        let black = vec![0; 88 * 132 / 8];
-        let cover = PackedBitmap::monochrome(Size::new(88, 132).unwrap(), &black).unwrap();
-        let books = [ShelfBook::new("Book", "Author", Some(cover))];
-        let mut bytes = vec![0; FRAME_SIZE];
-        let mut frame = PackedImage::monochrome(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
-
-        render_shelf(
-            LibraryState::new(books.len()),
-            &books,
-            crate::power::BatteryStatus::default(),
-            &mut frame,
-        )
-        .unwrap();
-
-        assert!(frame.pixel_is_black(32, 75));
-        assert!(frame.pixel_is_black(207, 338));
-    }
-
-    #[test]
-    fn shelf_uses_the_page_containing_the_selection() {
-        let black = vec![0; COVER_SIZE];
-        let black_cover = PackedBitmap::monochrome(Size::new(176, 264).unwrap(), &black).unwrap();
-        let books = [ShelfBook::new("Book", "Author", Some(black_cover)); 5];
-        let mut state = LibraryState::new(books.len());
-        state.move_selection(Direction::Down);
-        state.move_selection(Direction::Down);
-        let mut bytes = vec![0; FRAME_SIZE];
-        let mut frame = PackedImage::monochrome(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
-
-        render_shelf(
-            state,
-            &books,
-            crate::power::BatteryStatus::default(),
-            &mut frame,
-        )
-        .unwrap();
-
-        assert!(frame.pixel_is_black(32, 75));
-        assert!(!frame.pixel_is_black(272, 200));
-    }
-
-    #[test]
-    fn long_titles_wrap_at_a_word_boundary() {
-        assert_eq!(
-            split_title(
-                "The Art of Doing Science and Engineering: Learning to Learn",
-                crate::ui::text_width(
-                    crate::ui::TextRole::Heading,
-                    "The Art of Doing Science and Engineering: "
-                ),
-            ),
-            (
-                "The Art of Doing Science and Engineering:",
-                Some("Learning to Learn"),
-            )
-        );
-    }
-
-    #[test]
-    fn renderer_rejects_state_from_a_different_catalog() {
-        let mut bytes = vec![0; FRAME_SIZE];
-        let mut frame = PackedImage::monochrome(Size::new(480, 800).unwrap(), &mut bytes).unwrap();
+    fn renderer_rejects_a_wrong_frame_size() {
+        let size = Size::new(240, 400).unwrap();
+        let mut bytes = vec![0xFF; READER_DEPTH.byte_len(size).unwrap()];
+        let mut image = PackedImage::new(size, READER_DEPTH, &mut bytes).unwrap();
+        let books = [BookMeta::new("Book", "Author", None)];
+        let state = LibraryState::new(index(&books));
+        let view = state.view(&books).unwrap();
 
         assert_eq!(
-            render_shelf(
-                LibraryState::new(1),
-                &[],
-                crate::power::BatteryStatus::default(),
-                &mut frame,
-            ),
-            Err(ShelfRenderError::CatalogLengthMismatch { state: 1, books: 0 })
+            render_library(view, BatteryStatus::unknown(), &mut image),
+            Err(LibraryRenderError::WrongFrameSize { actual: size })
         );
     }
 }

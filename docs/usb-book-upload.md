@@ -8,7 +8,7 @@ Install a reviewed reader build with book-upload support before transferring fil
    scripts/device-control.sh check-books ~/Books
    ```
 
-   This validates the EPUB archives and runs the device package parser and default chapter layout checks. Invalid archives stop the batch before any upload. Reader compatibility warnings do not stop a transfer. A book can copy successfully without being readable or appearing on the shelf. Cover decoding is not part of this check.
+   This validates the EPUB archives and runs the device package parser and default chapter layout checks. Invalid archives stop the batch before any upload. Reader compatibility warnings do not stop a transfer. A book can copy successfully without being readable or appearing in the Books list. Cover decoding is not part of this check.
 
 2. Wake the reader with its physical Power button and return to Home. Do not interrupt another process using the USB port.
 

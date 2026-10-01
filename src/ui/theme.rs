@@ -13,8 +13,10 @@ pub const CONTENT_LEFT: i32 = 18;
 pub const CONTENT_WIDTH: u32 = 444;
 pub const APP_BAR_RULE_Y: i32 = 58;
 pub const CONTENT_TOP: usize = 72;
-pub const FOOTER_RULE_Y: i32 = 730;
+pub const FOOTER_TOP_Y: i32 = 730;
 pub const FOOTER_TEXT_Y: i32 = 770;
+pub const FOOTER_BUTTON_WIDTH: u32 = 88;
+pub const FOOTER_BUTTON_HEIGHT: u32 = 80;
 pub const ROW_CORNERS: embedded_graphics::geometry::Size =
     embedded_graphics::geometry::Size::new(12, 12);
 pub const PANEL_CORNERS: embedded_graphics::geometry::Size =
