@@ -1,6 +1,18 @@
 # Brewthink checkpoint
 
-## Latest observed hardware, battery-wake restore, 2026-10-01
+## Latest observed hardware, title-derived series, 2026-10-01
+
+This supersedes the battery-wake installation below. Branch `daniel/title-series` carries the series folding. Revalidate live device/port/ownership before hardware work; this record is not a reservation or another flash authorization.
+
+- Installed reader: **643,008 bytes**, SHA-256 `d44fd7ea6e08e37d3a409fff4dd90a8a98eb6f1b7d3a04a94a6a97ffccbe3532`. App1 write `0x650000..0x6ECFBF`, affected sectors through `0x6ECFFF`.
+- The complete pre-write snapshot matched the main build. Exact readback, bytes outside the reviewed sectors, otadata and boot selection unchanged. No eFuse write. Private backup: `backup/x4-series-20261001T224739Z/` in `/Users/danielkumlin/.herdr/worktrees/brewthink/x4-series`.
+- The device received the main build (`ed000418…`, includes the Books list from PR #33) before this install. This image supersedes it.
+- Library now holds nine books. Four uploaded Re:ZERO volumes (26 to 29) that declare no series metadata group into one `Re:ZERO -Starting Life in Another World` folder, ordered 26, 27, 28, 29 from their title volume numbers. Row 0 opened the Vol. 26 cover with the `26` badge; row 3 opened catalog book 8 (Vol. 29).
+- Known content issue: Vol. 29's cover image fails to decode (`InvalidImage`), so its cover falls back to the reader's first page. The other three volumes render their covers. This is the existing unsupported-image limitation, not the series change.
+- `scripts/check.sh all` passed on the shipped revision. The image passed the reader stack check, `PASS_LIMITED`.
+- Final state: awake in the reader on Vol. 29's first page, USB connected, battery about 96%. `/tmp/brewthink-x4-501.lock` remains in place.
+
+## Historical hardware, battery-wake restore, 2026-10-01
 
 This supersedes the streamed-chapters installation below. Branch `daniel/wake-resume` opens [PR #34](https://github.com/RestartDK/brewthink/pull/34). Revalidate live device/port/ownership before hardware work; this record is not a reservation or another flash authorization.
 

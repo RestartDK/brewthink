@@ -137,6 +137,13 @@ impl SeriesMetadata {
         })
     }
 
+    /// Reads a series from a title that ends in a volume designator such as
+    /// `Vol. 26`. Used only when the book declares no series of its own.
+    pub fn from_title(title: &str) -> Option<Self> {
+        let (name, position) = split_title_series(title)?;
+        Self::new(name, Some(position))
+    }
+
     pub fn name(&self) -> &str {
         self.name.as_str()
     }
@@ -148,6 +155,68 @@ impl SeriesMetadata {
     pub fn as_meta(&self) -> SeriesMeta<'_> {
         SeriesMeta::new(self.name(), self.position)
     }
+}
+
+const TITLE_SERIES_MARKERS: [&str; 6] = ["volume", "vol.", "vol", "book", "part", "ln"];
+
+fn split_title_series(title: &str) -> Option<(&str, SeriesPosition)> {
+    let title = title.trim_end();
+    for start in (0..title.len())
+        .rev()
+        .filter(|&index| title.is_char_boundary(index))
+    {
+        let Some((marker_length, needs_separator)) = title_marker(&title[start..]) else {
+            continue;
+        };
+        if needs_separator
+            && !title[..start]
+                .chars()
+                .next_back()
+                .is_some_and(is_series_separator)
+        {
+            continue;
+        }
+        let Some(position) = title_position(&title[start + marker_length..]) else {
+            continue;
+        };
+        let name = title[..start].trim_end_matches(is_series_separator);
+        if name.is_empty() {
+            continue;
+        }
+        return Some((name, position));
+    }
+    None
+}
+
+fn title_marker(text: &str) -> Option<(usize, bool)> {
+    for marker in TITLE_SERIES_MARKERS {
+        if text.len() >= marker.len()
+            && text.as_bytes()[..marker.len()].eq_ignore_ascii_case(marker.as_bytes())
+        {
+            return Some((marker.len(), true));
+        }
+    }
+    text.starts_with('#').then_some((1, false))
+}
+
+fn title_position(text: &str) -> Option<SeriesPosition> {
+    let text = text.trim_start();
+    let text = text.strip_prefix('.').unwrap_or(text).trim_start();
+    let digits_end = text
+        .find(|character: char| !character.is_ascii_digit())
+        .unwrap_or(text.len());
+    let digits = text.get(..digits_end)?;
+    if digits.is_empty() {
+        return None;
+    }
+    let trailing = text.get(digits_end..)?.trim_end_matches(|character: char| {
+        character == '.' || character == ')' || character == ']' || character.is_whitespace()
+    });
+    trailing.is_empty().then(|| SeriesPosition::parse(digits))?
+}
+
+fn is_series_separator(character: char) -> bool {
+    character.is_whitespace() || matches!(character, ',' | ';' | ':' | '-' | '.' | '(')
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1321,5 +1390,39 @@ mod tests {
         )
         .unwrap();
         assert_eq!(publication.series(), "");
+    }
+
+    #[test]
+    fn title_derived_series_reads_volume_suffixes_and_rejects_other_titles() {
+        use super::SeriesMetadata;
+
+        for (title, expected) in [
+            (
+                "Re:ZERO -Starting Life in Another World-, Vol. 26",
+                Some(("Re:ZERO -Starting Life in Another World", Some(26))),
+            ),
+            ("Some Series, Volume 3", Some(("Some Series", Some(3)))),
+            ("Some Series Vol 4.", Some(("Some Series", Some(4)))),
+            ("Some Series Book 12", Some(("Some Series", Some(12)))),
+            ("Some Series #7", Some(("Some Series", Some(7)))),
+            ("Some Series LN 01", Some(("Some Series", Some(1)))),
+            ("Some Series Part 2 (unabridged)", None),
+            ("Designing Data-Intensive Applications", None),
+            (
+                "The Art of Doing Science and Engineering: Learning to Learn",
+                None,
+            ),
+            ("The Book Thief", None),
+            ("Catch-22", None),
+            ("Volume 3", None),
+            ("Some Series Vol.", None),
+            ("Some Series Vol. Two", None),
+        ] {
+            let derived = SeriesMetadata::from_title(title);
+            let actual = derived
+                .as_ref()
+                .map(|series| (series.name(), series.position().map(SeriesPosition::value)));
+            assert_eq!(actual, expected, "{title}");
+        }
     }
 }

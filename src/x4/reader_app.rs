@@ -1325,13 +1325,15 @@ fn load_library(
         let Ok(spine_count) = u8::try_from(publication.spine_len()) else {
             continue;
         };
+        let series = SeriesMetadata::from_publication(publication)
+            .or_else(|| SeriesMetadata::from_title(title.as_str()));
         let index = library.length;
         let book_id = BookId::new(index);
         library.cache_spine_paths(book_id, publication);
         library.files[index] = Some(file);
         library.titles[index] = title;
         library.creators[index] = creator;
-        library.series[index] = SeriesMetadata::from_publication(publication);
+        library.series[index] = series;
         library.cover_paths[index] = cover_path;
         library.spine_counts[index] = spine_count;
         library.length += 1;
