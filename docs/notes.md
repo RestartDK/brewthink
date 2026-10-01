@@ -291,6 +291,8 @@ Approximate raw 12-bit ADC values reported by the community sample:
 
 These values are calibration starting points, not universal constants. Firmware should use ranges, debouncing, and measurements from this physical unit.
 
+Deep sleep differs by power source. On USB power the processor stays powered and the GPIO3 RTC-IO wake reboots it with RTC memory intact. On battery the power-path latch on GPIO13 releases the processor supply during deep sleep, so the MCU powers off completely, RTC memory included. The Power button then cold-boots the firmware, which has no retained resume record. Measured on this unit: after a battery-powered sleep the retained RTC record read back as zeros and the armed 20 s diagnostic timer wake never fired; reconnecting USB produced a fresh power-on boot.
+
 ### Verified stock X4 partition layout
 
 The following table was decoded from the partition-table sector at `0x8000` in this physical device's complete stock dump. Its stored partition-table MD5 exactly matches the calculated MD5. It also matches the previously documented community layout, so these values are now verified rather than provisional.

@@ -58,7 +58,9 @@ use crate::{
     reader::{ReaderLine, ReaderStyle, ReaderView},
     settings::CustomImagePreview,
     sleep::SleepView,
-    storage::{BookCatalog, BookFile, FatStorage, ImageFile, ReadOnlySdCard},
+    storage::{
+        BookCatalog, BookFile, FatStorage, ImageFile, ReadOnlySdCard, book_resume::SavedResume,
+    },
     transfer::{FileTransfer, UploadRequest, UploadTarget},
     ui::{AppFrame, render_app},
     x4::{X4FatBlockDevice, X4InputHardware, X4StorageHardware, decode_buttons},
@@ -435,7 +437,7 @@ mod retained_resume {
             resume: ResumePoint,
             preferences: AppPreferences,
             library: &DeviceLibrary,
-        ) -> LPWR<'static> {
+        ) -> (LPWR<'static>, [u32; RESUME_WORDS]) {
             let words =
                 match SavedResume::capture(resume, preferences, &library.files[..library.length]) {
                     Ok(saved) => saved.encode(),
@@ -445,7 +447,7 @@ mod retained_resume {
                     }
                 };
             unsafe { core::ptr::write_volatile(&raw mut RETAINED_RESUME, words) };
-            self.low_power
+            (self.low_power, words)
         }
     }
 }
@@ -584,12 +586,15 @@ pub async fn reader_app_task(
         panel.display.previous_frame_storage().name(),
         panel.refresh_policy.mode().name()
     );
-    let retained = rtc_resume.read_resume(library).unwrap_or(RetainedApp {
-        resume: ResumePoint::Home {
-            selected: HomeItem::Books,
-        },
-        preferences: AppPreferences::default(),
-    });
+    let retained = rtc_resume
+        .read_resume(library)
+        .or_else(|| stored_resume(store, library))
+        .unwrap_or(RetainedApp {
+            resume: ResumePoint::Home {
+                selected: HomeItem::Books,
+            },
+            preferences: AppPreferences::default(),
+        });
     let preferences = match store.app_data().read_preferences() {
         Ok(Some(preferences)) => preferences,
         Ok(None) => retained.preferences,
@@ -1182,6 +1187,46 @@ fn write_control_screen(frame: &[u8; FRAME_BYTES]) {
     );
     esp_println::Printer::write_bytes(frame);
     esp_println::Printer::write_bytes(b"\n");
+}
+
+fn stored_resume(store: &DeviceStore, library: &DeviceLibrary) -> Option<RetainedApp> {
+    let words = match store.app_data().read_last_resume() {
+        Ok(Some(words)) => words,
+        Ok(None) => return None,
+        Err(error) => {
+            info!(
+                "stored reader resume unavailable: {}",
+                defmt::Debug2Format(&error)
+            );
+            return None;
+        }
+    };
+    let saved = match SavedResume::decode(&words) {
+        Ok(saved) => saved,
+        Err(error) => {
+            info!(
+                "stored reader resume invalid: {}",
+                defmt::Debug2Format(&error)
+            );
+            return None;
+        }
+    };
+    let resume = saved
+        .resolve(&library.files[..library.length])
+        .unwrap_or_else(|error| {
+            info!(
+                "stored reader resume not found: {}",
+                defmt::Debug2Format(&error)
+            );
+            ResumePoint::Home {
+                selected: HomeItem::Books,
+            }
+        });
+    esp_println::println!("BREWCTL/1 LOG stage=resume state=stored-fallback");
+    Some(RetainedApp {
+        resume,
+        preferences: saved.preferences(),
+    })
 }
 
 fn load_library(
@@ -2261,7 +2306,14 @@ async fn enter_sleep(
     panel: ReaderDisplay,
     rtc_resume: RtcResume,
 ) -> ! {
-    let low_power = rtc_resume.write_resume(resume, preferences, library);
+    let (low_power, words) = rtc_resume.write_resume(resume, preferences, library);
+    if let Err(error) = store.app_data().write_last_resume(words) {
+        esp_println::println!("BREWCTL/1 ERROR command=resume-backup reason=storage");
+        info!(
+            "stored reader resume not saved: {}",
+            defmt::Debug2Format(&error)
+        );
+    }
     let sleep_result = store.with_device(move |device| {
         device.with_hardware(move |hardware| {
             let mut bus = hardware

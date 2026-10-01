@@ -4,6 +4,7 @@ use core::{fmt, ops::ControlFlow};
 use crate::{
     app::AppPreferences,
     image_decoder::ImageFormat,
+    storage::book_resume::{RESUME_WORDS, SavedResume},
     transfer::{ImageName, MAX_IMAGE_BYTES, UploadRequest, UploadSink, UploadTarget},
 };
 #[cfg(feature = "device-reader")]
@@ -734,6 +735,60 @@ where
         )
     }
 
+    pub fn read_last_resume(&self) -> Result<Option<[u32; RESUME_WORDS]>, AppDataError<D::Error>> {
+        self.read_records(
+            &[AppDataFile::LastResume, AppDataFile::LastResumeBackup],
+            decode_last_resume,
+        )
+    }
+
+    pub fn write_last_resume(
+        &self,
+        words: [u32; RESUME_WORDS],
+    ) -> Result<(), AppDataError<D::Error>> {
+        match self.read_last_resume() {
+            Ok(Some(stored)) if stored == words => return Ok(()),
+            Ok(_) => {}
+            Err(AppDataError::InvalidMetadata) => {}
+            Err(error) => return Err(error),
+        }
+        let bytes = encode_last_resume(words);
+        self.write_file(AppDataFile::LastResumeTemp, &bytes)?;
+        let mut readback = [0; LAST_RESUME_BYTES];
+        if self.read_file(AppDataFile::LastResumeTemp, &mut readback)? != bytes.len()
+            || readback != bytes
+        {
+            return Err(AppDataError::IncompleteWrite);
+        }
+        let previous = match self.read_records(&[AppDataFile::LastResume], decode_last_resume) {
+            Ok(previous) => previous,
+            Err(AppDataError::InvalidMetadata) => None,
+            Err(error) => return Err(error),
+        };
+        if let Some(previous) = previous {
+            self.copy_file(
+                AppDataFile::LastResume,
+                AppDataFile::LastResumeBackup,
+                &mut [0; 32],
+            )?;
+            if self.read_records(&[AppDataFile::LastResumeBackup], decode_last_resume)?
+                != Some(previous)
+            {
+                return Err(AppDataError::IncompleteWrite);
+            }
+        }
+        self.delete_if_present(AppDataFile::LastResume)?;
+        self.copy_file(
+            AppDataFile::LastResumeTemp,
+            AppDataFile::LastResume,
+            &mut [0; 32],
+        )?;
+        if self.read_records(&[AppDataFile::LastResume], decode_last_resume)? != Some(words) {
+            return Err(AppDataError::IncompleteWrite);
+        }
+        self.delete_if_present(AppDataFile::LastResumeTemp)
+    }
+
     pub fn write_preferences(
         &self,
         preferences: AppPreferences,
@@ -1182,6 +1237,9 @@ enum AppDataFile {
     ImageSelection,
     ImageSelectionTemp,
     ImageSelectionBackup,
+    LastResume,
+    LastResumeTemp,
+    LastResumeBackup,
     UploadTemp,
     UploadTransaction,
 }
@@ -1196,6 +1254,9 @@ impl AppDataFile {
             Self::ImageSelection => "SELECT.BIN",
             Self::ImageSelectionTemp => "SELECT.TMP",
             Self::ImageSelectionBackup => "SELECT.BAK",
+            Self::LastResume => "LAST.BIN",
+            Self::LastResumeTemp => "LAST.TMP",
+            Self::LastResumeBackup => "LAST.BAK",
             Self::UploadTemp => "UPLOAD.TMP",
             Self::UploadTransaction => "UPLOAD.TXN",
         }
@@ -1208,6 +1269,8 @@ const PREFS_MAGIC: u32 = 0x4254_5031;
 const IMAGE_SELECTION_MAGIC: u32 = 0x4254_5331;
 #[cfg(feature = "device-reader")]
 const IMAGE_SELECTION_BYTES: usize = 20;
+#[cfg(feature = "device-reader")]
+const LAST_RESUME_BYTES: usize = RESUME_WORDS * 4;
 #[cfg(feature = "device-reader")]
 const UPLOAD_MAGIC: u32 = 0x4254_5531;
 #[cfg(feature = "device-reader")]
@@ -1222,6 +1285,25 @@ fn decode_preferences(bytes: [u8; 12]) -> Option<AppPreferences> {
         return None;
     }
     AppPreferences::from_packed(packed)
+}
+
+#[cfg(feature = "device-reader")]
+fn encode_last_resume(words: [u32; RESUME_WORDS]) -> [u8; LAST_RESUME_BYTES] {
+    let mut bytes = [0; LAST_RESUME_BYTES];
+    for (index, word) in words.iter().enumerate() {
+        bytes[index * 4..index * 4 + 4].copy_from_slice(&word.to_le_bytes());
+    }
+    bytes
+}
+
+#[cfg(feature = "device-reader")]
+fn decode_last_resume(bytes: [u8; LAST_RESUME_BYTES]) -> Option<[u32; RESUME_WORDS]> {
+    let mut words = [0; RESUME_WORDS];
+    for (index, word) in words.iter_mut().enumerate() {
+        *word = u32::from_le_bytes(bytes[index * 4..index * 4 + 4].try_into().ok()?);
+    }
+    SavedResume::decode(&words).ok()?;
+    Some(words)
 }
 
 #[cfg(feature = "device-reader")]
