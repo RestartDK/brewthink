@@ -17,9 +17,10 @@ use crate::{
 };
 
 use super::{
-    APP_BAR_RULE_Y, CHROME_INK, CONTENT_LEFT, CONTENT_WIDTH, FOOTER_RULE_Y, FOOTER_TEXT_Y,
-    FRAME_WIDTH, FRONT_BUTTON_CENTERS, FixedText, Icon, SELECTION_BACKGROUND, SELECTION_FOREGROUND,
-    SELECTION_OUTLINE, TextRole, text_font, text_width,
+    APP_BAR_RULE_Y, CHROME_INK, CONTENT_LEFT, CONTENT_WIDTH, FOOTER_BUTTON_HEIGHT,
+    FOOTER_BUTTON_WIDTH, FOOTER_TEXT_Y, FOOTER_TOP_Y, FRAME_WIDTH, FRONT_BUTTON_CENTERS, FixedText,
+    Icon, SELECTION_BACKGROUND, SELECTION_FOREGROUND, SELECTION_OUTLINE, TextRole, text_font,
+    text_width,
 };
 
 const POWER_SYMBOL_X: i32 = 386;
@@ -197,7 +198,7 @@ pub struct CommandBar<'a> {
     actions: [&'a str; 4],
     left: i32,
     width: u32,
-    rule_y: i32,
+    top: i32,
     text_y: i32,
 }
 
@@ -207,7 +208,7 @@ impl<'a> CommandBar<'a> {
             actions,
             left: CONTENT_LEFT,
             width: CONTENT_WIDTH,
-            rule_y: FOOTER_RULE_Y,
+            top: FOOTER_TOP_Y,
             text_y: FOOTER_TEXT_Y,
         }
     }
@@ -216,14 +217,14 @@ impl<'a> CommandBar<'a> {
 impl View for CommandBar<'_> {
     fn translate_impl(&mut self, by: Point) {
         self.left += by.x;
-        self.rule_y += by.y;
+        self.top += by.y;
         self.text_y += by.y;
     }
 
     fn bounds(&self) -> Rectangle {
         Rectangle::new(
-            Point::new(self.left, self.rule_y),
-            Size::new(self.width, (self.text_y - self.rule_y + 10) as u32),
+            Point::new(self.left, self.top),
+            Size::new(self.width, FOOTER_BUTTON_HEIGHT),
         )
     }
 }
@@ -236,9 +237,6 @@ impl Drawable for CommandBar<'_> {
     where
         D: DrawTarget<Color = Self::Color>,
     {
-        Rectangle::new(Point::new(self.left, self.rule_y), Size::new(self.width, 1))
-            .into_styled(PrimitiveStyle::with_fill(Gray8::new(0)))
-            .draw(target)?;
         let [back, confirm, left, right] = self.actions;
         let buttons = [
             (Icon::Left, left),
@@ -248,13 +246,24 @@ impl Drawable for CommandBar<'_> {
         ];
         for ((icon, action), center) in buttons.into_iter().zip(FRONT_BUTTON_CENTERS) {
             let center = center + self.left - CONTENT_LEFT;
-            icon.draw(target, Point::new(center - 12, self.rule_y + 8), CHROME_INK)?;
+            if !action.is_empty() {
+                RoundedRectangle::with_equal_corners(
+                    Rectangle::new(
+                        Point::new(center - FOOTER_BUTTON_WIDTH as i32 / 2, self.top),
+                        Size::new(FOOTER_BUTTON_WIDTH, FOOTER_BUTTON_HEIGHT),
+                    ),
+                    super::ROW_CORNERS,
+                )
+                .into_styled(PrimitiveStyle::with_stroke(Gray8::new(0), 1))
+                .draw(target)?;
+            }
+            icon.draw(target, Point::new(center - 12, self.top + 8), CHROME_INK)?;
             Label::new(action, TextRole::CommandHint)
                 .at(Point::new(
                     center - text_width(TextRole::CommandHint, action) as i32 / 2,
                     self.text_y,
                 ))
-                .clipped_to(Size::new(92, 22))
+                .clipped_to(Size::new(84, 22))
                 .draw(target)?;
         }
         Ok(())
