@@ -9,6 +9,7 @@ const authoredFixtures = new Map([
   ["inline-images", { title: "Streaming illustrations", chapters: 2 }],
   ["streamed-chapters", { title: "Streamed chapters", chapters: 3 }],
 ]);
+const folderFixtures = new Set(["series"]);
 const headings = {
   reader: "EPUB reader",
   "reader-drawer": "Reading controls",
@@ -71,7 +72,7 @@ async function ready(page: Page): Promise<void> {
   await expect(module).toHaveAttribute("src", /^\/assets\/.+\.js$/);
 }
 
-async function loadShelf(page: Page, fixture: string): Promise<void> {
+async function loadBooks(page: Page, fixture: string): Promise<void> {
   await ready(page);
   const authored = authoredFixtures.get(fixture);
   const file = authored === undefined ? path.join(artifacts, "fixtures", `${fixture}.epub`) : path.resolve(`tests/fixtures/${fixture}.epub`);
@@ -80,11 +81,13 @@ async function loadShelf(page: Page, fixture: string): Promise<void> {
   await expect(page.locator("#display-placeholder")).toBeHidden();
   await page.locator(".device-viewport").focus();
   await page.keyboard.press("Enter");
-  await expect(page.locator("#selected-title")).toHaveText(authored?.title ?? "Parity &amp; literal");
+  await expect(page.locator("#selected-title")).toHaveText(
+    folderFixtures.has(fixture) ? "Sherlock Holmes" : authored?.title ?? "Parity &amp; literal",
+  );
 }
 
 async function openReader(page: Page, fixture: string, hasCover: boolean): Promise<void> {
-  await loadShelf(page, fixture);
+  await loadBooks(page, fixture);
   await page.keyboard.press("Enter");
   if (hasCover) {
     await expect(page.locator("#preview-heading")).toContainText("Book cover");
@@ -133,7 +136,7 @@ for (const { fixture, variant } of paginationCases) {
 
 for (const fixture of ["text", "jpeg", "frame-limit", "shelf-limit", "oversized-cover", "compressed-oversized-cover"]) {
   test(`${fixture} keeps native original-resolution opening and sleep pixels`, async ({ page }) => {
-    await loadShelf(page, fixture);
+    await loadBooks(page, fixture);
     await page.keyboard.press("Enter");
     await expect(page.locator("#preview-heading")).toContainText("Book cover");
     await expectFrame(page, fixture, `opening-${defaultPreferences}`);
@@ -205,12 +208,12 @@ for (const fixture of ["text", "malformed-nav", "oversized-chapter", "streamed-c
 }
 
 for (const fixture of ["shelf-only-cover"]) {
-  test(`${fixture} now retains the original cover for opening and sleep`, async ({ page }) => {
-    await loadShelf(page, "text");
-    const shelf = await packedFrame(page);
-    await loadShelf(page, fixture);
-    expect(await packedFrame(page)).toEqual(shelf);
-    await captureFrame(page, path.join(artifacts, `${fixture}-shelf.png`));
+  test(`${fixture} keeps the list frame and retains the original cover for opening and sleep`, async ({ page }) => {
+    await loadBooks(page, "text");
+    const list = await packedFrame(page);
+    await loadBooks(page, fixture);
+    expect(await packedFrame(page)).toEqual(list);
+    await captureFrame(page, path.join(artifacts, `${fixture}-list.png`));
     await page.keyboard.press("Enter");
     await expect(page.locator("#preview-heading")).toContainText("Book cover");
     await expectFrame(page, fixture, `opening-${defaultPreferences}`);
@@ -221,6 +224,21 @@ for (const fixture of ["shelf-only-cover"]) {
     expect(await packedFrame(page)).toEqual(opening);
   });
 }
+
+test("series metadata groups its volumes into a folder row", async ({ page }) => {
+  await loadBooks(page, "series");
+  await expect(page.locator("#selected-title")).toHaveText("Sherlock Holmes");
+  await expect(page.locator("#selected-creator")).toHaveText("2 books");
+  await captureFrame(page, path.join(artifacts, "series-list.png"));
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#selected-title")).toHaveText("Parity &amp; literal");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator("#selected-title")).toHaveText("The Sign of the Four");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#selected-title")).toHaveText("Sherlock Holmes");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#selected-title")).toHaveText("Parity &amp; literal");
+});
 
 for (const { fixture, reason } of [
   { fixture: "malformed", reason: "Malformed" },

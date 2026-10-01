@@ -42,21 +42,23 @@ test("runs the complete library, reader, sleep, wake, and resume loop", async ({
   await expect(page.locator("#display")).toHaveAttribute("height", "800");
 
   await page.keyboard.press("Enter");
-  await expect(page.locator("#selected-title")).toHaveText("A Study in Scarlet");
-  await page.getByRole("button", { name: "Move right" }).click();
+  await expect(page.locator("#preview-heading")).toHaveText("Books list · 480 × 800");
+  await expect(page.locator("#selected-title")).toHaveText("Sherlock Holmes");
+  await expect(page.locator("#selected-creator")).toHaveText("2 books");
+  await page.keyboard.press("ArrowDown");
   await expect(page.locator("#selected-title")).toHaveText("Pride and Prejudice");
   await page.keyboard.press("ArrowDown");
-  await expect(page.locator("#selected-title")).toHaveText("Frankenstein");
-  await expect(page.locator("#selection-position")).toHaveText("4 / 4");
+  await expect(page.locator("#selected-title")).toHaveText("Walden");
+  await expect(page.locator("#selection-position")).toHaveText("3 / 4");
 
   await page.keyboard.press("Enter");
   await continueFromCover(page);
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
   await expect(page.locator("#selection-position")).toHaveText("Chapter 1 / 3");
-  await expect(page.locator("#view-position")).toHaveText("1 / 8");
+  await expect(page.locator("#view-position")).toHaveText("1 / 7");
 
   await page.keyboard.press("ArrowRight");
-  await expect(page.locator("#view-position")).toHaveText("2 / 8");
+  await expect(page.locator("#view-position")).toHaveText("2 / 7");
   await page.keyboard.press("p");
   await expect(page.locator("#preview-heading")).toHaveText(
     "Retained sleep screen · 480 × 800",
@@ -66,10 +68,10 @@ test("runs the complete library, reader, sleep, wake, and resume loop", async ({
 
   await page.getByRole("button", { name: "Wake", exact: true }).click();
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
-  await expect(page.locator("#view-position")).toHaveText("2 / 8");
+  await expect(page.locator("#view-position")).toHaveText("2 / 7");
   await page.keyboard.press("Escape");
-  await expect(page.locator("#preview-heading")).toHaveText("Library shelf · 480 × 800");
-  await expect(page.locator("#selected-title")).toHaveText("Frankenstein");
+  await expect(page.locator("#preview-heading")).toHaveText("Books list · 480 × 800");
+  await expect(page.locator("#selected-title")).toHaveText("Walden");
   await page.keyboard.press("Escape");
   await expect(page.locator("#preview-heading")).toHaveText("Home menu · 480 × 800");
 
@@ -84,7 +86,10 @@ test("keeps a separate reading position for each book", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("#display-placeholder")).toBeHidden();
   await page.keyboard.press("Enter");
-  await expect(page.locator("#preview-heading")).toHaveText("Library shelf · 480 × 800");
+  await expect(page.locator("#preview-heading")).toHaveText("Books list · 480 × 800");
+  await expect(page.locator("#selected-title")).toHaveText("Sherlock Holmes");
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#selected-title")).toHaveText("A Study in Scarlet");
   await page.keyboard.press("Enter");
   await continueFromCover(page);
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
@@ -93,9 +98,9 @@ test("keeps a separate reading position for each book", async ({ page }) => {
   await expect(page.locator("#view-position")).toHaveText("2 / 8");
 
   await page.keyboard.press("Escape");
-  await expect(page.locator("#preview-heading")).toHaveText("Library shelf · 480 × 800");
+  await expect(page.locator("#preview-heading")).toHaveText("Books list · 480 × 800");
   await page.keyboard.press("ArrowRight");
-  await expect(page.locator("#selected-title")).toHaveText("Pride and Prejudice");
+  await expect(page.locator("#selected-title")).toHaveText("The Sign of the Four");
   await page.keyboard.press("Enter");
   await continueFromCover(page);
   await expect(page.locator("#view-position")).toHaveText("1 / 8");
@@ -108,6 +113,12 @@ test("keeps a separate reading position for each book", async ({ page }) => {
   await page.keyboard.press("Enter");
   await expect(page.locator("#preview-heading")).toHaveText("EPUB reader · 480 × 800");
   await expect(page.locator("#view-position")).toHaveText("2 / 8");
+
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#selected-title")).toHaveText("Sherlock Holmes");
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator("#selected-title")).toHaveText("Pride and Prejudice");
 });
 
 test("parses an EPUB, renders its cover, and opens its spine text", async ({ page }) => {
@@ -128,7 +139,7 @@ test("parses an EPUB, renders its cover, and opens its spine text", async ({ pag
     );
     await expect(page.locator("#selected-creator")).toHaveText("Richard W. Hamming");
   }
-  await expect(page.locator("#selection-position")).toHaveText("1 / 4");
+  await expect(page.locator("#selection-position")).toHaveText("1 / 5");
   await expect(page.locator("#view-position")).toHaveText("1 / 1");
   await expect(page.locator("#reset-library")).toBeEnabled();
 
@@ -163,7 +174,7 @@ test("opens and selects images from Files", async ({ page }) => {
 
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
-  for (let index = 0; index < 5; index += 1) {
+  for (let index = 0; index < 6; index += 1) {
     await page.keyboard.press("ArrowDown");
   }
   await expect(page.locator("#selected-title")).toHaveText("AYA.JPG");
@@ -216,7 +227,7 @@ test("preserves every grayscale tone in images, covers, and sleep", async ({ pag
   await expect(page.locator("#file-summary")).toHaveText("gray-cover.epub");
   await expect(page.locator("#preview-heading")).toHaveText("Home menu · 480 × 800");
   await page.keyboard.press("Enter");
-  await expect(page.locator("#preview-heading")).toHaveText("Library shelf · 480 × 800");
+  await expect(page.locator("#preview-heading")).toHaveText("Books list · 480 × 800");
   expect(await palette()).toEqual([0, 255]);
   await page.keyboard.press("Enter");
   await expect(page.locator("#preview-heading")).toHaveText("Book cover · 480 × 800");
@@ -238,6 +249,7 @@ test("uses custom sleep away from reading and a cover inside the reader", async 
   await expect(page.locator("#selected-title")).toHaveText("ANOTHE.JPG");
   await page.keyboard.press("p");
 
+  await page.keyboard.press("Enter");
   await page.keyboard.press("Enter");
   await page.keyboard.press("Enter");
   await continueFromCover(page);

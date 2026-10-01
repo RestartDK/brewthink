@@ -7,13 +7,12 @@ use images::BookImages;
 use pages::Pages;
 
 use crate::{
-    app::ReaderPreferences,
+    app::{ReaderPreferences, SeriesPosition},
     bounded_layout::{BoundedPage, LayoutError},
     bounded_xml::FixedString,
-    cover::{self, COVER_BYTES},
     device_epub::{
         DeviceEpub, DeviceEpubError, DevicePackageScratch, DevicePublication,
-        MAX_DEVICE_RESOURCE_BYTES, MAX_DEVICE_SPINE_ITEMS,
+        MAX_DEVICE_RESOURCE_BYTES, MAX_DEVICE_SPINE_ITEMS, SeriesMetadata,
     },
     image::{
         Dither, PackedBitmap, PackedImage, READER_DEPTH, RenderOptions, RgbImage, ScaleMode, Size,
@@ -97,6 +96,7 @@ pub struct Book {
     pub file_size: u32,
     pub title: String,
     pub creator: String,
+    pub series: Option<SeriesMetadata>,
     pub cover: Cover,
     pub chapters: Vec<Chapter>,
     pub navigation_error: Option<DeviceEpubError<Infallible>>,
@@ -151,6 +151,7 @@ impl Book {
             file_size: reader.length,
             title: publication.title().into(),
             creator: publication.creator().into(),
+            series: SeriesMetadata::from_publication(publication),
             cover,
             chapters,
             navigation_error,
@@ -240,40 +241,14 @@ pub enum Cover {
     TooLarge,
     Unsupported,
     Failed(SimulatorError),
-    Decoded {
-        shelf: Box<[u8; COVER_BYTES]>,
-        original: OriginalFrame,
-    },
-}
-
-pub enum OriginalFrame {
-    TooLarge,
-    Failed(ImageDecodeError),
     Decoded(Box<[u8; FRAME_BYTES]>),
 }
 
 impl Cover {
-    pub fn bitmap(&self) -> Option<PackedBitmap<'_>> {
-        match self {
-            Self::Decoded { shelf, .. } => Some(cover::bitmap(shelf)),
-            Self::Missing | Self::TooLarge | Self::Unsupported | Self::Failed(_) => None,
-        }
-    }
-
     pub fn frame_bitmap(&self) -> Option<PackedBitmap<'_>> {
         match self {
-            Self::Decoded {
-                original: OriginalFrame::Decoded(frame),
-                ..
-            } => Some(frame_bitmap(frame)),
-            Self::Decoded {
-                original: OriginalFrame::TooLarge | OriginalFrame::Failed(_),
-                ..
-            }
-            | Self::Missing
-            | Self::TooLarge
-            | Self::Unsupported
-            | Self::Failed(_) => None,
+            Self::Decoded(frame) => Some(frame_bitmap(frame)),
+            Self::Missing | Self::TooLarge | Self::Unsupported | Self::Failed(_) => None,
         }
     }
 
@@ -291,22 +266,13 @@ impl Cover {
 
     fn decode(images: &BookImages, path: &str) -> Result<Self, SimulatorError> {
         let resource = images.resource(path)?;
-        let mut shelf = Box::new([0xff; COVER_BYTES]);
-        let spec = ImageSpec::new(cover::COVER_WIDTH, cover::COVER_HEIGHT, ScaleMode::Cover)
-            .expect("cover dimensions");
-        images.with_image(&resource, spec, |bitmap| {
-            shelf.copy_from_slice(bitmap.as_bytes())
-        })?;
         let mut frame = Box::new([0xff; FRAME_BYTES]);
         let spec = ImageSpec::new(FRAME_WIDTH, FRAME_HEIGHT, ScaleMode::Contain)
             .expect("frame dimensions");
         images.with_image(&resource, spec, |bitmap| {
             frame.copy_from_slice(bitmap.as_bytes())
         })?;
-        Ok(Self::Decoded {
-            shelf,
-            original: OriginalFrame::Decoded(frame),
-        })
+        Ok(Self::Decoded(frame))
     }
 }
 
@@ -325,17 +291,25 @@ pub fn sample_books() -> Result<Vec<Book>, SimulatorError> {
             "study-in-scarlet.epub",
             "A Study in Scarlet",
             "Arthur Conan Doyle",
+            Some(("Sherlock Holmes", 1)),
         ),
         (
             "pride-and-prejudice.epub",
             "Pride and Prejudice",
             "Jane Austen",
+            None,
         ),
-        ("walden.epub", "Walden", "Henry David Thoreau"),
-        ("frankenstein.epub", "Frankenstein", "Mary Shelley"),
+        ("walden.epub", "Walden", "Henry David Thoreau", None),
+        ("frankenstein.epub", "Frankenstein", "Mary Shelley", None),
+        (
+            "the-sign-of-the-four.epub",
+            "The Sign of the Four",
+            "Arthur Conan Doyle",
+            Some(("Sherlock Holmes", 2)),
+        ),
     ];
     let mut books = Vec::with_capacity(samples.len());
-    for (index, (file_name, title, creator)) in samples.into_iter().enumerate() {
+    for (index, (file_name, title, creator, series)) in samples.into_iter().enumerate() {
         let mut chapters = Vec::with_capacity(3);
         for chapter in 0..3 {
             let mut xhtml = String::from("<html><body>");
@@ -354,6 +328,10 @@ pub fn sample_books() -> Result<Vec<Book>, SimulatorError> {
             file_size: 180_000 + index as u32 * 74_000,
             title: title.into(),
             creator: creator.into(),
+            series: series.map(|(name, position)| {
+                SeriesMetadata::new(name, Some(SeriesPosition::new(position)))
+                    .expect("sample series names fit")
+            }),
             cover: sample_cover(index),
             chapters,
             navigation_error: None,
@@ -380,19 +358,9 @@ fn sample_cover(index: usize) -> Cover {
         }
     }
     let source = RgbImage::new(Size::new(WIDTH, HEIGHT).unwrap(), &rgb).unwrap();
-    let mut shelf = Box::new([0xff; COVER_BYTES]);
-    render_sample(
-        &source,
-        Size::new(cover::COVER_WIDTH, cover::COVER_HEIGHT).unwrap(),
-        &mut shelf[..],
-        ScaleMode::Cover,
-    );
     let mut frame = Box::new([0xff; FRAME_BYTES]);
     render_sample(&source, frame_size(), &mut frame[..], ScaleMode::Contain);
-    Cover::Decoded {
-        shelf,
-        original: OriginalFrame::Decoded(frame),
-    }
+    Cover::Decoded(frame)
 }
 
 fn render_sample(source: &RgbImage<'_>, size: Size, output: &mut [u8], scale: ScaleMode) {

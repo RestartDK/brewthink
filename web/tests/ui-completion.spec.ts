@@ -61,7 +61,7 @@ test("shows every native cover pixel without chrome and reuses it for sleep", as
   expect(mismatches).toBe(0);
   const cover = await framePng(page);
   await page.keyboard.press("Escape");
-  await expect(page.locator("#preview-heading")).toHaveText("Library shelf · 480 × 800");
+  await expect(page.locator("#preview-heading")).toHaveText("Books list · 480 × 800");
   await page.keyboard.press("Enter");
   expect(await framePng(page)).toBe(cover);
   await page.keyboard.press("p");

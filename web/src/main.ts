@@ -32,6 +32,8 @@ type Screen =
   | "sleep"
   | "error";
 
+type SelectionKind = "empty" | "book" | "series";
+
 type ViewState =
   | Readonly<{ kind: "booting" }>
   | Readonly<{ kind: "rendering"; sourceName: string }>
@@ -41,6 +43,7 @@ type ViewState =
       screen: Screen;
       title: string;
       creator: string;
+      selectionKind: SelectionKind;
       selected: number;
       itemCount: number;
       page: number;
@@ -388,6 +391,7 @@ function renderApplication(): void {
       screen: parseScreen(frame.screen),
       title: frame.title,
       creator: frame.creator,
+      selectionKind: parseSelectionKind(frame.selectionKind),
       selected: frame.selected,
       itemCount: frame.item_count,
       page: frame.page,
@@ -477,20 +481,25 @@ function renderReadyState(state: Extract<ViewState, { kind: "ready" }>): void {
         `Brewthink home menu. Selected: ${state.title}. Battery 82 percent.`,
       );
       break;
-    case "library":
-      previewHeading.textContent = "Library shelf · 480 × 800";
+    case "library": {
+      const folder = state.selectionKind === "series";
+      previewHeading.textContent = "Books list · 480 × 800";
       selectionPosition.textContent = `${state.selected + 1} / ${state.itemCount}`;
-      pageLabel.textContent = "Shelf page";
+      pageLabel.textContent = "List page";
       viewPosition.textContent = `${state.page + 1} / ${state.pageCount}`;
-      confirmLabel.textContent = "Confirm";
-      confirmHint.textContent = "Open selected book";
-      message.textContent =
-        "Choose a cover, press Confirm, then turn pages with Left and Right.";
+      confirmLabel.textContent = folder ? "Open" : "Read";
+      confirmHint.textContent = folder ? `Open ${state.title}` : "Open selected book";
+      message.textContent = folder
+        ? "Confirm opens the series folder. Back returns to the full list."
+        : "Choose a title or a series folder. Left and Right page through the list.";
       canvas.setAttribute(
         "aria-label",
-        `Brewthink two by two library shelf. Selected: ${state.title} by ${state.creator}.`,
+        folder
+          ? `Brewthink books list. Selected series: ${state.title}, ${state.creator}.`
+          : `Brewthink books list. Selected: ${state.title} by ${state.creator}.`,
       );
       break;
+    }
     case "files":
       previewHeading.textContent = "File browser · 480 × 800";
       selectionPosition.textContent = `${state.selected + 1} / ${state.itemCount}`;
@@ -622,6 +631,13 @@ function inputFromKey(key: string): WebInput | null {
     default:
       return null;
   }
+}
+
+function parseSelectionKind(value: string): SelectionKind {
+  if (value === "empty" || value === "book" || value === "series") {
+    return value;
+  }
+  throw new Error(`Unknown selection kind: ${value}`);
 }
 
 function parseScreen(value: string): Screen {

@@ -6,8 +6,8 @@ use images::Images;
 
 use brewthink::{
     app::{
-        App, AppEffect, AppInput, AppPreferences, AppView, BookProgress, Direction, ReaderFont,
-        ReaderFontSize, ReaderPreferences, ReaderSpacing, ResumePoint, SleepScreenMode,
+        App, AppEffect, AppInput, AppPreferences, AppView, BookProgress, Direction, LibraryIndex,
+        ReaderFont, ReaderFontSize, ReaderPreferences, ReaderSpacing, ResumePoint, SleepScreenMode,
     },
     bounded_xml::FixedString,
     device_epub::{
@@ -111,7 +111,7 @@ impl Oracle<'_, '_> {
     fn start(&mut self, preferences: ReaderPreferences) -> Result<App> {
         self.progress = [None; 4];
         let mut app = App::with_catalog(
-            4,
+            LibraryIndex::flat(4).unwrap(),
             4,
             None,
             AppPreferences::new(preferences, SleepScreenMode::Automatic),

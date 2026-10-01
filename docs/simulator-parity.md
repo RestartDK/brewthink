@@ -6,7 +6,7 @@ Imported EPUBs use `DeviceEpub`, `StreamingZip`, bounded XML/layout, and the nat
 
 ## Images and UI
 
-JPEG/PNG encoded data streams through the shared decoder, replacing the former 96/128 KiB EPUB cover gates. The limit is 8 MiB encoded, 4,096-pixel dimensions, and 8 Mi pixels, with a further PNG row-capacity bound. Shelf output is 176 × 264; smaller slots use the shared two-by-two luma average. Opening and book-cover sleep decode the original into a contained 480 × 800 frame, never an enlarged thumbnail. Invalid covers retain the existing fallback behavior.
+JPEG/PNG encoded data streams through the shared decoder, replacing the former 96/128 KiB EPUB cover gates. The limit is 8 MiB encoded, 4,096-pixel dimensions, and 8 Mi pixels, with a further PNG row-capacity bound. The Books list renders title and author rows and decodes no covers. Opening and book-cover sleep decode the original into a contained 480 × 800 frame, never an enlarged thumbnail. Invalid covers retain the existing fallback behavior.
 
 Inline images reserve whole blocks during pagination. Positioned text and prepared images render before the drawer overlay. Unresolved resources use alt placeholders; later decode failures keep their reserved geometry. A 16-entry in-memory cache reuses prepared pixels, while staging uses host-memory chunks. This is not the device's persistent FAT cache.
 
@@ -20,7 +20,7 @@ From the development shell, with web dependencies and Chromium installed:
 bash scripts/check-simulator-parity.sh
 ```
 
-The script regenerates the 17 deterministic parity EPUBs and compares them with committed fixtures. The excessive-spine case contains 129 entries. A separately authored inline-image fixture contains a 230,728-byte PNG; regenerate it with `python3 scripts/generate-inline-image-fixture.py`. `scripts/generate-streamed-chapter-fixture.py` generates a 756,222-byte chapter with an illustration and a 225,090-byte paragraph chapter. The large fixtures use `simulator-oracle --trace-only` to compare navigation endpoints without saving thousands of full frames.
+The script regenerates the 18 deterministic parity EPUBs and compares them with committed fixtures. The excessive-spine case contains 129 entries. A separately authored inline-image fixture contains a 230,728-byte PNG; regenerate it with `python3 scripts/generate-inline-image-fixture.py`. `scripts/generate-streamed-chapter-fixture.py` generates a 756,222-byte chapter with an illustration and a 225,090-byte paragraph chapter. The large fixtures use `simulator-oracle --trace-only` to compare navigation endpoints without saving thousands of full frames.
 
 `simulator-oracle` runs without `web-sim`. It reads through device APIs and uses a separate host staging adapter, image-aware layout, and the shared native renderer. It does not call `simulator::Book` or `Cover`. Playwright compares all 96,000 framebuffer bytes against its references. This verifies the adapter and WASM boundary, not an independent implementation of the codecs or paginator.
 
@@ -31,7 +31,7 @@ Coverage includes:
 - EPUB 3/NCX titles and missing/malformed navigation fallback.
 - PNG/JPEG opening and cover-only sleep, including inputs at and beyond the former encoded gates.
 - Malformed XML and excessive spine rejection; formerly oversized XHTML is accepted.
-- All 256 four-shade two-by-two shelf patterns in host tests.
+- Series folder grouping, volume order, list paging, row selection, and clipping in host tests.
 - Exact illustration pixels, page return, and cover-only sleep in `web/tests/inline-images.spec.ts`.
 
 The parity workflow owns a strict-port production preview. `BREWTHINK_PARITY_PORT` overrides port 4185. It never reuses a development server. Production, development-reload, and parity configurations share port validation and TypeScript checks. Capture native canvas bitmaps, not CSS-scaled element screenshots.

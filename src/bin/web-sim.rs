@@ -1,18 +1,18 @@
 use brewthink::{
     app::{
-        App, AppEffect, AppInput, AppPreferences, AppView, BookProgress, Direction, FilesState,
-        ImageId, ReaderPreferences, ReadingLocation, ResumePoint, SettingsItem, SleepScreenSource,
+        App, AppEffect, AppInput, AppPreferences, AppView, BookMeta, BookProgress, Direction,
+        FilesState, ImageId, LibraryIndex, LibraryRow, MAX_LIBRARY_BOOKS, ReaderPreferences,
+        ReadingLocation, ResumePoint, SettingsItem, SleepScreenSource,
     },
-    cover::{SHELF_COVER_BYTES, downsample_cover, shelf_bitmap},
+    device_epub::SeriesMetadata,
     files::{FileItem, FileKind},
     image::{PackedBitmap, PackedImage, READER_DEPTH, Size},
     image_viewer::render_image_viewer,
     input::UsbState,
-    library::ShelfBook,
     power::BatteryStatus,
     reader::{ReaderLine, ReaderView},
     settings::CustomImagePreview,
-    simulator::{Book, Cover, sample_books},
+    simulator::{Book, sample_books},
     sleep::SleepView,
     ui::{AppFrame, render_app},
 };
@@ -26,15 +26,6 @@ extern "C" {
 
 const WIDTH: usize = 480;
 const HEIGHT: usize = 800;
-
-#[wasm_bindgen]
-#[derive(Clone, Copy)]
-pub enum ShelfDirection {
-    Left,
-    Right,
-    Up,
-    Down,
-}
 
 #[wasm_bindgen]
 #[derive(Clone, Copy)]
@@ -54,6 +45,7 @@ pub struct RenderedFrame {
     screen: &'static str,
     title: String,
     creator: String,
+    selection_kind: String,
     selected: usize,
     item_count: usize,
     page: usize,
@@ -87,6 +79,11 @@ impl RenderedFrame {
     #[wasm_bindgen(getter)]
     pub fn creator(&self) -> String {
         self.creator.clone()
+    }
+
+    #[wasm_bindgen(getter, js_name = selectionKind)]
+    pub fn selection_kind(&self) -> String {
+        self.selection_kind.clone()
     }
 
     #[wasm_bindgen(getter)]
@@ -158,7 +155,8 @@ impl WebLibrary {
             .ok()
             .filter(|index| *index < images.len())
             .map(ImageId::new);
-        let mut app = App::with_catalog(books.len(), images.len(), selected_image, preferences);
+        let index = library_index(&books)?;
+        let mut app = App::with_catalog(index, images.len(), selected_image, preferences);
         app.set_battery(BatteryStatus::from_percent(82, UsbState::Disconnected));
         let progress = vec![None; books.len()];
         Ok(Self {
@@ -190,7 +188,8 @@ impl WebLibrary {
             .ok()
             .filter(|index| *index < images.len())
             .map(ImageId::new);
-        let mut app = App::with_catalog(books.len(), images.len(), selected_image, preferences);
+        let index = library_index(&books)?;
+        let mut app = App::with_catalog(index, images.len(), selected_image, preferences);
         app.set_battery(BatteryStatus::from_percent(82, UsbState::Disconnected));
         let progress = vec![None; books.len()];
         Ok(Self {
@@ -212,15 +211,6 @@ impl WebLibrary {
             .selected_sleep_image()
             .and_then(|image| u32::try_from(image.index()).ok())
             .unwrap_or(u32::MAX)
-    }
-
-    pub fn move_selection(&mut self, direction: ShelfDirection) -> bool {
-        self.apply_input(AppInput::Move(match direction {
-            ShelfDirection::Left => Direction::Left,
-            ShelfDirection::Right => Direction::Right,
-            ShelfDirection::Up => Direction::Up,
-            ShelfDirection::Down => Direction::Down,
-        }))
     }
 
     pub fn input(&mut self, input: WebInput) -> bool {
@@ -330,6 +320,7 @@ impl WebLibrary {
             screen: metadata.screen,
             title: metadata.title,
             creator: metadata.creator,
+            selection_kind: metadata.selection_kind.into(),
             selected: metadata.selected,
             item_count: metadata.item_count,
             page: metadata.page,
@@ -411,43 +402,41 @@ impl WebLibrary {
     }
 
     fn render_library(&self, target: &mut PackedImage<'_>) -> Result<FrameMetadata, JsValue> {
+        let mut metas = [BookMeta::empty(); MAX_LIBRARY_BOOKS];
+        for (index, book) in self.books.iter().enumerate() {
+            metas[index] = BookMeta::new(
+                &book.title,
+                &book.creator,
+                book.series.as_ref().map(SeriesMetadata::as_meta),
+            );
+        }
         let state = self.app.library();
-        let mut thumbnails = vec![[0xff; SHELF_COVER_BYTES]; self.books.len()];
-        let books = self
-            .books
-            .iter()
-            .zip(thumbnails.iter_mut())
-            .enumerate()
-            .map(|(index, (book, thumbnail))| {
-                let cover = match &book.cover {
-                    Cover::Decoded { shelf, .. }
-                        if state.selected().is_some_and(|id| id.index() != index) =>
-                    {
-                        downsample_cover(shelf, thumbnail);
-                        Some(shelf_bitmap(thumbnail))
-                    }
-                    cover => cover.bitmap(),
-                };
-                ShelfBook::new(&book.title, &book.creator, cover)
-            })
-            .collect::<Vec<_>>();
+        let view = state
+            .view(&metas[..self.books.len()])
+            .map_err(|_| JsValue::from_str("library catalog changed"))?;
         render_app(
             AppFrame::Library {
-                state,
-                books: &books,
+                view,
                 battery: self.app.battery(),
             },
             target,
         )
         .map_err(js_error)?;
-        let selected = state.selected().expect("the web catalog is non-empty");
-        let book = &self.books[selected.index()];
+        let (selection_kind, title, creator) = match view.selected_row() {
+            Some(LibraryRow::Book { title, creator, .. }) => ("book", title.into(), creator.into()),
+            Some(LibraryRow::Series { name, volumes }) => {
+                ("series", name.into(), format!("{volumes} books"))
+            }
+            None => ("empty", "No books yet".into(), "0 items".into()),
+        };
+        let selected = state.row().unwrap_or(0);
         Ok(FrameMetadata {
             screen: "library",
-            title: book.title.clone(),
-            creator: book.creator.clone(),
-            selected: selected.index(),
-            item_count: books.len(),
+            title,
+            creator,
+            selection_kind,
+            selected,
+            item_count: state.row_count(),
             page: state.page(),
             page_count: state.page_count(),
             chapter: 0,
@@ -497,6 +486,7 @@ impl WebLibrary {
             screen: "files",
             title,
             creator,
+            selection_kind: "empty",
             selected: selected.index(),
             item_count: files.len(),
             page: state.page(),
@@ -562,6 +552,7 @@ impl WebLibrary {
             screen: "reader",
             title: book.title.clone(),
             creator: book.creator.clone(),
+            selection_kind: "empty",
             selected: location.book().index(),
             item_count: self.books.len(),
             page: location.page_index(),
@@ -659,6 +650,7 @@ struct FrameMetadata {
     screen: &'static str,
     title: String,
     creator: String,
+    selection_kind: &'static str,
     selected: usize,
     item_count: usize,
     page: usize,
@@ -679,6 +671,7 @@ impl FrameMetadata {
             screen,
             title: title.into(),
             creator: creator.into(),
+            selection_kind: "empty",
             selected,
             item_count,
             page: 0,
@@ -693,6 +686,7 @@ impl FrameMetadata {
             screen,
             title: book.title.clone(),
             creator: book.creator.clone(),
+            selection_kind: "empty",
             selected: 0,
             item_count: 0,
             page: 0,
@@ -759,6 +753,22 @@ fn sample_images() -> Vec<OwnedImage> {
     .enumerate()
     .map(|(index, (name, kind))| OwnedImage::sample(index, name, kind))
     .collect()
+}
+
+fn library_index(books: &[Book]) -> Result<LibraryIndex, JsValue> {
+    let mut metas = [BookMeta::empty(); MAX_LIBRARY_BOOKS];
+    if books.len() > metas.len() {
+        return Err(JsValue::from_str("library exceeds the list capacity"));
+    }
+    for (index, book) in books.iter().enumerate() {
+        metas[index] = BookMeta::new(
+            &book.title,
+            &book.creator,
+            book.series.as_ref().map(SeriesMetadata::as_meta),
+        );
+    }
+    LibraryIndex::try_from(&metas[..books.len()])
+        .map_err(|_| JsValue::from_str("library exceeds the list capacity"))
 }
 
 #[wasm_bindgen]

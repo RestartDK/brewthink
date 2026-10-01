@@ -12,7 +12,7 @@ cargo build --locked --bin simulator-oracle --features device-reader --target "$
 cargo clippy --locked --bin simulator-oracle --features device-reader --target "$HOST_TARGET" -- -D warnings
 ORACLE="target/$HOST_TARGET/debug/simulator-oracle"
 for fixture in text jpeg no-cover frame-limit shelf-only-cover shelf-limit oversized-cover \
-  compressed-oversized-cover unsupported-cover broken-cover broken-jpeg malformed-nav no-nav ncx; do
+  compressed-oversized-cover unsupported-cover broken-cover broken-jpeg malformed-nav no-nav ncx series; do
   "$ORACLE" "$ARTIFACTS/fixtures/$fixture.epub" "$ARTIFACTS/$fixture"
   printf 'Native oracle: %s\n' "$fixture"
 done

@@ -25,20 +25,16 @@ use self::retained_resume::RtcResume;
 
 use crate::{
     app::{
-        App, AppEffect, AppInput, AppPreferences, AppView, BookId, BookProgress, Direction,
-        HomeItem, ImageId, ReadingLocation, ResumePoint, SettingsItem, SleepScreenMode,
-        SleepScreenSource,
+        App, AppEffect, AppInput, AppPreferences, AppView, BookId, BookMeta, BookProgress,
+        Direction, HomeItem, ImageId, LibraryIndex, MAX_LIBRARY_BOOKS, ReadingLocation,
+        ResumePoint, SettingsItem, SleepScreenMode, SleepScreenSource,
     },
     bounded_layout::{BoundedPage, MAX_PAGE_LINES},
     bounded_xml::FixedString,
     chapter_cache::{ChapterRequest, ChapterWorkspace},
-    cover::{
-        COVER_BYTES, MAX_ENCODED_COVER_BYTES, SHELF_COVER_BYTES, bitmap, downsample_cover,
-        shelf_bitmap,
-    },
+    cover::{COVER_BYTES, bitmap},
     device_epub::{
-        DeviceEpub, DevicePackageScratch, DevicePublication, MAX_DEVICE_PATH_BYTES,
-        MAX_DEVICE_RESOURCE_BYTES,
+        DeviceEpub, DevicePackageScratch, DevicePublication, MAX_DEVICE_PATH_BYTES, SeriesMetadata,
     },
     display::{
         framebuffer::{FRAME_BYTES as MONO_FRAME_BYTES, Rotation},
@@ -53,7 +49,6 @@ use crate::{
         Button, ButtonDebouncer, ButtonEvent, ButtonTransition, PressedButtons,
         control::{ControlCommand, ControlLineBuffer},
     },
-    library::ShelfBook,
     power::{BatteryEstimator, BatteryLevel, BatteryStatus},
     reader::{ReaderLine, ReaderStyle, ReaderView},
     settings::CustomImagePreview,
@@ -70,14 +65,10 @@ const MAX_DEVICE_IMAGES: usize = 16;
 const MAX_DEVICE_FILES: usize = MAX_DEVICE_BOOKS + MAX_DEVICE_IMAGES;
 const MAX_CACHED_SPINE_PATHS: usize = 64;
 const MAX_CACHED_SPINE_PATH_BYTES: usize = 2 * 1024;
-const VISIBLE_COVER_SLOTS: usize = 4;
 const FRAME_BYTES: usize = MONO_FRAME_BYTES * READER_DEPTH.bits();
 const UPLOAD_CHUNK_BYTES: usize = 4 * 1024;
 const UPLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
-const _: () = assert!(
-    MAX_ENCODED_COVER_BYTES as usize + (VISIBLE_COVER_SLOTS - 1) * SHELF_COVER_BYTES
-        <= MAX_DEVICE_RESOURCE_BYTES
-);
+const _: () = assert!(MAX_DEVICE_BOOKS <= MAX_LIBRARY_BOOKS);
 const CONTENT_BYTES: usize = if core::mem::size_of::<BoundedPage>() > COVER_BYTES {
     core::mem::size_of::<BoundedPage>()
 } else {
@@ -118,6 +109,7 @@ struct DeviceLibrary {
     files: [Option<BookFile>; MAX_DEVICE_BOOKS],
     titles: [FixedString<192>; MAX_DEVICE_BOOKS],
     creators: [FixedString<128>; MAX_DEVICE_BOOKS],
+    series: [Option<SeriesMetadata>; MAX_DEVICE_BOOKS],
     cover_paths: [Option<FixedString<MAX_DEVICE_PATH_BYTES>>; MAX_DEVICE_BOOKS],
     book_spine_starts: [u8; MAX_DEVICE_BOOKS],
     book_cached_spine_counts: [u8; MAX_DEVICE_BOOKS],
@@ -136,6 +128,7 @@ impl DeviceLibrary {
             files: [None; MAX_DEVICE_BOOKS],
             titles: [FixedString::new(); MAX_DEVICE_BOOKS],
             creators: [FixedString::new(); MAX_DEVICE_BOOKS],
+            series: [None; MAX_DEVICE_BOOKS],
             cover_paths: [None; MAX_DEVICE_BOOKS],
             book_spine_starts: [0; MAX_DEVICE_BOOKS],
             book_cached_spine_counts: [0; MAX_DEVICE_BOOKS],
@@ -157,6 +150,21 @@ impl DeviceLibrary {
         self.titles
             .get(book.index())
             .map_or("Unknown title", FixedString::as_str)
+    }
+
+    fn book_meta(&self, index: usize) -> BookMeta<'_> {
+        BookMeta::new(
+            self.titles
+                .get(index)
+                .map_or("Unknown title", FixedString::as_str),
+            self.creators
+                .get(index)
+                .map_or("Unknown author", FixedString::as_str),
+            self.series
+                .get(index)
+                .and_then(Option::as_ref)
+                .map(SeriesMetadata::as_meta),
+        )
     }
 
     fn cover_path(&self, book: BookId) -> Option<&str> {
@@ -602,15 +610,18 @@ pub async fn reader_app_task(
         }
     };
     let selected_image = images.selected(store);
+    let Some(index) = library_index(library) else {
+        stop("reader book catalog exceeds the list capacity").await;
+    };
     let (mut app, first_effect) = App::from_resume_with_catalog(
-        library.length,
+        index,
         images.length,
         selected_image,
         preferences,
         retained.resume,
     )
     .unwrap_or((
-        App::with_catalog(library.length, images.length, selected_image, preferences),
+        App::with_catalog(index, images.length, selected_image, preferences),
         AppEffect::Render,
     ));
     if let Some(status) = BATTERY_STATUS.try_take() {
@@ -685,8 +696,8 @@ pub async fn reader_app_task(
                         esp_println::println!("BREWCTL/1 ERROR command=upload reason=catalog-read");
                         esp_println::println!("BREWCTL/1 DONE command=upload status=error");
                         Ok(None)
-                    } else {
-                        let effect = app.replace_book_catalog(library.length);
+                    } else if let Some(index) = library_index(library) {
+                        let effect = app.replace_book_catalog(index);
                         let result = run_effect(
                             effect,
                             &mut app,
@@ -701,6 +712,12 @@ pub async fn reader_app_task(
                             if result.is_ok() { "ok" } else { "error" }
                         );
                         result
+                    } else {
+                        esp_println::println!(
+                            "BREWCTL/1 ERROR command=upload reason=catalog-capacity"
+                        );
+                        esp_println::println!("BREWCTL/1 DONE command=upload status=error");
+                        Ok(None)
                     }
                 }
                 ControlEvent::ImagesChanged => {
@@ -1076,17 +1093,28 @@ fn write_control_status(app: &App) {
         AppView::BookCover { book, .. } => {
             esp_println::println!("BREWCTL/1 STATUS view=cover book={}", book.index())
         }
-        AppView::Library => match app.library().selected() {
-            Some(selected) => esp_println::println!(
-                "BREWCTL/1 STATUS view=library selected={} books={}",
-                selected.index(),
-                app.library().book_count()
-            ),
-            None => esp_println::println!(
-                "BREWCTL/1 STATUS view=library selected=none books={}",
-                app.library().book_count()
-            ),
-        },
+        AppView::Library => {
+            let library = app.library();
+            let scope = if library.in_series() {
+                "series"
+            } else {
+                "root"
+            };
+            match (library.selected_book(), library.row()) {
+                (Some(selected), Some(row)) => esp_println::println!(
+                    "BREWCTL/1 STATUS view=library selected={} books={} scope={} row={}",
+                    selected.index(),
+                    library.book_count(),
+                    scope,
+                    row
+                ),
+                _ => esp_println::println!(
+                    "BREWCTL/1 STATUS view=library selected=none books={} scope={} row=none",
+                    library.book_count(),
+                    scope
+                ),
+            }
+        }
         AppView::Files(state) => match state.selected() {
             Some(selected) => esp_println::println!(
                 "BREWCTL/1 STATUS view=files selected={} files={} images={}",
@@ -1258,6 +1286,7 @@ fn load_library(
         library.files[index] = Some(file);
         library.titles[index] = title;
         library.creators[index] = creator;
+        library.series[index] = SeriesMetadata::from_publication(publication);
         library.cover_paths[index] = cover_path;
         library.spine_counts[index] = spine_count;
         library.length += 1;
@@ -1402,13 +1431,20 @@ fn run_effect(
                 }
                 AppView::Library => {
                     esp_println::println!("BREWCTL/1 LOG stage=render-library state=start");
-                    render_library(app, library, store, workspaces)?;
+                    render_library(app, library, workspaces)?;
                     esp_println::println!("BREWCTL/1 LOG stage=render-library state=frame-ready");
                     refresh(store, panel, workspaces.frame_codec.frame())?;
                     esp_println::println!("BREWCTL/1 LOG stage=render-library state=done");
                     info!(
-                        "reader shelf refreshed: selected={}",
-                        app.library().selected().map_or(usize::MAX, BookId::index)
+                        "reader book list refreshed: selected={} scope={}",
+                        app.library()
+                            .selected_book()
+                            .map_or(usize::MAX, BookId::index),
+                        if app.library().in_series() {
+                            "series"
+                        } else {
+                            "root"
+                        }
                     );
                     return Ok(None);
                 }
@@ -1722,34 +1758,6 @@ fn prepare_image(
     }
 }
 
-fn decode_book_cover(
-    selected: BookId,
-    library: &DeviceLibrary,
-    store: &DeviceStore,
-    workspaces: &mut Workspaces,
-) -> Result<bool, &'static str> {
-    let Some(path) = library.cover_path(selected) else {
-        return Ok(false);
-    };
-    let file = library.file(selected).ok_or("reader book is missing")?;
-    let spec = ImageSpec::new(
-        crate::cover::COVER_WIDTH,
-        crate::cover::COVER_HEIGHT,
-        ScaleMode::Cover,
-    )
-    .expect("cover dimensions");
-    prepare_image(
-        ImageSource::Book { file: &file, path },
-        spec,
-        store,
-        workspaces.frame_codec,
-        workspaces.zip,
-        workspaces.content.cover(),
-        &[],
-    )?;
-    Ok(true)
-}
-
 fn decode_book_cover_frame(
     selected: BookId,
     library: &DeviceLibrary,
@@ -1950,69 +1958,39 @@ fn render_image_frame(
     .map_err(|_| "reader image viewer render failed")
 }
 
+fn library_metas<'a>(library: &'a DeviceLibrary, metas: &mut [BookMeta<'a>; MAX_LIBRARY_BOOKS]) {
+    for (index, meta) in metas[..library.length].iter_mut().enumerate() {
+        *meta = library.book_meta(index);
+    }
+}
+
+fn library_index(library: &DeviceLibrary) -> Option<LibraryIndex> {
+    let mut metas = [BookMeta::empty(); MAX_LIBRARY_BOOKS];
+    library_metas(library, &mut metas);
+    LibraryIndex::try_from(&metas[..library.length]).ok()
+}
+
 fn render_library(
     app: &App,
     library: &DeviceLibrary,
-    store: &DeviceStore,
     workspaces: &mut Workspaces,
 ) -> Result<(), &'static str> {
-    let visible = app.library().visible_range();
-    let selected = app.library().selected().map(BookId::index);
-    let selected_slot = selected.map_or(0, |index| index - visible.start);
-    let mut decoded = [false; VISIBLE_COVER_SLOTS];
-    for (slot, index) in visible.clone().enumerate() {
-        if Some(index) == selected {
-            continue;
-        }
-        decoded[slot] =
-            decode_book_cover(BookId::new(index), library, store, workspaces).unwrap_or(false);
-        if decoded[slot] {
-            let cache_slot = slot - usize::from(selected_slot < slot);
-            let offset = MAX_ENCODED_COVER_BYTES as usize + cache_slot * SHELF_COVER_BYTES;
-            downsample_cover(
-                workspaces.content.cover(),
-                &mut workspaces.resource.bytes()[offset..offset + SHELF_COVER_BYTES],
-            );
-        }
-    }
-    if let Some(index) = selected.filter(|index| visible.contains(index)) {
-        decoded[index - visible.start] =
-            decode_book_cover(BookId::new(index), library, store, workspaces).unwrap_or(false);
-    }
-    let covers = &workspaces.resource.bytes()[MAX_ENCODED_COVER_BYTES as usize..];
-    let full_cover = &*workspaces.content.cover();
-    let mut books = [ShelfBook::new("", "", None); MAX_DEVICE_BOOKS];
-    for (index, book) in books[..library.length].iter_mut().enumerate() {
-        let cover = visible
-            .contains(&index)
-            .then(|| index - visible.start)
-            .filter(|&slot| decoded[slot])
-            .map(|slot| {
-                if Some(index) == selected {
-                    bitmap(full_cover)
-                } else {
-                    let cache_slot = slot - usize::from(selected_slot < slot);
-                    let offset = cache_slot * SHELF_COVER_BYTES;
-                    shelf_bitmap(&covers[offset..offset + SHELF_COVER_BYTES])
-                }
-            });
-        *book = ShelfBook::new(
-            library.titles[index].as_str(),
-            library.creators[index].as_str(),
-            cover,
-        );
-    }
+    let mut metas = [BookMeta::empty(); MAX_LIBRARY_BOOKS];
+    library_metas(library, &mut metas);
+    let view = app
+        .library()
+        .view(&metas[..library.length])
+        .map_err(|_| "reader book list does not match the catalog")?;
     let mut image = PackedImage::new(frame_size(), READER_DEPTH, workspaces.frame_codec.frame())
         .map_err(|_| "reader frame buffer has the wrong size")?;
     render_app(
         AppFrame::Library {
-            state: app.library(),
-            books: &books[..library.length],
+            view,
             battery: app.battery(),
         },
         &mut image,
     )
-    .map_err(|_| "reader shelf render failed")
+    .map_err(|_| "reader book list render failed")
 }
 
 fn render_page(

@@ -417,7 +417,10 @@ mod tests {
 
     use std::vec;
 
-    use super::{ImageFormat, JpegDecodeWorkspace, PngDecodeWorkspace, decode_jpeg, decode_png};
+    use super::{
+        ImageDecodeError, ImageFormat, JpegDecodeWorkspace, PngDecodeWorkspace, decode_jpeg,
+        decode_png,
+    };
     use crate::image::{PackedImage, RenderOptions, ScaleMode, Size};
 
     const TRANSPARENT_PNG: &[u8] = include_bytes!("../web/tests/fixtures/transparent.png");
@@ -500,6 +503,31 @@ mod tests {
         .unwrap();
         assert!(bytes.iter().any(|byte| *byte != 0xFF));
         assert!(bytes.iter().any(|byte| *byte != 0x00));
+    }
+
+    #[test]
+    fn jpeg_rejects_dimensions_above_the_decode_budget() {
+        let mut encoded = include_bytes!("../web/tests/fixtures/cover.jpg").to_vec();
+        let start = encoded
+            .windows(2)
+            .position(|marker| marker == [0xFF, 0xC0])
+            .unwrap();
+        encoded[start + 5..start + 7].copy_from_slice(&u16::MAX.to_be_bytes());
+        encoded[start + 7..start + 9].copy_from_slice(&u16::MAX.to_be_bytes());
+        let mut bytes = vec![0xFF; 64 * 16 / 8];
+        let mut target = PackedImage::monochrome(Size::new(64, 16).unwrap(), &mut bytes).unwrap();
+        assert_eq!(
+            decode_jpeg(
+                &encoded,
+                &mut target,
+                RenderOptions {
+                    scale: ScaleMode::Contain,
+                    ..RenderOptions::default()
+                },
+                &mut JpegDecodeWorkspace::new(),
+            ),
+            Err(ImageDecodeError::DimensionsOutOfRange)
+        );
     }
 
     #[test]
