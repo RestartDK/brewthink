@@ -1,6 +1,20 @@
 # Brewthink checkpoint
 
-## Latest observed hardware, streamed chapters, 2026-09-27
+## Latest observed hardware, battery-wake restore, 2026-10-01
+
+This supersedes the streamed-chapters installation below. Branch `daniel/wake-resume` opens [PR #34](https://github.com/RestartDK/brewthink/pull/34). Revalidate live device/port/ownership before hardware work; this record is not a reservation or another flash authorization.
+
+- Installed reader: **634,656 bytes**, SHA-256 `62b48e6b6985723cd6f63a775dea1be6ed3d514c2fea265655f47250795463a9`. App1 write `0x650000..0x6EAF1F`, affected sectors through `0x6EAFFF`.
+- The complete pre-write snapshot matched the previous diagnostic build. Exact readback and every byte outside the reviewed sectors passed. App1 sequence 2, stock/app0, otadata and other partitions remained unchanged. No eFuse write occurred.
+- Private backup: `backup/x4-wake-fix-20261001T200901Z/` in `/Users/danielkumlin/.herdr/worktrees/brewthink/x4-wake`. Acceptance records and captures: `artifacts/x4-wake/`.
+- Root cause: on battery the power-path latch releases the processor supply during deep sleep, so the MCU powers off completely and RTC memory is lost. Waking is a cold boot. The previous firmware then found no retained record and opened Home. On USB power the processor stays powered and the RTC record is used as before.
+- Measured on this unit, before the fix: after a battery sleep the retained RTC record read back as zeros, the armed 20 s diagnostic timer wake never fired, and reconnecting USB produced a fresh power-on boot that landed on Home.
+- Measured after the fix: read Everyday Things spine 8 page 51, unplug USB, Power to sleep, Power to wake. The cold boot reopened the same page (`STATUS view=reader book=3 spine=8 page=51`), and a later DTR reset with an empty RTC record logged `stage=resume state=stored-fallback` and restored the same page. Native frame CRC `1a22ef8b` matched before and after.
+- The fix mirrors the encoded resume record to `/brew/LAST.BIN` before deep sleep. `scripts/check.sh host`, `scripts/check.sh firmware` and `scripts/check.sh web` passed on the shipped revision; the image passed the reader stack check, `PASS_LIMITED`.
+- Diagnostic builds v1 to v4 (timer wake, stage tracking, RWDT, catalog and wake-cause logs) were installed during the investigation and are superseded. One v2 run hung hard and required a physical power cycle; it did not reproduce under v3 or v4. Do not reuse those images.
+- Final state: awake in the reader on the fix build, USB connected, battery about 91%. `/tmp/brewthink-x4-501.lock` remains in place. This record is not an optical or wake-latency measurement.
+
+## Historical hardware, streamed chapters, 2026-09-27
 
 This supersedes the image-only installation below. Branch `daniel/streamed-chapters` builds on image PR [#25](https://github.com/RestartDK/brewthink/pull/25). The main checkout and original upload worktree remain separate. Revalidate live device/port/ownership before hardware work; this record is not a reservation or another flash authorization.
 
