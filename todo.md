@@ -196,7 +196,7 @@ Goal: scroll between selected images with buttons and show battery percentage.
 
 Goal: turn on/off safely and preserve battery.
 
-- [ ] Understand GPIO13 power-path role from reference firmware/schematic.
+- [x] Understand GPIO13 power-path role from reference firmware/schematic: it drives the battery latch, so a battery deep sleep powers the MCU off and the Power button cold-boots it. USB power keeps the MCU alive in deep sleep with RTC retained.
 - [x] Implement SSD1677 deep sleep with the required `0x03` check code.
 - [x] Quiesce SPI2 and deselect both display and SD before sleep.
 - [ ] Disable radios before sleep when added later.

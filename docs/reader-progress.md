@@ -34,3 +34,20 @@ restored chapter that cannot load discards the in-memory checkpoint and falls
 back to the cover. Reading from there replaces the invalid stored position. The
 position is independent of the disposable chapter and image caches, so
 dropping those caches does not move the reader.
+
+# Resume after the processor powers off
+
+The reader also mirrors the encoded resume record to `/brew/LAST.BIN` before
+deep sleep, with `LAST.BAK` holding the previous record and `LAST.TMP` used
+during publication. On battery the board's power-path latch powers the
+processor off completely during deep sleep, RTC memory included, so the retained
+record cannot survive and the next Power press is a cold boot. The boot path
+reads the card record when RTC memory holds no valid record and restores the
+same book, chapter, page, and origin. It skips the write when the stored record
+already matches, and the same interrupted-write rules as the bookmarks apply:
+every boundary leaves the old or the new record readable.
+
+On USB power the processor stays powered during deep sleep and the RTC record
+is used directly. The card record only fills in when RTC memory is empty or
+invalid, so a reset or a battery power-off returns to the open book instead of
+Home.

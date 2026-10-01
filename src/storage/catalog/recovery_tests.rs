@@ -661,3 +661,116 @@ fn filesystem_errors_keep_their_source_chain() {
         Some(&Fault::Read)
     );
 }
+
+fn resume_words(page_index: usize) -> [u32; RESUME_WORDS] {
+    use crate::app::{BookId, BookOrigin, ResumePoint};
+
+    let name = BookFileName::try_from("Alpha.epub").unwrap();
+    let books = [Some(BookFile::new(name, 1234))];
+    SavedResume::capture(
+        ResumePoint::Reader {
+            book: BookId::new(0),
+            spine_index: 2,
+            page_index,
+            origin: BookOrigin::Books,
+        },
+        AppPreferences::default(),
+        &books,
+    )
+    .unwrap()
+    .encode()
+}
+
+#[test]
+fn missing_last_resume_is_absent() {
+    let card = Card::formatted();
+    let store = card.store();
+    store.ensure_layout().unwrap();
+    assert_eq!(store.app_data().read_last_resume(), Ok(None));
+}
+
+#[test]
+fn unchanged_last_resume_is_not_rewritten() {
+    let card = Card::formatted();
+    let store = card.store();
+    store.ensure_layout().unwrap();
+    let data = store.app_data();
+    let old = resume_words(3);
+    let new = resume_words(4);
+    data.write_last_resume(old).unwrap();
+    data.write_last_resume(new).unwrap();
+    assert_eq!(
+        data.read_records(&[AppDataFile::LastResumeBackup], decode_last_resume),
+        Ok(Some(old))
+    );
+    data.write_last_resume(new).unwrap();
+    assert_eq!(
+        data.read_records(&[AppDataFile::LastResumeBackup], decode_last_resume),
+        Ok(Some(old)),
+        "a repeated write must not replace the backup"
+    );
+    assert_eq!(data.read_last_resume(), Ok(Some(new)));
+}
+
+#[test]
+fn malformed_last_resume_is_not_a_missing_record() {
+    let card = Card::formatted();
+    let store = card.store();
+    store.ensure_layout().unwrap();
+    let data = store.app_data();
+    data.write_file(AppDataFile::LastResume, b"broken").unwrap();
+    assert_eq!(data.read_last_resume(), Err(AppDataError::InvalidMetadata));
+}
+
+#[test]
+fn valid_last_resume_backup_recovers_a_corrupt_primary() {
+    let card = Card::formatted();
+    let store = card.store();
+    store.ensure_layout().unwrap();
+    let data = store.app_data();
+    let words = resume_words(3);
+    data.write_last_resume(words).unwrap();
+    data.copy_file(
+        AppDataFile::LastResume,
+        AppDataFile::LastResumeBackup,
+        &mut [0; 32],
+    )
+    .unwrap();
+    data.write_file(AppDataFile::LastResume, b"broken").unwrap();
+    assert_eq!(data.read_last_resume(), Ok(Some(words)));
+}
+
+#[test]
+fn every_failed_last_resume_write_retains_a_readable_record_after_remount() {
+    let card = Card::formatted();
+    let store = card.store();
+    store.ensure_layout().unwrap();
+    let old = resume_words(3);
+    let new = resume_words(4);
+    store.app_data().write_last_resume(old).unwrap();
+    let snapshot = card.0.borrow().bytes.clone();
+    card.0.borrow_mut().writes = 0;
+    card.store().app_data().write_last_resume(new).unwrap();
+    let total_writes = card.0.borrow().writes;
+    assert!(total_writes > 0);
+    for limit in 0..=total_writes {
+        let failing = Card(Rc::new(RefCell::new(MemoryCard {
+            bytes: snapshot.clone(),
+            fail_read: None,
+            fail_write_after: Some(limit),
+            writes: 0,
+        })));
+        let result = failing.store().app_data().write_last_resume(new);
+        assert_eq!(
+            result.is_ok(),
+            limit == total_writes,
+            "write boundary {limit}"
+        );
+        failing.0.borrow_mut().fail_write_after = None;
+        let recovered = failing.store().app_data().read_last_resume().unwrap();
+        assert!(
+            recovered == Some(old) || recovered == Some(new),
+            "write boundary {limit}"
+        );
+    }
+}
