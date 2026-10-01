@@ -46,6 +46,16 @@ Each book is limited to 32 MiB. The device receives acknowledged 4 KiB chunks an
 
 Book uploads require Home. The reader supports at most sixteen catalog entries, sixty-four reading-order entries per book, and 140 KiB per chapter resource. Uploading a book does not remove these limits. The host timeout applies to each transfer exchange and the final commit, not the whole batch. During an upload, firmware polls USB every 250 microseconds instead of the normal 20 milliseconds. The device aborts after 30 seconds without transfer activity.
 
+## Removing and replacing a book
+
+```bash
+scripts/device-control.sh --port /dev/cu.usbmodemXXXX delete-book NAME.EPB
+```
+
+The reader deletes `/books/NAME.EPB`, refreshes the catalog, and answers with `DELETED name=... removed=true|false`. Deleting a name that is not present is not an error. The command removes the book file only; cached chapter pages and images stay until the caches evict them.
+
+To replace a book with a converted copy, upload the new copy and then delete the old name. The upload target name comes from the source stem when it is a valid 8.3 name, otherwise from the content CRC32. `check-books` and `put-book` print the target name before transfer.
+
 ## Converting unsupported images
 
 Progressive JPEGs and interlaced PNGs lay out with alt placeholders. `prepare-book` writes a copy of an EPUB with every progressive JPEG re-encoded as baseline JPEG and every interlaced PNG as a non-interlaced PNG:

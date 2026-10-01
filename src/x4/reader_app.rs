@@ -695,11 +695,13 @@ pub async fn reader_app_task(
                     loaded: &mut loaded,
                 })
                 .run_input(InputSource::Usb, button),
-                ControlEvent::BooksChanged => {
+                ControlEvent::CatalogChanged(command) => {
                     loaded = None;
                     if load_library(store, library, &mut workspaces).is_err() {
-                        esp_println::println!("BREWCTL/1 ERROR command=upload reason=catalog-read");
-                        esp_println::println!("BREWCTL/1 DONE command=upload status=error");
+                        esp_println::println!(
+                            "BREWCTL/1 ERROR command={command} reason=catalog-read"
+                        );
+                        esp_println::println!("BREWCTL/1 DONE command={command} status=error");
                         Ok(None)
                     } else if let Some(index) = library_index(library) {
                         let effect = app.replace_book_catalog(index);
@@ -713,15 +715,15 @@ pub async fn reader_app_task(
                             &mut loaded,
                         );
                         esp_println::println!(
-                            "BREWCTL/1 DONE command=upload status={}",
+                            "BREWCTL/1 DONE command={command} status={}",
                             if result.is_ok() { "ok" } else { "error" }
                         );
                         result
                     } else {
                         esp_println::println!(
-                            "BREWCTL/1 ERROR command=upload reason=catalog-capacity"
+                            "BREWCTL/1 ERROR command={command} reason=catalog-capacity"
                         );
-                        esp_println::println!("BREWCTL/1 DONE command=upload status=error");
+                        esp_println::println!("BREWCTL/1 DONE command={command} status=error");
                         Ok(None)
                     }
                 }
@@ -886,7 +888,7 @@ impl ReaderRuntime<'_> {
 enum ControlEvent {
     Button(Button),
     ImagesChanged,
-    BooksChanged,
+    CatalogChanged(&'static str),
 }
 
 struct UsbControlRuntime<'a> {
@@ -1001,6 +1003,20 @@ impl<'a> UsbControlRuntime<'a> {
                     }
                 }
                 Ok(ControlCommand::AbortUpload) => self.abort_upload(store, "requested"),
+                Ok(ControlCommand::DeleteBook(name)) => match store.delete_book(name.as_str()) {
+                    Ok(removed) => {
+                        esp_println::println!(
+                            "BREWCTL/1 DELETED name={} removed={}",
+                            name.as_str(),
+                            removed
+                        );
+                        return Some(ControlEvent::CatalogChanged("delete-book"));
+                    }
+                    Err(_) => {
+                        esp_println::println!("BREWCTL/1 ERROR command=delete-book reason=storage");
+                        esp_println::println!("BREWCTL/1 DONE command=delete-book status=error");
+                    }
+                },
                 Err(error) => {
                     esp_println::println!("BREWCTL/1 ERROR command=parse reason={}", error.name());
                     esp_println::println!("BREWCTL/1 DONE command=parse status=error");
@@ -1062,7 +1078,7 @@ impl<'a> UsbControlRuntime<'a> {
                     esp_println::println!("BREWCTL/1 DONE command=upload status=ok");
                     Some(ControlEvent::ImagesChanged)
                 }
-                UploadTarget::Book(_) => Some(ControlEvent::BooksChanged),
+                UploadTarget::Book(_) => Some(ControlEvent::CatalogChanged("upload")),
             },
             Err(error) => {
                 esp_println::println!("BREWCTL/1 ERROR command=upload reason={}", error.name());

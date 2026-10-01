@@ -21,7 +21,7 @@ use brewthink::{
         ImageFormat, JpegDecodeWorkspace, PngDecodeWorkspace, decode_jpeg, decode_png,
     },
     input::Button,
-    transfer::{ImageName, MAX_IMAGE_BYTES, UploadTarget},
+    transfer::{BookName, ImageName, MAX_IMAGE_BYTES, UploadTarget},
 };
 use image::{ExtendedColorType, ImageEncoder, codecs::jpeg::JpegEncoder, imageops::FilterType};
 
@@ -38,6 +38,7 @@ enum Command {
     Status,
     Screen(PathBuf),
     DropImageCache,
+    DeleteBook(BookName),
     PutImage(PathBuf),
     PutBook(PathBuf),
     PutBooks(PathBuf),
@@ -299,6 +300,11 @@ fn run() -> io::Result<()> {
         Command::DropImageCache => {
             run_text_command(&mut connection, "drop-image-cache", arguments.timeout)
         }
+        Command::DeleteBook(name) => run_text_command(
+            &mut connection,
+            &format!("delete-book {}", name.as_str()),
+            arguments.timeout,
+        ),
         Command::SdInfo => sd_export::info(&mut connection, arguments.timeout).map(|_| ()),
         Command::SdRead {
             start,
@@ -385,6 +391,13 @@ fn parse_arguments(
             Command::Screen(PathBuf::from(required_argument(&mut arguments, "screen")?))
         }
         Some("drop-image-cache") => Command::DropImageCache,
+        Some("delete-book") => {
+            let name = required_argument(&mut arguments, "delete-book")?;
+            Command::DeleteBook(
+                BookName::parse(&name)
+                    .map_err(|_| invalid_input("book name must be a short EPUB name"))?,
+            )
+        }
         Some("put-image") => Command::PutImage(PathBuf::from(required_argument(
             &mut arguments,
             "put-image",
@@ -454,7 +467,7 @@ fn required_argument(
 fn print_usage() {
     println!(
         "Usage: device-control [--port PATH] [--timeout SECONDS] <COMMAND>\n\n\
-         Commands:\n  tap <back|confirm|left|right|up|down|power>\n  status\n  screen <OUTPUT.png>\n  drop-image-cache\n  put-image <INPUT.jpg|INPUT.png>\n  put-book <INPUT.epub>\n  put-books <DIRECTORY>\n  check-books <DIRECTORY>\n  verify-book <INPUT.epub>\n  sd-info\n  sd-read <START_SECTOR> <SECTOR_COUNT> <OUTPUT.bin>\n  monitor"
+         Commands:\n  tap <back|confirm|left|right|up|down|power>\n  status\n  screen <OUTPUT.png>\n  drop-image-cache\n  delete-book <NAME.EPB>\n  put-image <INPUT.jpg|INPUT.png>\n  put-book <INPUT.epub>\n  put-books <DIRECTORY>\n  check-books <DIRECTORY>\n  verify-book <INPUT.epub>\n  sd-info\n  sd-read <START_SECTOR> <SECTOR_COUNT> <OUTPUT.bin>\n  monitor"
     );
 }
 

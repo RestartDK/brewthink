@@ -371,6 +371,17 @@ where
     }
 
     #[cfg(feature = "device-reader")]
+    pub fn delete_book(&self, name: &str) -> Result<bool, AppDataError<D::Error>> {
+        self.with_directory(BOOK_DIRECTORY, |directory| {
+            match directory.delete_entry_in_dir(name) {
+                Ok(()) => Ok(true),
+                Err(Error::NotFound) => Ok(false),
+                Err(error) => Err(error),
+            }
+        })
+    }
+
+    #[cfg(feature = "device-reader")]
     pub fn open_reader(
         &self,
         book: BookFile,
