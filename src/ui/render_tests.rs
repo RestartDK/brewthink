@@ -6,19 +6,23 @@ use ::image::{GrayImage, Luma};
 
 use crate::{
     app::{
-        App, AppEffect, AppInput, AppPreferences, AppView, FilesState, LibraryState,
-        ReaderPreferences, SettingsItem, SettingsState, SleepScreenMode,
+        App, AppEffect, AppInput, AppPreferences, AppView, BookMeta, FilesState, LibraryIndex,
+        LibraryState, ReaderPreferences, SeriesMeta, SeriesPosition, SettingsItem, SettingsState,
+        SleepScreenMode,
     },
     files::{FileItem, FileKind},
     image::{PackedBitmap, PackedImage, READER_DEPTH, Size},
     input::UsbState,
-    library::ShelfBook,
     power::BatteryStatus,
     reader::{ReaderLine, ReaderStyle, ReaderView},
     settings::CustomImagePreview,
     sleep::SleepView,
     ui::{AppFrame, render_app},
 };
+
+fn library_index(books: &[BookMeta<'_>]) -> LibraryIndex {
+    LibraryIndex::try_from(books).unwrap()
+}
 
 const WIDTH: usize = 480;
 const HEIGHT: usize = 800;
@@ -32,7 +36,7 @@ fn application_frames_match_snapshots() {
     assert_frame("home", |target| {
         render_app(
             AppFrame::Home {
-                state: App::new(4).home(),
+                state: App::new(crate::app::test_index(4)).home(),
                 battery,
             },
             target,
@@ -41,16 +45,34 @@ fn application_frames_match_snapshots() {
     });
 
     let books = [
-        ShelfBook::new("The First Book", "Author One", None),
-        ShelfBook::new("The Second Book", "Author Two", None),
-        ShelfBook::new("The Third Book", "Author Three", None),
-        ShelfBook::new("The Fourth Book", "Author Four", None),
+        BookMeta::new(
+            "The Art of Doing Science and Engineering: Learning to Learn",
+            "Richard W. Hamming",
+            None,
+        ),
+        BookMeta::new(
+            "A Study in Scarlet",
+            "Arthur Conan Doyle",
+            Some(SeriesMeta::new(
+                "Sherlock Holmes",
+                Some(SeriesPosition::new(1)),
+            )),
+        ),
+        BookMeta::new("Pride and Prejudice", "Jane Austen", None),
+        BookMeta::new(
+            "The Sign of the Four",
+            "Arthur Conan Doyle",
+            Some(SeriesMeta::new(
+                "Sherlock Holmes",
+                Some(SeriesPosition::new(2)),
+            )),
+        ),
     ];
+    let index = library_index(&books);
     assert_frame("library", |target| {
         render_app(
             AppFrame::Library {
-                state: LibraryState::new(books.len()),
-                books: &books,
+                view: LibraryState::new(index).view(&books).unwrap(),
                 battery,
             },
             target,
@@ -131,10 +153,11 @@ fn application_frames_match_snapshots() {
 fn storage_and_sleep_frames_match_snapshots() {
     let battery = BatteryStatus::from_percent(82, UsbState::Disconnected);
     assert_frame("library-empty", |target| {
+        let books: [BookMeta; 0] = [];
+        let index = library_index(&books);
         render_app(
             AppFrame::Library {
-                state: LibraryState::new(0),
-                books: &[],
+                view: LibraryState::new(index).view(&books).unwrap(),
                 battery,
             },
             target,
@@ -239,21 +262,30 @@ fn storage_and_sleep_frames_match_snapshots() {
 }
 
 #[test]
-fn populated_shelves_match_snapshots() {
+fn library_pages_and_series_match_snapshots() {
     let battery = BatteryStatus::from_percent(82, UsbState::Disconnected);
-    let half_bytes = [0xAA; 88 * 132 / 8];
-    let full_bytes = [0x33; 176 * 264 / 8];
-    let half = PackedBitmap::monochrome(Size::new(88, 132).unwrap(), &half_bytes).unwrap();
-    let full = PackedBitmap::monochrome(Size::new(176, 264).unwrap(), &full_bytes).unwrap();
-    let covers = [Some(half), None, Some(half), Some(full), Some(full)];
-    let books = covers.map(|cover| ShelfBook::new("A Book", "An Author", cover));
-    for selected in [3, 4] {
-        let state = LibraryState::with_selected(books.len(), selected).unwrap();
-        assert_frame(&std::format!("library-page-{}", state.page()), |target| {
+    let books = [
+        BookMeta::new("Book One", "An Author", None),
+        BookMeta::new("Book Two", "An Author", None),
+        BookMeta::new("Book Three", "An Author", None),
+        BookMeta::new("Book Four", "An Author", None),
+        BookMeta::new("Book Five", "An Author", None),
+        BookMeta::new("Book Six", "An Author", None),
+        BookMeta::new("Book Seven", "An Author", None),
+        BookMeta::new("Book Eight", "An Author", None),
+        BookMeta::new("Book Nine", "An Author", None),
+        BookMeta::new("Book Ten", "An Author", None),
+    ];
+    let index = library_index(&books);
+    for page in [0, 1] {
+        let mut state = LibraryState::new(index);
+        for _ in 0..page * 8 {
+            state.move_selection(crate::app::Direction::Down);
+        }
+        assert_frame(&std::format!("library-page-{page}"), |target| {
             render_app(
                 AppFrame::Library {
-                    state,
-                    books: &books,
+                    view: state.view(&books).unwrap(),
                     battery,
                 },
                 target,
@@ -261,11 +293,55 @@ fn populated_shelves_match_snapshots() {
             .unwrap();
         });
     }
+
+    let series = [
+        BookMeta::new(
+            "Volume Three",
+            "An Author",
+            Some(SeriesMeta::new(
+                "Collected Works",
+                Some(SeriesPosition::new(3)),
+            )),
+        ),
+        BookMeta::new("A Standalone Novel", "Another Author", None),
+        BookMeta::new(
+            "Volume One",
+            "An Author",
+            Some(SeriesMeta::new(
+                "Collected Works",
+                Some(SeriesPosition::new(1)),
+            )),
+        ),
+        BookMeta::new(
+            "Volume Two",
+            "An Author",
+            Some(SeriesMeta::new(
+                "Collected Works",
+                Some(SeriesPosition::new(2)),
+            )),
+        ),
+    ];
+    let index = library_index(&series);
+    let mut state = LibraryState::new(index);
+    assert!(matches!(
+        state.activate(),
+        crate::app::LibraryActivation::EnteredSeries
+    ));
+    assert_frame("library-series", |target| {
+        render_app(
+            AppFrame::Library {
+                view: state.view(&series).unwrap(),
+                battery,
+            },
+            target,
+        )
+        .unwrap();
+    });
 }
 
 #[test]
 fn reader_drawer_matches_snapshot() {
-    let mut app = App::new(1);
+    let mut app = App::new(crate::app::test_index(1));
     assert_eq!(app.input(AppInput::Confirm), AppEffect::Render);
     assert_eq!(
         app.input_without_stored_progress(AppInput::Confirm),

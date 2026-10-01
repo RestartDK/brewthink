@@ -477,7 +477,7 @@ mod tests {
 
     #[test]
     fn renders_a_reader_page_into_the_exact_x4_frame() {
-        let mut app = App::new(1);
+        let mut app = App::new(crate::app::test_index(1));
         app.input(AppInput::Confirm);
         app.input_without_stored_progress(AppInput::Confirm);
         app.input(AppInput::Confirm);
@@ -528,7 +528,7 @@ mod tests {
 
     #[test]
     fn rejects_lines_that_exceed_the_bounded_body_region() {
-        let mut app = App::new(1);
+        let mut app = App::new(crate::app::test_index(1));
         app.input(AppInput::Confirm);
         app.input_without_stored_progress(AppInput::Confirm);
         app.input(AppInput::Confirm);

@@ -383,6 +383,66 @@ impl Drawable for SettingsRow<'_> {
 }
 
 #[derive(Clone, Copy)]
+pub struct BookListRow<'a> {
+    icon: Icon,
+    primary: &'a str,
+    secondary: &'a str,
+    selection: Selection,
+    top_left: Point,
+}
+
+impl<'a> BookListRow<'a> {
+    pub const fn new(
+        icon: Icon,
+        primary: &'a str,
+        secondary: &'a str,
+        selection: Selection,
+    ) -> Self {
+        Self {
+            icon,
+            primary,
+            secondary,
+            selection,
+            top_left: Point::zero(),
+        }
+    }
+}
+
+impl View for BookListRow<'_> {
+    fn translate_impl(&mut self, by: Point) {
+        self.top_left += by;
+    }
+
+    fn bounds(&self) -> Rectangle {
+        Rectangle::new(self.top_left, Size::new(CONTENT_WIDTH, 62))
+    }
+}
+
+impl Drawable for BookListRow<'_> {
+    type Color = Gray8;
+    type Output = ();
+
+    fn draw<D>(&self, target: &mut D) -> Result<Self::Output, D::Error>
+    where
+        D: DrawTarget<Color = Self::Color>,
+    {
+        let color = draw_selection(target, self.bounds(), self.selection)?;
+        self.icon
+            .draw(target, self.top_left + Point::new(16, 19), color)?;
+        Label::new(self.primary, TextRole::Heading)
+            .color(color)
+            .at(self.top_left + Point::new(58, 3))
+            .clipped_to(Size::new(370, 32))
+            .draw(target)?;
+        Label::new(self.secondary, TextRole::Metadata)
+            .color(color)
+            .at(self.top_left + Point::new(58, 35))
+            .clipped_to(Size::new(370, 20))
+            .draw(target)
+    }
+}
+
+#[derive(Clone, Copy)]
 pub struct FileRow<'a> {
     name: &'a str,
     size: u32,

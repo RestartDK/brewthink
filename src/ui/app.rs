@@ -1,9 +1,9 @@
 use crate::{
-    app::{FilesState, HomeState, LibraryState, SettingsState},
+    app::{FilesState, HomeState, LibraryView, SettingsState},
     files::{FileItem, FilesRenderError, render_files},
     home::{HomeRenderError, render_home},
     image::{PackedBitmap, PackedImage},
-    library::{ShelfBook, ShelfRenderError, render_shelf},
+    library::{LibraryRenderError, render_library},
     power::BatteryStatus,
     reader::{ReaderRenderError, ReaderView, render_reader, render_reader_error},
     settings::{CustomImagePreview, SettingsRenderError, render_settings},
@@ -17,8 +17,7 @@ pub enum AppFrame<'a> {
         battery: BatteryStatus,
     },
     Library {
-        state: LibraryState,
-        books: &'a [ShelfBook<'a>],
+        view: LibraryView<'a>,
         battery: BatteryStatus,
     },
     Files {
@@ -44,7 +43,7 @@ pub enum AppFrame<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AppRenderError {
     Home(HomeRenderError),
-    Library(ShelfRenderError),
+    Library(LibraryRenderError),
     Files(FilesRenderError),
     Settings(SettingsRenderError),
     Cover(SleepRenderError),
@@ -57,11 +56,9 @@ pub fn render_app(frame: AppFrame<'_>, target: &mut PackedImage<'_>) -> Result<(
         AppFrame::Home { state, battery } => {
             render_home(state, battery, target).map_err(AppRenderError::Home)
         }
-        AppFrame::Library {
-            state,
-            books,
-            battery,
-        } => render_shelf(state, books, battery, target).map_err(AppRenderError::Library),
+        AppFrame::Library { view, battery } => {
+            render_library(view, battery, target).map_err(AppRenderError::Library)
+        }
         AppFrame::Files {
             state,
             files,

@@ -1,7 +1,7 @@
 use super::*;
 
 fn reading(pages: usize, chapters: usize) -> App {
-    let mut app = App::new(1);
+    let mut app = App::new(crate::app::test_index(1));
     app.input(AppInput::Confirm);
     app.input_without_stored_progress(AppInput::Confirm);
     app.input(AppInput::Confirm);

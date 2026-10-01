@@ -12,7 +12,9 @@ mod render_tests;
 mod theme;
 
 pub use app::{AppFrame, AppRenderError, render_app};
-pub use components::{AppBar, CommandBar, FileRow, Label, MenuRow, Selection, SettingsRow};
+pub use components::{
+    AppBar, BookListRow, CommandBar, FileRow, Label, MenuRow, Selection, SettingsRow,
+};
 pub use drawer::DrawerSurface;
 pub use frame::{FixedText, FrameTarget};
 pub use icons::Icon;
