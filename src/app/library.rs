@@ -675,10 +675,6 @@ impl<'a> LibraryView<'a> {
     pub const fn row_count(&self) -> usize {
         self.state.row_count()
     }
-
-    pub const fn book_count(&self) -> usize {
-        self.state.book_count()
-    }
 }
 
 struct VisibleRows<'a> {

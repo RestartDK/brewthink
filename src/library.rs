@@ -42,20 +42,7 @@ pub fn render_library(
     }
     target.clear_white();
     let mut display = FrameTarget::new(target);
-    let mut section = FixedText::<48>::new();
-    let heading = match view.scope_name() {
-        Some(name) => name,
-        None => {
-            write!(
-                section,
-                "Books  {} item{}",
-                view.book_count(),
-                if view.book_count() == 1 { "" } else { "s" }
-            )
-            .ok();
-            section.as_str()
-        }
-    };
+    let heading = view.scope_name().unwrap_or("Books");
     if view.row_count() == 0 {
         ui!(
             AppBar::new(heading, battery),
