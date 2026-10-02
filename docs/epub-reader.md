@@ -6,11 +6,6 @@ Brewthink is an EPUB-first reader. The target is content-complete, readable refl
 
 Brewthink opens on Home with Books, Files, and Settings. Books contains a paged text list. Each row shows a book title and author; books that declare a series collapse into a folder row that opens the series' volumes in position order. A book that declares no series joins the series named by a trailing volume designator in its title, such as `Vol. 26`, `Book 3`, or `#7`. Left and Right page the list. Files shows source EPUBs from `/books` plus named JPEG and PNG images from `/files`. Settings changes reader font, text size, line spacing, and sleep-screen mode without changing the Brewthink wordmark or application chrome.
 
-Books without declared series metadata fold by title on the device:
-
-![Re:ZERO folder among the loaded books](images/reader-ui/series-folder.png)
-![Four Re:ZERO volumes in title order inside the folder](images/reader-ui/series-volumes.png)
-
 A complete reader must preserve:
 
 - Spine order and table-of-contents navigation.
