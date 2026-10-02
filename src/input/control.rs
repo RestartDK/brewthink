@@ -10,6 +10,7 @@ pub enum ControlCommand {
     Status,
     Screen,
     DropImageCache,
+    DeleteBook(BookName),
     Upload(UploadRequest),
     Verify(UploadRequest),
     AbortUpload,
@@ -104,6 +105,11 @@ pub fn parse_control_command(line: &[u8]) -> Result<ControlCommand, ControlParse
         "drop-image-cache" => Ok(ControlCommand::DropImageCache),
         "upload-abort" => Ok(ControlCommand::AbortUpload),
         _ => {
+            if let Some(arguments) = command.strip_prefix("delete-book ") {
+                return BookName::parse(arguments)
+                    .map(ControlCommand::DeleteBook)
+                    .map_err(|_| ControlParseError::InvalidUpload);
+            }
             if let Some(arguments) = command.strip_prefix("upload ") {
                 return parse_upload(arguments).map(ControlCommand::Upload);
             }
@@ -202,6 +208,16 @@ mod tests {
         assert_eq!(
             parse_control_command(b"BREWCTL/1 upload-abort"),
             Ok(ControlCommand::AbortUpload)
+        );
+        assert_eq!(
+            parse_control_command(b"BREWCTL/1 delete-book BOOK.EPB"),
+            Ok(ControlCommand::DeleteBook(
+                crate::transfer::BookName::parse("BOOK.EPB").unwrap()
+            ))
+        );
+        assert_eq!(
+            parse_control_command(b"BREWCTL/1 delete-book TOO-LONG-NAME.EPB"),
+            Err(ControlParseError::InvalidUpload)
         );
     }
 

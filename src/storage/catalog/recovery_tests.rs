@@ -648,6 +648,36 @@ fn every_failed_preference_write_retains_a_readable_record_after_remount() {
 }
 
 #[test]
+fn deleting_a_book_removes_it_from_the_catalog_and_keeps_the_rest() {
+    use embedded_sdmmc::Mode;
+
+    let card = Card::formatted();
+    let store = card.store();
+    store.ensure_layout().unwrap();
+    for name in ["ALPHA.EPB", "BRAVO.EPB"] {
+        store
+            .with_directory(BOOK_DIRECTORY, |directory| {
+                let file = directory.open_file_in_dir(name, Mode::ReadWriteCreateOrTruncate)?;
+                file.write(b"book")?;
+                file.close()
+            })
+            .unwrap();
+    }
+    assert_eq!(store.scan::<4>().unwrap().len(), 2);
+
+    assert_eq!(store.delete_book("ALPHA.EPB"), Ok(true));
+    let catalog = store.scan::<4>().unwrap();
+    assert_eq!(
+        catalog
+            .books()
+            .map(|book| book.name().as_str())
+            .collect::<Vec<_>>(),
+        ["BRAVO.EPB"]
+    );
+    assert_eq!(store.delete_book("ALPHA.EPB"), Ok(false));
+}
+
+#[test]
 fn filesystem_errors_keep_their_source_chain() {
     use core::error::Error as _;
     let error = AppDataError::Filesystem(Error::DeviceError(Fault::Read));
