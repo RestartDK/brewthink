@@ -4,7 +4,7 @@ Brewthink is an EPUB-first reader. The target is content-complete, readable refl
 
 ## Product contract
 
-Brewthink opens on Home with Books, Files, and Settings. Books contains a paged text list. Each row shows a book title and author; books that declare a series collapse into a folder row that opens the series' volumes in position order. Left and Right page the list. Files shows source EPUBs from `/books` plus named JPEG and PNG images from `/files`. Settings changes reader font, text size, line spacing, and sleep-screen mode without changing the Brewthink wordmark or application chrome.
+Brewthink opens on Home with Books, Files, and Settings. Books contains a paged text list. Each row shows a book title and author; books that declare a series collapse into a folder row that opens the series' volumes in position order. A book that declares no series joins the series named by a trailing volume designator in its title, such as `Vol. 26`, `Book 3`, or `#7`. Left and Right page the list. Files shows source EPUBs from `/books` plus named JPEG and PNG images from `/files`. Settings changes reader font, text size, line spacing, and sleep-screen mode without changing the Brewthink wordmark or application chrome.
 
 A complete reader must preserve:
 
@@ -151,7 +151,7 @@ The private Hamming EPUB is an acceptance target, not a repository fixture.
 | EPUB 3 package | All 340 resources and 42 spine items parsed through the fixed-memory reader | Parse the same file through physical FAT |
 | Metadata | Bounded XML extraction and physical SD catalog/EPUB metadata validation pass | Verify the catalog after reader wake |
 | Cover | `OEBPS/Images/Cover.png`, 143,179 bytes, decoded to packed fingerprint `b8bce90b` | Render the opening cover and book-cover sleep frame on the panel |
-| Books list | Shared Rust framebuffer tests for list pages, series folders, volume order, and selection; simulator walkthrough coverage | Navigate the list and open a series volume with physical buttons |
+| Books list | Shared Rust framebuffer tests for list pages, declared and title-derived series folders, volume order, and selection; simulator walkthrough coverage | Navigate the list and open a series volume with physical buttons |
 | Chapter text | Every spine document read and first/last page-count consistency checked | Read and turn physical pages |
 | 286 PNG images | All fit the current extracted-resource bound | Add inline figures and image viewer |
 | Tables and footnotes | Text and alternatives survive fallback layout | Add semantic overlays and dedicated viewers |

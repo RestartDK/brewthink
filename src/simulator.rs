@@ -151,7 +151,8 @@ impl Book {
             file_size: reader.length,
             title: publication.title().into(),
             creator: publication.creator().into(),
-            series: SeriesMetadata::from_publication(publication),
+            series: SeriesMetadata::from_publication(publication)
+                .or_else(|| SeriesMetadata::from_title(publication.title())),
             cover,
             chapters,
             navigation_error,
