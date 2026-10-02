@@ -144,6 +144,12 @@ impl DeviceLibrary {
         }
     }
 
+    fn reset(&mut self) {
+        self.length = 0;
+        self.spine_path_count = 0;
+        self.spine_path_byte_length = 0;
+    }
+
     fn file(&self, book: BookId) -> Option<BookFile> {
         self.files.get(book.index()).copied().flatten()
     }
@@ -698,7 +704,7 @@ pub async fn reader_app_task(
                 ControlEvent::CatalogChanged(change) => {
                     loaded = None;
                     if change == CatalogChange::Delete {
-                        *library = DeviceLibrary::empty();
+                        library.reset();
                     }
                     let command = change.command();
                     if load_library(store, library, &mut workspaces).is_err() {
